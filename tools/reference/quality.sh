@@ -35,7 +35,8 @@ if $iris bench "$int8" --runs 3 --max-seconds "$MAX_SECONDS" | tee /tmp/bench-in
 level=$([ "$gate" = PASSED ] && echo notice || echo error)
 mapfile -t f32lines < <(grep -E '^(greedy|beam)' /tmp/bench-f32.txt | sed 's/^/float32 /')
 mapfile -t int8lines < <(grep -E '^(greedy|beam)' /tmp/bench-int8.txt | sed 's/^/int8 /')
-note "$level" "gate F2 speed $gate ($(nproc) processors, ≤ $MAX_SECONDS s)" "${f32lines[@]}" "${int8lines[@]}"
+cpu=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+note "$level" "gate F2 speed $gate ($(nproc) processors, ≤ $MAX_SECONDS s)" "processor: $cpu" "${f32lines[@]}" "${int8lines[@]}"
 mapfile -t translated < <(grep '^  ' /tmp/bench-int8.txt | head -4 | sed 's/^  //')
 note notice "bench translation (int8)" "${translated[@]}"
 
