@@ -90,9 +90,8 @@ public partial class SettingsPage : UserControl
     {
         _filling = true;
         var settings = App.Current.Settings;
-        var languages = new[] { (Code: (string?)null, Name: Localizer.Instance["settings.languageSystem"]) }
-            .Concat(Assistant.Strings.Texts.Languages.Select(code => ((string?)code, Assistant.Strings.Texts.For(code)[$"lang.{code}"])))
-            .ToList();
+        List<(string? Code, string Name)> languages = [(null, Localizer.Instance["settings.languageSystem"])];
+        languages.AddRange(Assistant.Strings.Texts.Languages.Select(code => ((string?)code, Assistant.Strings.Texts.For(code)[$"lang.{code}"])));
         InterfaceLanguage.ItemsSource = languages.Select(l => l.Name).ToList();
         InterfaceLanguage.SelectedIndex = languages.FindIndex(l => l.Code == settings.InterfaceLanguage);
         ThemeChoice.SelectedIndex = (int)settings.Theme;
