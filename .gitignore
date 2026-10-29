@@ -7,3 +7,4 @@ obj/
 *.iris
 __pycache__/
 .venv/
+iris-hw-*.txt

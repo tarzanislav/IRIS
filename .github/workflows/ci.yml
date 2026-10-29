@@ -89,6 +89,48 @@ jobs:
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll translate /tmp/opus-en-sk.iris < /tmp/samples.en > /tmp/samples.sk
           paste -d '\t' /tmp/samples.en /tmp/samples.sk | while IFS=$'\t' read -r en sk; do echo "::notice title=EN→SK (IRIS)::$en → $sk"; done
 
+  # Windows, where IRIS runs: build, tests, the command line as published for a release, the hardware script
+  windows:
+    name: Windows (build, tests, publish, hardware script)
+    runs-on: windows-2025
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if (-not (dotnet --list-sdks 2>$null | Select-String '^10\.')) {
+            Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $env:RUNNER_TEMP/dotnet-install.ps1
+            & $env:RUNNER_TEMP/dotnet-install.ps1 -Channel 10.0 -InstallDir "$env:ProgramFiles/dotnet"
+          }
+          dotnet --list-sdks
+      - name: Build and tests
+        run: |
+          dotnet build Iris.slnx -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Iris.Tests -c Release --no-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Command line as in a release (self-contained, one file)
+        run: |
+          dotnet publish src/Iris.Cli -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o out/cli
+          $size = [math]::Round((Get-Item out/cli/iris.exe).Length / 1MB, 1)
+          ./out/cli/iris.exe tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "::notice title=iris.exe::self-contained single file, $size MB"
+      - name: Hardware script (Windows PowerShell 5.1 and PowerShell 7)
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps5
+          pwsh -NoProfile -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps7
+          foreach ($name in 'ci-runner-ps5', 'ci-runner-ps7') {
+            $report = Get-Content "tools/hardware/iris-hw-$name.txt" -Raw | ConvertFrom-Json
+            if (-not $report.cpu.name -or -not $report.memory.total_gb) { "::error::hardware report $name is incomplete"; exit 1 }
+            $text = (Get-Content "tools/hardware/iris-hw-$name.txt" -Raw) -replace '%', '%25' -replace "`r?`n", '%0A'
+            "::notice title=hardware $name::$text"
+          }
+
   # F2: int8, speed (title + introduction ≤ 1 s) and quality (chrF on FLORES-200 devtest, int8 not worse than float32)
   quality:
     name: Quality and speed (F2)
