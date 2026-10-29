@@ -53,6 +53,7 @@ $speeds = $modules | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.Configur
 Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 public static class IrisHwMemory
@@ -70,15 +71,22 @@ public static class IrisHwMemory
             Stopwatch watch = Stopwatch.StartNew();
             Parallel.For(0, threads, new ParallelOptions { MaxDegreeOfParallelism = threads }, t =>
             {
-                int from = (int)((long)data.Length * t / threads), to = (int)((long)data.Length * (t + 1) / threads);
-                long a = 0, b = 0, c = 0, d = 0;
-                for (int i = from; i + 3 < to; i += 4) { a += data[i]; b += data[i + 1]; c += data[i + 2]; d += data[i + 3]; }
-                lock (gate) { sink += a + b + c + d; }
+                long sum = Sum(data, (int)((long)data.Length * t / threads), (int)((long)data.Length * (t + 1) / threads));
+                lock (gate) { sink += sum; }
             });
             double gbs = data.Length * 8.0 / watch.Elapsed.TotalSeconds / 1e9;
             if (round > 0 && gbs > best) { best = gbs; }
         }
         return sink == 1 ? 0 : Math.Round(best, 1);
+    }
+
+    // optimized at once (512 = AggressiveOptimization; .NET Framework of Windows PowerShell 5.1 ignores the flag)
+    [MethodImpl((MethodImplOptions)512)]
+    private static long Sum(long[] data, int from, int to)
+    {
+        long a = 0, b = 0, c = 0, d = 0;
+        for (int i = from; i + 3 < to; i += 4) { a += data[i]; b += data[i + 1]; c += data[i + 2]; d += data[i + 3]; }
+        return a + b + c + d;
     }
 }
 '@
