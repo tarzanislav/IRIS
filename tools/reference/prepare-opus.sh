@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# CI only: the Python tools of the reference (pinned versions) and, with a directory, OPUS-MT en-sk at its pinned
-# revision (licence checked on download) converted to the IRIS format: <dir>/opus-en-sk.iris. The one place of the
-# model revision; it is also put into GITHUB_ENV for later steps (release notice).
-# Usage: tools/reference/prepare-opus.sh [dir]
+# CI only: the Python tools of the reference (pinned versions) and, with a directory, an OPUS-MT model at its pinned
+# revision (licence checked on download) converted to the IRIS format: <dir>/opus-<pair>.iris. The one place of the
+# model revisions; the revision is also put into GITHUB_ENV for later steps (release notice).
+# Usage: tools/reference/prepare-opus.sh [dir [pair]]   (pair: en-sk – the default –, en-cs, sk-en, cs-en)
 set -euo pipefail
-OPUS_MT_EN_SK_REVISION=04d19ccd4566720bceeff93623d5cf93be659816
+declare -A REVISIONS=(
+  [en-sk]=04d19ccd4566720bceeff93623d5cf93be659816
+  [en-cs]=main
+  [sk-en]=main
+  [cs-en]=main
+)
 here=$(cd "$(dirname "$0")" && pwd)
 venv=${IRIS_VENV:-/tmp/venv}
 py=$venv/bin/python
@@ -21,7 +26,11 @@ fi
 
 [ $# -ge 1 ] || exit 0
 dir=$1
+pair=${2:-en-sk}
+revision=${REVISIONS[$pair]:-}
+[ -n "$revision" ] || { echo "::error::no OPUS-MT model is set up for $pair"; exit 1; }
 mkdir -p "$dir"
-"$py" "$here/marian_reference.py" download Helsinki-NLP/opus-mt-en-sk "$dir/opus-en-sk" --revision "$OPUS_MT_EN_SK_REVISION"
-"$py" "$here/marian_reference.py" convert "$dir/opus-en-sk" "$dir/opus-en-sk.iris"
-echo "OPUS_MT_EN_SK_REVISION=$OPUS_MT_EN_SK_REVISION" >> "${GITHUB_ENV:-/dev/null}"
+"$py" "$here/marian_reference.py" download "Helsinki-NLP/opus-mt-$pair" "$dir/opus-$pair" --revision "$revision"
+"$py" "$here/marian_reference.py" convert "$dir/opus-$pair" "$dir/opus-$pair.iris"
+name=$(echo "OPUS_MT_${pair}_REVISION" | tr 'a-z-' 'A-Z_')
+echo "$name=$revision" >> "${GITHUB_ENV:-/dev/null}"

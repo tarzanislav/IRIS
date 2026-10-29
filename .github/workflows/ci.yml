@@ -136,6 +136,29 @@ jobs:
             "::notice title=hardware $name::$text"
           }
 
+  # Further language pairs (EN→CS, SK→EN, CS→EN) checked as language packs: licence, reference, int8 quality on FLORES
+  pairs:
+    name: Language pair ${{ matrix.pair }}
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: [en-cs, sk-en, cs-en]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build
+        run: dotnet build src/Iris.Cli -c Release
+      - name: Python tools of the reference
+        run: bash tools/reference/prepare-opus.sh
+      - name: ${{ matrix.pair }} – download, reference, int8, FLORES-200
+        run: bash tools/reference/pair.sh ${{ matrix.pair }}
+
   # F2: int8, speed (no slower than the base commit; target title + introduction ≤ 1 s) and quality (chrF on FLORES-200 devtest, int8 not worse than float32)
   quality:
     name: Quality and speed (F2)
