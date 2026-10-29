@@ -18,14 +18,32 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
 | Tokenizér SentencePiece (unigram, normalizácia, byte fallback) | hotový, zhodný so SentencePiece |
 | Formát modelu `.iris` (čítanie aj zápis) | hotový |
 | Výpočtové jadrá (SIMD, paralelne) | hotové |
-| Transformer Marian (enkóder, dekóder, KV cache), greedy + lúč | ďalší krok |
-| Prevod OPUS-MT → `.iris` a referencia v CI | ďalší krok |
+| Transformer Marian (enkóder, dekóder, KV cache) | hotový (F1) |
+| Hľadanie prekladu: greedy a lúč (rovnaké pravidlá ako transformers 5) | hotové (F1) |
+| Tokenizér Marian (spoločný slovník, špeciálne tokeny, jazykový kód) | hotový (F1) |
+| Prevod OPUS-MT → `.iris` (kontrola licencie) a referencia v CI | hotové (F1) |
+| Výpočty v int8, rýchlosť, napojenie | F2 |
 
 ## Štruktúra
-- `src/Iris.Core` – jadro: `Tokenization`, `Model` (formát `.iris`), `Numerics` (výpočty).
-- `src/Iris.Cli` – príkaz `iris` (`tokenize`, `info`).
+- `src/Iris.Core` – jadro: `Tokenization`, `Model` (formát `.iris`), `Numerics` (výpočty), `Translation` (Marian,
+  hľadanie prekladu, tokenizér Marian, overenie proti referencii).
+- `src/Iris.Cli` – príkaz `iris` (`tokenize`, `info`, `translate`, `verify`).
 - `tests/Iris.Tests` – vlastný spúšťač testov (`dotnet run --project tests/Iris.Tests`).
 - `tools/reference` – skripty v Pythone, ktoré vyrábajú referenčné dáta (len pre CI a testy).
+
+## Príkazy
+```
+iris translate <model.iris> [--beams N | --greedy] [--ids] [text]   preklad textu alebo každého riadku vstupu
+iris verify <model.iris> <reference.json> [--min-greedy 0.99] [--min-beam 0.95]
+iris info <model.iris>
+iris tokenize <model.spm> <text>
+```
+
+## Overenie jadra (CI)
+Úloha **Reference (transformers)** v CI: malý náhodný model Marian sa musí zhodovať na 100 %, potom sa stiahne
+`Helsinki-NLP/opus-mt-en-sk` (len s licenciou Apache-2.0), prevedie do `.iris` a pre 500 vymyslených viet
+(`tools/reference/sentences.py`) sa porovnajú ID tokenov s transformers. Brána F1: **greedy ≥ 99 %, lúč ≥ 95 %**,
+tokenizér 100 %. Výsledok je v anotáciách behu.
 
 ## Formát `.iris`
 `IRISMDL1` · dĺžka hlavičky (8 B, little endian) · hlavička JSON (`kind`, `config`, `provenance`, tabuľka tenzorov a
