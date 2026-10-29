@@ -2,6 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/Iris.Core/Iris.Core.csproj" />
     <Project Path="src/Iris.Cli/Iris.Cli.csproj" />
+    <Project Path="src/Iris.Assistant/Iris.Assistant.csproj" />
+    <Project Path="src/Iris.App/Iris.App.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Iris.Tests/Iris.Tests.csproj" />

@@ -33,9 +33,9 @@ jobs:
           if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
           dotnet --list-sdks
       - name: Build
-        run: dotnet build Iris.slnx -c Release
+        run: bash tools/ci/dotnet.sh build Iris.slnx -c Release
       - name: Code format (.editorconfig)
-        run: dotnet format Iris.slnx --verify-no-changes
+        run: bash tools/ci/dotnet.sh format Iris.slnx --verify-no-changes
       - name: Tests
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       # the same tests on the paths of older processors: 128-bit vectors only, then no vector instructions at all
@@ -122,6 +122,18 @@ jobs:
           ./out/cli/iris.exe tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "::notice title=iris.exe::self-contained single file, $size MB"
+      - name: Application as in a release (self-contained, one file) and its self-test
+        run: |
+          dotnet publish src/Iris.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/app
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:IRIS_HOME = Join-Path $env:RUNNER_TEMP 'iris-home'
+          $test = Start-Process out/app/iris-app.exe -ArgumentList '--selftest' -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP/selftest.txt"
+          if ($test.ExitCode -ne 0) {
+            $text = (Get-Content "$env:RUNNER_TEMP/selftest.txt" -Raw) -replace '%', '%25' -replace "`r?`n", '%0A'
+            "::error title=iris-app --selftest::$text"; exit 1
+          }
+          $size = [math]::Round((Get-Item out/app/iris-app.exe).Length / 1MB, 1)
+          "::notice title=iris-app.exe::self-contained single file, $size MB, every window and page built in SK, CS, EN, light and dark"
       - name: Hardware script (iris-hw.bat)
         run: |
           cmd /c tools\hardware\iris-hw.bat ci-runner

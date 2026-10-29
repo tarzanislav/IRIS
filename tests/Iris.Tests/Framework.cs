@@ -62,6 +62,21 @@ internal static class Assert
 
         throw new AssertionException($"{what}: expected {typeof(TException).Name}");
     }
+
+    public static async Task ThrowsAsync<TException>(Func<Task> action, string what)
+        where TException : Exception
+    {
+        try
+        {
+            await action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+
+        throw new AssertionException($"{what}: expected {typeof(TException).Name}");
+    }
 }
 
 /// <summary>Runs every [Test] of this assembly (arguments filter by name); exit code 1 when a test fails or none runs.</summary>

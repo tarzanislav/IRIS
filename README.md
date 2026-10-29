@@ -26,8 +26,9 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
 | Delenie textu na vety, preklad odsekov s rozložením, delenie príliš dlhých viet | hotové (F2) |
 | chrF (ako sacreBLEU), meranie na FLORES-200 v CI | hotové (F2) |
 | Pamäť prekladov a slovník mien | hotové (F2) |
-| Vydanie (knižnica, `iris.exe`, int8 model, SHA-256) | v0.1.0, v0.2.0 (napojenie) |
+| Vydanie (knižnica, `iris.exe`, int8 model, SHA-256) | v0.1.0, v0.2.0 (napojenie), v0.3.0 (aplikácia, balíky) |
 | Ďalšie smery EN→CS, SK→EN, CS→EN (overené ako jazykové balíky) | hotové (CI) |
+| Aplikácia IRIS pre Windows (preklad, súbory, pamäť, rýchly preklad, SK/CS/EN) | A1 – hotová |
 | Učenie z opráv | F3 – ďalší krok |
 
 ## Štruktúra
@@ -36,6 +37,9 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
   prekladov, slovník mien), `Evaluation` (chrF). Verejné API: `Translator`, `TranslationMemory`, `Glossary`,
   `ModelFile`, `Chrf`; výpočtové jadrá sú interné.
 - `src/Iris.Cli` – príkaz `iris` a overenie proti referencii (`verify`).
+- `src/Iris.Assistant` – logika aplikácie (jazykové balíky, preklad cez angličtinu, súbory, história, nastavenia,
+  texty rozhrania); beží na každej platforme.
+- `src/Iris.App` – aplikácia pre Windows (WPF), `iris-app.exe`; `--selftest` postaví každé okno.
 - `tests/Iris.Tests` – vlastný spúšťač testov (`dotnet run --project tests/Iris.Tests`).
 - `tools/reference` – skripty v Pythone, ktoré vyrábajú referenčné dáta (len pre CI a testy).
 - `tools/hardware/iris-hw.bat` – prehľad hardvéru počítača pre ladenie rýchlosti (žiadne osobné údaje).

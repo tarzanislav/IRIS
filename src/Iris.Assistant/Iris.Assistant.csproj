@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The logic of the IRIS application without any window: language packs, translation of texts and files, history,
+       settings, the texts of the user interface. Runs and is tested on Windows, Linux and macOS. No packages. -->
+  <PropertyGroup>
+    <RootNamespace>Iris.Assistant</RootNamespace>
+    <Description>IRIS application logic: language packs, documents, history, settings, interface texts.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Core\Iris.Core.csproj" />
+    <EmbeddedResource Include="Strings\*.json" LogicalName="Iris.Assistant.Strings.%(Filename).json" />
+    <InternalsVisibleTo Include="Iris.Tests" />
+  </ItemGroup>
+</Project>
