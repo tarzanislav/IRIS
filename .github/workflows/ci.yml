@@ -47,8 +47,8 @@ jobs:
       HF_HUB_DISABLE_TELEMETRY: '1'
       DO_NOT_TRACK: '1'
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
-      # the model revision is pinned once known (the download step reports it)
-      OPUS_MT_EN_SK_REVISION: main
+      # the pinned revision of the model (licence Apache-2.0 checked on download)
+      OPUS_MT_EN_SK_REVISION: 04d19ccd4566720bceeff93623d5cf93be659816
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: .NET 10 SDK
