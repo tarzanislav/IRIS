@@ -1,0 +1,117 @@
+<UserControl x:Class="Iris.App.Pages.TranslatePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:app="clr-namespace:Iris.App">
+    <Grid Margin="32,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,18" LastChildFill="False">
+            <TextBlock DockPanel.Dock="Left" Style="{StaticResource PageTitle}" VerticalAlignment="Center"
+                       Text="{Binding [nav.translate], Source={x:Static app:Localizer.Instance}}" />
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <ComboBox x:Name="SourceLanguage" SelectionChanged="LanguageChanged"
+                          AutomationProperties.Name="{Binding [translate.source], Source={x:Static app:Localizer.Instance}}" />
+                <Button x:Name="Swap" Margin="8,0" MinWidth="44" Padding="0" Click="SwapLanguages"
+                        ToolTip="{Binding [translate.swap], Source={x:Static app:Localizer.Instance}}"
+                        AutomationProperties.Name="{Binding [translate.swap], Source={x:Static app:Localizer.Instance}}">
+                    <Path Data="M4,7 H15 L12,4 M16,13 H5 L8,16" Stroke="{DynamicResource Accent}" StrokeThickness="1.6"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Width="20" Height="20" />
+                </Button>
+                <ComboBox x:Name="TargetLanguage" SelectionChanged="LanguageChanged"
+                          AutomationProperties.Name="{Binding [translate.target], Source={x:Static app:Localizer.Instance}}" />
+                <ComboBox x:Name="Mode" Margin="16,0,0,0" MinWidth="130" SelectionChanged="ModeChanged">
+                    <ComboBoxItem Content="{Binding [translate.best], Source={x:Static app:Localizer.Instance}}" />
+                    <ComboBoxItem Content="{Binding [translate.quick], Source={x:Static app:Localizer.Instance}}" />
+                </ComboBox>
+            </StackPanel>
+        </DockPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource Card}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" x:Name="SourceCaption" Style="{StaticResource Caption}" Margin="0,0,0,10" />
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                        <Button DockPanel.Dock="Right" Click="Paste"
+                                Content="{Binding [translate.paste], Source={x:Static app:Localizer.Instance}}" />
+                        <TextBlock x:Name="Counts" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <TextBox x:Name="Source" AcceptsReturn="True" AcceptsTab="False" TextWrapping="Wrap" BorderThickness="0"
+                             VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" FontSize="16" Padding="0"
+                             Background="Transparent" TextChanged="SourceChanged"
+                             AutomationProperties.Name="{Binding [translate.source], Source={x:Static app:Localizer.Instance}}" />
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource Card}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" x:Name="TargetCaption" Style="{StaticResource Caption}" Margin="0,0,0,10" />
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                        <WrapPanel Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                                <Border Width="12" Height="12" CornerRadius="3" Background="{DynamicResource GoodSoft}" BorderBrush="{DynamicResource GoodLine}" BorderThickness="1" />
+                                <TextBlock Style="{StaticResource Muted}" Margin="6,0,0,0" Text="{Binding [legend.glossary], Source={x:Static app:Localizer.Instance}}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="14" Height="2" Background="{DynamicResource Accent}" VerticalAlignment="Center" />
+                                <TextBlock Style="{StaticResource Muted}" Margin="6,0,0,0" Text="{Binding [legend.memory], Source={x:Static app:Localizer.Instance}}" />
+                            </StackPanel>
+                        </WrapPanel>
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Right" x:Name="Timing" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button Style="{StaticResource Primary}" IsEnabled="False"
+                                        ToolTip="{Binding [common.soon], Source={x:Static app:Localizer.Instance}}"
+                                        Content="{Binding [translate.read], Source={x:Static app:Localizer.Instance}}" />
+                                <Button x:Name="CopyButton" Margin="8,0,0,0" Click="Copy"
+                                        Content="{Binding [translate.copy], Source={x:Static app:Localizer.Instance}}" />
+                                <Button x:Name="SaveButton" Margin="8,0,0,0" Click="Save"
+                                        Content="{Binding [translate.save], Source={x:Static app:Localizer.Instance}}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </StackPanel>
+                    <Grid>
+                        <RichTextBox x:Name="Target" IsReadOnly="True" IsDocumentEnabled="True" BorderThickness="0" Background="Transparent"
+                                     Foreground="{DynamicResource Text}" FontSize="16" VerticalScrollBarVisibility="Auto" Padding="0"
+                                     AutomationProperties.Name="{Binding [translate.target], Source={x:Static app:Localizer.Instance}}" />
+                        <StackPanel x:Name="Status" VerticalAlignment="Top">
+                            <TextBlock x:Name="StatusText" Style="{StaticResource Muted}" FontSize="15" />
+                            <Button x:Name="InstallPack" Margin="0,12,0,0" HorizontalAlignment="Left" Visibility="Collapsed" Click="OpenPacks"
+                                    Content="{Binding [translate.installPack], Source={x:Static app:Localizer.Instance}}" />
+                        </StackPanel>
+                    </Grid>
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" x:Name="Correction" Style="{StaticResource Card}" Margin="0,16,0,0" Visibility="Collapsed">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" VerticalAlignment="Center"
+                               Text="{Binding [correct.hint], Source={x:Static app:Localizer.Instance}}" />
+                    <TextBlock x:Name="CorrectionTitle" FontSize="16" FontWeight="SemiBold" />
+                </DockPanel>
+                <TextBlock x:Name="CorrectionSource" Style="{StaticResource Muted}" FontSize="14" Margin="0,8" />
+                <TextBox x:Name="CorrectionText" BorderBrush="{DynamicResource Accent}" BorderThickness="2" KeyDown="CorrectionKey"
+                         AutomationProperties.Name="{Binding [correct.label], Source={x:Static app:Localizer.Instance}}" />
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button Style="{StaticResource Primary}" Click="Remember"
+                            Content="{Binding [correct.remember], Source={x:Static app:Localizer.Instance}}" />
+                    <Button x:Name="ForgetButton" Margin="8,0,0,0" Click="Forget"
+                            Content="{Binding [correct.forget], Source={x:Static app:Localizer.Instance}}" />
+                    <Button Margin="8,0,0,0" Click="CloseCorrection"
+                            Content="{Binding [common.cancel], Source={x:Static app:Localizer.Instance}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

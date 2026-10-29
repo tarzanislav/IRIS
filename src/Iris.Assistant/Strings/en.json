@@ -86,5 +86,22 @@
  "mini.correct": "Correct",
  "mini.nothing": "Select some text in another application first.",
  "tray.open": "Open IRIS",
- "tray.exit": "Exit"
+ "tray.exit": "Exit",
+ "memory.history": "History",
+ "memory.clearHistory": "Clear history",
+ "memory.empty": "Nothing yet.",
+ "memory.direction": "Direction",
+ "settings.installFile": "Install from a file…",
+ "settings.noCatalog": "This version has no list of packs to download; add a pack from a file.",
+ "settings.version": "Version {0}",
+ "settings.aboutText": "Own translator. Code: Apache-2.0. OPUS-MT models (Helsinki-NLP): Apache-2.0; the origin is stored in every model file.",
+ "settings.shortcutBusy": "Another program already uses the shortcut {0}.",
+ "settings.badPack": "This file is not an IRIS language pack for {0}.",
+ "settings.packName": "The file name must contain the direction, e.g. opus-mt-en-sk-int8.iris.",
+ "translate.translating": "Translating…",
+ "translate.loading": "Loading the model…",
+ "translate.empty": "Type or paste a text – the translation appears by itself.",
+ "common.open": "Open",
+ "common.yes": "Yes",
+ "common.no": "No"
 }

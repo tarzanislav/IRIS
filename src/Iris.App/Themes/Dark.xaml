@@ -1,0 +1,26 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- dark colors of IRIS (the same names in Light.xaml and Dark.xaml; used as DynamicResource) -->
+    <SolidColorBrush x:Key="Background" Color="#15151B" />
+    <SolidColorBrush x:Key="Surface" Color="#1D1D25" />
+    <SolidColorBrush x:Key="SurfaceAlt" Color="#26262F" />
+    <SolidColorBrush x:Key="Border" Color="#2C2C37" />
+    <SolidColorBrush x:Key="Control" Color="#3C3C48" />
+    <SolidColorBrush x:Key="Text" Color="#ECECF3" />
+    <SolidColorBrush x:Key="TextMuted" Color="#B4B4C2" />
+    <SolidColorBrush x:Key="Accent" Color="#A9A7FF" />
+    <SolidColorBrush x:Key="AccentHover" Color="#C9C8FF" />
+    <SolidColorBrush x:Key="OnAccent" Color="#15151B" />
+    <SolidColorBrush x:Key="AccentSoft" Color="#2C2B52" />
+    <SolidColorBrush x:Key="AccentSoftText" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="Good" Color="#9FD8B3" />
+    <SolidColorBrush x:Key="GoodSoft" Color="#1F2A24" />
+    <SolidColorBrush x:Key="GoodLine" Color="#2F5A40" />
+    <SolidColorBrush x:Key="Warn" Color="#F2C46B" />
+    <SolidColorBrush x:Key="WarnSoft" Color="#33291A" />
+    <SolidColorBrush x:Key="WarnLine" Color="#8A6A20" />
+    <SolidColorBrush x:Key="Danger" Color="#FF9AA0" />
+    <SolidColorBrush x:Key="DangerLine" Color="#C4313B" />
+    <SolidColorBrush x:Key="DropZone" Color="#1A1A22" />
+    <SolidColorBrush x:Key="DropLine" Color="#4A4970" />
+</ResourceDictionary>

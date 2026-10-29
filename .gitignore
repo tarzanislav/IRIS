@@ -8,3 +8,4 @@ obj/
 __pycache__/
 .venv/
 iris-hw-*.txt
+src/Iris.App/packs.json

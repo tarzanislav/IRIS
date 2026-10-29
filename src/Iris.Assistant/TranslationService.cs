@@ -68,6 +68,13 @@ public sealed class TranslationService(PackStore packs, Func<LanguagePair, Trans
     /// <summary>Loads the model of a pair now (e.g. while the window opens) instead of at the first translation.</summary>
     public void Preload(LanguagePair pair) => _ = TranslatorOf(pair);
 
+    /// <summary>Forgets the memories and glossaries read so far (after the user deleted their data).</summary>
+    public void ForgetUserData()
+    {
+        _memories.Clear();
+        _glossaries.Clear();
+    }
+
     /// <summary>Forgets a loaded model, e.g. after its pack was removed or replaced.</summary>
     public void Unload(LanguagePair pair) => _translators.TryRemove(pair, out _);
 

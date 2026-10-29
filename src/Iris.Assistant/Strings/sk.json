@@ -86,5 +86,22 @@
  "mini.correct": "Opraviť",
  "mini.nothing": "Najprv označ text v inej aplikácii.",
  "tray.open": "Otvoriť IRIS",
- "tray.exit": "Ukončiť"
+ "tray.exit": "Ukončiť",
+ "memory.history": "História",
+ "memory.clearHistory": "Vymazať históriu",
+ "memory.empty": "Zatiaľ nič.",
+ "memory.direction": "Smer",
+ "settings.installFile": "Nainštalovať zo súboru…",
+ "settings.noCatalog": "Táto verzia nemá zoznam balíkov na stiahnutie; balík pridáš zo súboru.",
+ "settings.version": "Verzia {0}",
+ "settings.aboutText": "Vlastný prekladač. Kód: Apache-2.0. Modely OPUS-MT (Helsinki-NLP): Apache-2.0, pôvod je uložený v každom súbore modelu.",
+ "settings.shortcutBusy": "Skratku {0} už používa iný program.",
+ "settings.badPack": "Tento súbor nie je jazykový balík IRIS pre {0}.",
+ "settings.packName": "Meno súboru musí obsahovať smer, napr. opus-mt-en-sk-int8.iris.",
+ "translate.translating": "Prekladám…",
+ "translate.loading": "Načítavam model…",
+ "translate.empty": "Napíš alebo vlož text – preklad sa objaví sám.",
+ "common.open": "Otvoriť",
+ "common.yes": "Áno",
+ "common.no": "Nie"
 }
