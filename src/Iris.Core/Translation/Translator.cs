@@ -26,6 +26,9 @@ public enum TranslationOrigin
 /// </summary>
 public sealed record SentenceTranslation(string Source, string Target, TranslationOrigin Origin, string? Note = null);
 
+/// <summary>How far a text is translated: sentences done of all.</summary>
+public readonly record struct TranslationProgress(int Done, int Total);
+
 /// <summary>A translated text: its segments (sentences and what lies between them) and the translations of the sentences.</summary>
 public sealed record TextTranslation(IReadOnlyList<Segment> Segments, IReadOnlyList<SentenceTranslation> Sentences)
 {
@@ -79,11 +82,21 @@ public sealed class Translator
     /// A sentence in the translation memory gets its remembered translation; glossary terms are hidden from the model
     /// behind placeholders and come back in their wanted form; a sentence too long for the model is translated in
     /// parts. Each sentence says where its translation came from and, in Note, what could not be done.
+    /// Cancellation is checked before each sentence; progress counts translated sentences.
     /// </summary>
-    public TextTranslation TranslateText(string text, int? beams = null, TranslationMemory? memory = null, Glossary? glossary = null)
+    public TextTranslation TranslateText(string text, int? beams = null, TranslationMemory? memory = null, Glossary? glossary = null,
+        CancellationToken cancellation = default, IProgress<TranslationProgress>? progress = null)
     {
         var segments = Segmenter.Split(text);
-        var sentences = segments.Where(s => s.IsSentence).Select(s => TranslateSentence(s.Text, beams, memory, glossary)).ToList();
+        var sources = segments.Where(s => s.IsSentence).ToList();
+        var sentences = new List<SentenceTranslation>(sources.Count);
+        foreach (var source in sources)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            sentences.Add(TranslateSentence(source.Text, beams, memory, glossary));
+            progress?.Report(new TranslationProgress(sentences.Count, sources.Count));
+        }
+
         return new TextTranslation(segments, sentences);
     }
 
