@@ -50,7 +50,8 @@ $memoryType = switch (($modules | Select-Object -First 1).SMBIOSMemoryType) {
     20 { 'DDR' } 21 { 'DDR2' } 24 { 'DDR3' } 26 { 'DDR4' } 34 { 'DDR5' } 35 { 'LPDDR5' } 30 { 'LPDDR4' } default { 'unknown' }
 }
 $speeds = $modules | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } else { $_.Speed } }
-Add-Type -TypeDefinition @'
+$optimize = if ($PSVersionTable.PSVersion.Major -ge 7) { '[MethodImpl(MethodImplOptions.AggressiveOptimization)]' } else { '' }
+$memoryTest = @'
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -80,8 +81,8 @@ public static class IrisHwMemory
         return sink == 1 ? 0 : Math.Round(best, 1);
     }
 
-    // optimized at once (512 = AggressiveOptimization; .NET Framework of Windows PowerShell 5.1 ignores the flag)
-    [MethodImpl((MethodImplOptions)512)]
+    // optimized at once in PowerShell 7 (.NET); the compiler of Windows PowerShell 5.1 does not know the flag
+    /*OPTIMIZE*/
     private static long Sum(long[] data, int from, int to)
     {
         long a = 0, b = 0, c = 0, d = 0;
@@ -90,6 +91,7 @@ public static class IrisHwMemory
     }
 }
 '@
+Add-Type -TypeDefinition $memoryTest.Replace('/*OPTIMIZE*/', $optimize)
 $threadsAll = [Environment]::ProcessorCount
 $readOne = [IrisHwMemory]::Read(1)
 $readAll = [IrisHwMemory]::Read($threadsAll)
