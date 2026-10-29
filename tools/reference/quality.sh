@@ -16,8 +16,6 @@ MAX_SECONDS=${MAX_SECONDS:-1}
 MAX_SLOWDOWN=${MAX_SLOWDOWN:-0.10}
 BASELINE_IRIS=${BASELINE_IRIS:-}
 MAX_CHRF_DROP=${MAX_CHRF_DROP:-0.5}
-FLORES_URL=https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz
-FLORES_SHA256=b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6
 status=0
 
 # one annotation with several lines (GitHub shows at most 10 annotations of a kind per step)
@@ -86,16 +84,10 @@ mapfile -t pairs < <(paste -d '\t' /tmp/glossary.en /tmp/glossary.sk | sed 's/\t
 note notice "glossary placeholders: kept in $used of $(wc -l < /tmp/glossary.en) sentences, lost in $lost" "${pairs[@]}"
 
 # quality
-mkdir -p /tmp/flores
-curl -fsSL "$FLORES_URL" -o /tmp/flores/flores.tar.gz
-flores_sha=$(sha256sum /tmp/flores/flores.tar.gz | cut -c1-64)
-if [ "$flores_sha" != "$FLORES_SHA256" ]; then
-  note error "FLORES-200 changed" "SHA-256 $flores_sha, expected $FLORES_SHA256 – the test set is not the one measured so far"
-  exit 1
-fi
-tar -xzf /tmp/flores/flores.tar.gz -C /tmp/flores --wildcards '*/devtest/eng_Latn.devtest' '*/devtest/slk_Latn.devtest'
-src=$(find /tmp/flores -name eng_Latn.devtest)
-ref=$(find /tmp/flores -name slk_Latn.devtest)
+bash "$(dirname "$0")/flores.sh" eng_Latn slk_Latn
+flores=$(cat /tmp/flores/info.txt)
+src=/tmp/flores/eng_Latn.devtest
+ref=/tmp/flores/slk_Latn.devtest
 $iris score "$model" "$src" "$ref" --out /tmp/flores/f32.sk | tee /tmp/score-f32.txt
 $iris score "$int8" "$src" "$ref" --out /tmp/flores/int8.sk | tee /tmp/score-int8.txt
 f32=$(grep -oP '^chrF2 \K[0-9.]+' /tmp/score-f32.txt)
@@ -105,7 +97,7 @@ total=$(wc -l < /tmp/flores/f32.sk)
 if awk -v a="$q8" -v b="$f32" -v d="$MAX_CHRF_DROP" 'BEGIN { exit !(a >= b - d) }'; then quality=PASSED; else quality=FAILED; status=1; fi
 level=$([ "$quality" = PASSED ] && echo notice || echo error)
 note "$level" "gate F2 quality $quality" "FLORES-200 devtest en→sk chrF2: float32 $f32, int8 $q8 (allowed drop $MAX_CHRF_DROP)" \
-  "identical translations float32 / int8: $same of $total" "FLORES-200: $FLORES_URL, SHA-256 $flores_sha"
+  "identical translations float32 / int8: $same of $total" "$flores"
 {
   echo "### F2 – speed and quality"
   echo

@@ -22,7 +22,8 @@ import iris_file  # noqa: E402
 import sentences as invented  # noqa: E402
 
 SOURCE_FILE = "iris-source.json"
-LICENSE = "apache-2.0"
+# licences that allow private and commercial use without fees (anything else is refused on download)
+LICENSES = {"apache-2.0", "cc-by-4.0", "mit"}
 
 
 def sha256(path: Path) -> str:
@@ -133,7 +134,7 @@ def make_tiny(out: Path) -> None:
     model.save_pretrained(out)
     (out / SOURCE_FILE).write_text(json.dumps({
         "repo": "tiny random Marian model (tools/reference/marian_reference.py tiny)",
-        "license": LICENSE, "revision": "seed 1234",
+        "license": "apache-2.0", "revision": "seed 1234",
         "files": {f.name: sha256(f) for f in sorted(out.iterdir()) if f.is_file() and f.name != SOURCE_FILE},
     }, indent=1), encoding="utf-8")
     notice(f"tiny model: vocabulary {len(pieces)}, d_model 16, 2+2 layers")
@@ -146,16 +147,17 @@ def download(repo: str, out: Path, revision: str) -> None:
     info = HfApi().model_info(repo, revision=revision)
     card = info.card_data.to_dict() if info.card_data else {}
     license_ = card.get("license")
-    licenses = license_ if isinstance(license_, list) else [license_]
-    if LICENSE not in [str(x).lower() for x in licenses]:
-        raise SystemExit(f"{repo}@{info.sha}: licence {license_!r} is not {LICENSE} – the model is not used")
+    licenses = [str(x).lower() for x in (license_ if isinstance(license_, list) else [license_])]
+    allowed = [x for x in licenses if x in LICENSES]
+    if len(licenses) != 1 or not allowed:
+        raise SystemExit(f"{repo}@{info.sha}: licence {license_!r} is not one of {sorted(LICENSES)} – the model is not used")
     files = [s.rfilename for s in info.siblings]
     weights = "model.safetensors" if "model.safetensors" in files else "pytorch_model.bin"
     wanted = ["config.json", "generation_config.json", "tokenizer_config.json", "special_tokens_map.json", "vocab.json",
               "source.spm", "target.spm", "README.md", weights]
     snapshot_download(repo, revision=info.sha, allow_patterns=[f for f in wanted if f in files], local_dir=out)
     (out / SOURCE_FILE).write_text(json.dumps({
-        "repo": repo, "revision": info.sha, "license": LICENSE,
+        "repo": repo, "revision": info.sha, "license": allowed[0],
         "url": f"https://huggingface.co/{repo}/tree/{info.sha}",
         "downloaded": datetime.date.today().isoformat(),
         "files": {f: sha256(out / f) for f in wanted if (out / f).exists()},
@@ -365,6 +367,21 @@ def reference(model_dir: Path, out: Path, texts: list) -> None:
            f"greedy = beam in {sum(i['greedy'] == i['beam'] for i in items)} sentences")
 
 
+def translated(model_dir: Path, texts: list) -> list:
+    """Texts translated by a model (greedy, as transformers does it) – invented sentences in another language."""
+    import torch
+    from transformers import MarianMTModel, MarianTokenizer
+
+    model = MarianMTModel.from_pretrained(model_dir, attn_implementation="eager").eval()
+    tokenizer = MarianTokenizer.from_pretrained(model_dir)
+    result = []
+    for text in texts:
+        with torch.no_grad():
+            ids = model.generate(**tokenizer(text, return_tensors="pt"), num_beams=1, do_sample=False)[0]
+        result.append(tokenizer.decode(ids, skip_special_tokens=True, clean_up_tokenization_spaces=False))
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -381,6 +398,8 @@ def main() -> None:
     r.add_argument("out", type=Path)
     r.add_argument("--set", choices=["tiny", "opus"], default="opus")
     r.add_argument("--count", type=int, default=500)
+    r.add_argument("--via", type=Path, help="a model (e.g. en-sk) that first translates the invented English sentences "
+                                             "into the source language of the checked model (e.g. sk-en)")
     args = parser.parse_args()
     if args.command == "tiny":
         make_tiny(args.out)
@@ -390,6 +409,8 @@ def main() -> None:
         convert(args.model, args.out)
     else:
         texts = tiny_texts() if args.set == "tiny" else invented.sentences(args.count)
+        if args.via:
+            texts = translated(args.via, texts)
         reference(args.model, args.out, texts)
 
 
