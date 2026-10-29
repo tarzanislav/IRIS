@@ -60,9 +60,11 @@ Neznáma voľba je chyba (kód 2), chyba vstupu kód 1.
 (`tools/reference/sentences.py`) sa porovnajú ID tokenov s transformers. Brána F1: **greedy ≥ 99 %, lúč ≥ 95 %**,
 tokenizér 100 %. Výsledok je v anotáciách behu.
 
-Úloha **Quality and speed (F2)**: int8 kópia skutočného modelu, čas prekladu nadpisu a úvodu článku (brána
-**≤ 1 s**, greedy aj lúč) a chrF na **FLORES-200 devtest** (len meranie, nikdy učenie; CC BY-SA 4.0) – int8 nesmie
-byť o viac než 0,5 chrF horší než float32.
+Úloha **Quality and speed (F2)**: int8 kópia skutočného modelu, čas prekladu nadpisu a úvodu článku a chrF na
+**FLORES-200 devtest** (len meranie, nikdy učenie; CC BY-SA 4.0) – int8 nesmie byť o viac než 0,5 chrF horší než
+float32. **Brána rýchlosti je relatívna:** int8 (greedy aj lúč) nesmie byť o viac než 10 % pomalší než základný commit
+na tom istom runneri (zdieľané runnery majú veľmi rozdielnu rýchlosť pamäte). Cieľ **≤ 1 s** sa v CI len hlási
+a overuje sa na počítačoch vlastníka (`iris bench`).
 
 Úloha **Windows**: zostavenie a testy na Windows, `iris.exe` ako vo vydaní a skript hardvéru (PowerShell 5.1 aj 7).
 Testy bežia aj bez AVX2 a bez vektorových inštrukcií (cesty starších procesorov).

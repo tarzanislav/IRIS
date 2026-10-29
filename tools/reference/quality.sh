@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # F2 in CI: speed and quality of the own core on a converted model.
 #  1. int8 copy of the model (iris quantize)
-#  2. speed: title + introduction of an article – gate: int8, greedy and beam, at most $MAX_SECONDS s each
+#  2. speed: title + introduction of an article, int8, greedy and beam – gate: at most $MAX_SLOWDOWN slower than the
+#     base commit ($BASELINE_IRIS, built by CI) on the same runner; shared runners differ widely in memory speed, so
+#     the target of $MAX_SECONDS s is reported here and checked on the owner's computers
 #  3. quality: chrF on FLORES-200 devtest (CC BY-SA 4.0, only measured here, never stored or learned from)
 #     – gate: chrF of int8 at most $MAX_CHRF_DROP below float32
 # Results go to annotations and the step summary. Usage: tools/reference/quality.sh <model.iris>
@@ -11,6 +13,8 @@ int8=${model%.iris}-int8.iris
 iris="dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll"
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 MAX_SECONDS=${MAX_SECONDS:-1}
+MAX_SLOWDOWN=${MAX_SLOWDOWN:-0.10}
+BASELINE_IRIS=${BASELINE_IRIS:-}
 MAX_CHRF_DROP=${MAX_CHRF_DROP:-0.5}
 FLORES_URL=https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz
 FLORES_SHA256=b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6
@@ -29,14 +33,36 @@ note() {
 $iris quantize "$model" "$int8" | tee /tmp/quantize.txt
 note notice "int8 model" "$(cut -c1-200 /tmp/quantize.txt)"
 
-# speed
+# speed: the base commit and this one take turns (three rounds of three runs), the best median of each counts
 $iris bench "$model" --runs 3 | tee /tmp/bench-f32.txt
-if $iris bench "$int8" --runs 3 --max-seconds "$MAX_SECONDS" | tee /tmp/bench-int8.txt; then gate=PASSED; else gate=FAILED; status=1; fi
-level=$([ "$gate" = PASSED ] && echo notice || echo error)
-mapfile -t f32lines < <(grep -E '^(greedy|beam)' /tmp/bench-f32.txt | sed 's/^/float32 /')
-mapfile -t int8lines < <(grep -E '^(greedy|beam)' /tmp/bench-int8.txt | sed 's/^/int8 /')
+for round in 1 2 3; do
+  [ -z "$BASELINE_IRIS" ] || $BASELINE_IRIS bench "$int8" --runs 3 > "/tmp/bench-base-$round.txt"
+  $iris bench "$int8" --runs 3 | tee "/tmp/bench-int8-$round.txt"
+done
+best() { # best() <file prefix> <greedy|beam> → the lowest median of the rounds
+  cat "$1"-*.txt | grep -oP "^$2[^:]*: \K[0-9.]+" | sort -g | head -1
+}
+gate=PASSED
+lines=()
+for mode in greedy beam; do
+  this=$(best /tmp/bench-int8 "$mode")
+  target=$(awk -v t="$this" -v m="$MAX_SECONDS" 'BEGIN { print (t <= m) ? "within" : "over" }')
+  if [ -n "$BASELINE_IRIS" ]; then
+    base=$(best /tmp/bench-base "$mode")
+    change=$(awk -v t="$this" -v b="$base" 'BEGIN { printf "%+.1f", (t / b - 1) * 100 }')
+    if ! awk -v t="$this" -v b="$base" -v s="$MAX_SLOWDOWN" 'BEGIN { exit !(t <= b * (1 + s)) }'; then gate=FAILED; status=1; fi
+    lines+=("int8 $mode: $this s, base commit $base s ($change %); target ≤ $MAX_SECONDS s: $target")
+  else
+    lines+=("int8 $mode: $this s (no base commit to compare); target ≤ $MAX_SECONDS s: $target")
+  fi
+done
+[ -n "$BASELINE_IRIS" ] || gate="NOT COMPARED"
+level=$([ "$gate" = FAILED ] && echo error || echo notice)
+mapfile -t f32lines < <(grep -E '^(greedy|beam)' /tmp/bench-f32.txt | cut -d'(' -f1 | sed 's/^/float32 /')
 cpu=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
-note "$level" "gate F2 speed $gate ($(nproc) processors, ≤ $MAX_SECONDS s)" "processor: $cpu" "${f32lines[@]}" "${int8lines[@]}"
+note "$level" "gate F2 speed $gate (≤ +$(awk -v s="$MAX_SLOWDOWN" 'BEGIN { print s * 100 }') % against the base commit)" \
+  "${lines[@]}" "${f32lines[@]}" "processor: $cpu, $(nproc) processors"
+cp /tmp/bench-int8-1.txt /tmp/bench-int8.txt
 mapfile -t translated < <(grep '^  ' /tmp/bench-int8.txt | head -4 | sed 's/^  //')
 note notice "bench translation (int8)" "${translated[@]}"
 
