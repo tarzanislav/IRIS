@@ -33,9 +33,9 @@ jobs:
           if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
           dotnet --list-sdks
       - name: Build
-        run: dotnet build Iris.slnx -c Release
+        run: bash tools/ci/dotnet.sh build Iris.slnx -c Release
       - name: Code format (.editorconfig)
-        run: dotnet format Iris.slnx --verify-no-changes
+        run: bash tools/ci/dotnet.sh format Iris.slnx --verify-no-changes
       - name: Tests
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       # the same tests on the paths of older processors: 128-bit vectors only, then no vector instructions at all
