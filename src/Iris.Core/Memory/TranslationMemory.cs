@@ -11,13 +11,20 @@ public sealed record MemoryEntry(string Source, string Target, DateTimeOffset Up
 /// time. Kept in one local file of JSON lines – every change is a new line (a correction or "forget"), so nothing is
 /// rewritten while it is used; <see cref="Compact"/> keeps only what holds. A line cut off by a crash is skipped and the
 /// next change starts on a new line. Sentences are matched exactly, after joining runs of whitespace and Unicode
-/// normalization (NFC). Safe to use from several threads of one program; nothing ever leaves the computer.
+/// normalization (NFC). Safe to use from several threads, and from several programs sharing one file (the IRIS
+/// application and UNIVERSUM): changes are written under a lock file, and a change another program made is read before
+/// the next lookup. Nothing ever leaves the computer.
 /// </summary>
 public sealed class TranslationMemory
 {
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(5);
+
     private readonly Dictionary<string, MemoryEntry> _entries = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
     private readonly string? _path;
+
+    // the file as last read or written by this program: a different stamp means another program changed it
+    private (long Length, DateTime Written) _stamp = (-1, default);
 
     private TranslationMemory(string? path) => _path = path;
 
@@ -27,43 +34,10 @@ public sealed class TranslationMemory
     /// <summary>Opens the memory in a file (created with the first correction). Damaged lines are skipped.</summary>
     public static TranslationMemory Open(string path)
     {
-        var memory = new TranslationMemory(path);
-        if (!File.Exists(path))
+        var memory = new TranslationMemory(Path.GetFullPath(path));
+        lock (memory._gate)
         {
-            return memory;
-        }
-
-        foreach (var line in File.ReadLines(path, Encoding.UTF8))
-        {
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                var source = root.GetProperty("source").GetString();
-                if (source is null)
-                {
-                    continue;
-                }
-
-                if (root.TryGetProperty("forget", out var forget) && forget.ValueKind == JsonValueKind.True)
-                {
-                    memory._entries.Remove(Key(source));
-                }
-                else if (root.GetProperty("target").GetString() is { } target)
-                {
-                    var updated = root.TryGetProperty("updated", out var u) && u.TryGetDateTimeOffset(out var time) ? time : DateTimeOffset.MinValue;
-                    memory._entries[Key(source)] = new MemoryEntry(source, target, updated);
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
-            {
-                // a line cut off by a crash or written by hand: the rest still counts
-            }
+            memory.Sync();
         }
 
         return memory;
@@ -75,6 +49,7 @@ public sealed class TranslationMemory
         {
             lock (_gate)
             {
+                Sync();
                 return _entries.Count;
             }
         }
@@ -87,6 +62,7 @@ public sealed class TranslationMemory
         {
             lock (_gate)
             {
+                Sync();
                 return [.. _entries.Values];
             }
         }
@@ -97,6 +73,7 @@ public sealed class TranslationMemory
     {
         lock (_gate)
         {
+            Sync();
             if (_entries.TryGetValue(Key(source), out var entry))
             {
                 target = entry.Target;
@@ -120,7 +97,12 @@ public sealed class TranslationMemory
         var entry = new MemoryEntry(source.Trim(), target.Trim(), DateTimeOffset.UtcNow);
         lock (_gate)
         {
-            Append(Line(entry));
+            using (FileLock())
+            {
+                Sync();
+                Append(Line(entry));
+            }
+
             _entries[key] = entry;
         }
     }
@@ -131,17 +113,22 @@ public sealed class TranslationMemory
         var key = Key(source);
         lock (_gate)
         {
-            if (!_entries.ContainsKey(key))
+            using (FileLock())
             {
-                return false;
+                Sync();
+                if (!_entries.ContainsKey(key))
+                {
+                    return false;
+                }
+
+                Append(JsonLine(writer =>
+                {
+                    writer.WriteString("source", source.Trim());
+                    writer.WriteBoolean("forget", true);
+                    writer.WriteString("updated", DateTimeOffset.UtcNow);
+                }));
             }
 
-            Append(JsonLine(writer =>
-            {
-                writer.WriteString("source", source.Trim());
-                writer.WriteBoolean("forget", true);
-                writer.WriteString("updated", DateTimeOffset.UtcNow);
-            }));
             _entries.Remove(key);
             return true;
         }
@@ -157,10 +144,15 @@ public sealed class TranslationMemory
 
         lock (_gate)
         {
-            var temporary = _path + ".tmp";
-            var text = string.Concat(_entries.Values.OrderBy(e => e.Updated).Select(e => Line(e) + "\n"));
-            File.WriteAllText(temporary, text, new UTF8Encoding(false));
-            File.Move(temporary, _path, overwrite: true);
+            using (FileLock())
+            {
+                Sync();
+                var temporary = _path + ".tmp";
+                var text = string.Concat(_entries.Values.OrderBy(e => e.Updated).Select(e => Line(e) + "\n"));
+                File.WriteAllText(temporary, text, new UTF8Encoding(false));
+                File.Move(temporary, _path, overwrite: true);
+                _stamp = Stamp();
+            }
         }
     }
 
@@ -198,12 +190,16 @@ public sealed class TranslationMemory
             return;
         }
 
-        if (Path.GetDirectoryName(Path.GetFullPath(_path)) is { } directory)
+        using (var file = new FileStream(_path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete))
         {
-            Directory.CreateDirectory(directory);
+            AppendTo(file, line);
         }
 
-        using var file = new FileStream(_path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+        _stamp = Stamp();
+    }
+
+    private static void AppendTo(FileStream file, string line)
+    {
         var text = line + "\n";
         if (file.Length > 0)
         {
@@ -217,6 +213,96 @@ public sealed class TranslationMemory
         file.Seek(0, SeekOrigin.End);
         file.Write(Encoding.UTF8.GetBytes(text));
         file.Flush(flushToDisk: true);
+    }
+
+    // reads the file again when another program changed it since this one last read or wrote it (caller holds _gate)
+    private void Sync()
+    {
+        if (_path is null)
+        {
+            return;
+        }
+
+        var stamp = Stamp();
+        if (stamp == _stamp)
+        {
+            return;
+        }
+
+        _entries.Clear();
+        if (stamp.Length >= 0)
+        {
+            using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            while (reader.ReadLine() is { } line)
+            {
+                Read(line);
+            }
+        }
+
+        _stamp = stamp;
+    }
+
+    // one line of the file; a line cut off by a crash or written by hand is skipped, the rest still counts
+    private void Read(string line)
+    {
+        if (line.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (root.GetProperty("source").GetString() is not { } source)
+            {
+                return;
+            }
+
+            if (root.TryGetProperty("forget", out var forget) && forget.ValueKind == JsonValueKind.True)
+            {
+                _entries.Remove(Key(source));
+            }
+            else if (root.GetProperty("target").GetString() is { } target)
+            {
+                var updated = root.TryGetProperty("updated", out var u) && u.TryGetDateTimeOffset(out var time) ? time : DateTimeOffset.MinValue;
+                _entries[Key(source)] = new MemoryEntry(source, target, updated);
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+        }
+    }
+
+    // length and time of the last write; length -1 when there is no file yet
+    private (long Length, DateTime Written) Stamp()
+    {
+        var info = new FileInfo(_path!);
+        return info.Exists ? (info.Length, info.LastWriteTimeUtc) : (-1, default);
+    }
+
+    // the lock file next to the memory: one program at a time changes the memory; others wait (up to 5 s)
+    private FileStream? FileLock()
+    {
+        if (_path is null)
+        {
+            return null;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var deadline = DateTime.UtcNow + LockTimeout;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(_path + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(20);
+            }
+        }
     }
 
     private static string Line(MemoryEntry entry) => JsonLine(writer =>

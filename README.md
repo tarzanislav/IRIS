@@ -26,7 +26,7 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
 | Delenie textu na vety, preklad odsekov s rozložením, delenie príliš dlhých viet | hotové (F2) |
 | chrF (ako sacreBLEU), meranie na FLORES-200 v CI | hotové (F2) |
 | Pamäť prekladov a slovník mien | hotové (F2) |
-| Vydanie (knižnica, `iris.exe`, int8 model, SHA-256) | v0.1.0 |
+| Vydanie (knižnica, `iris.exe`, int8 model, SHA-256) | v0.1.0, v0.2.0 (napojenie) |
 | Učenie z opráv | F3 – ďalší krok |
 
 ## Štruktúra
@@ -53,6 +53,9 @@ iris info <model.iris>
 iris tokenize <model.spm> <text>
 ```
 Neznáma voľba je chyba (kód 2), chyba vstupu kód 1.
+
+## Napojenie do inej aplikácie
+Návod s príkladom v C# (preklad, zrušenie, priebeh, spoločná pamäť opráv, slovník mien): [`docs/napojenie.md`](docs/napojenie.md).
 
 ## Overenie jadra (CI)
 Úloha **Reference (transformers)** v CI: malý náhodný model Marian sa musí zhodovať na 100 %, potom sa stiahne

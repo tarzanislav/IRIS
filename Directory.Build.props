@@ -10,7 +10,7 @@
     <AnalysisLevel>latest</AnalysisLevel>
     <Deterministic>true</Deterministic>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Company>tarzanislav</Company>
     <Product>IRIS</Product>
     <Copyright>© 2026 tarzanislav</Copyright>
