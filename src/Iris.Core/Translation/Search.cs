@@ -9,14 +9,20 @@ public interface IDecoderSession
 
     int VocabSize { get; }
 
-    /// <summary>Feeds the last token of every row; returns the logits of the next token, [Rows, VocabSize].</summary>
+    /// <summary>
+    /// Feeds the last token of every row; returns the logits of the next token, [Rows, VocabSize]. The array may be
+    /// reused by the next step, so a caller that keeps the values copies them.
+    /// </summary>
     float[] Step(ReadOnlySpan<int> tokens);
 
     /// <summary>Row r continues the hypothesis of row parents[r].</summary>
     void Reorder(ReadOnlySpan<int> parents);
 }
 
-/// <summary>A translation found by the search: generated token ids (the end of sentence included when it was reached) and its score.</summary>
+/// <summary>
+/// A translation found by the search: generated token ids (the end of sentence included when it was reached) and its
+/// score – the sum of log-probabilities divided by length^LengthPenalty, for greedy search as for beam search.
+/// </summary>
 public sealed record Hypothesis(int[] Tokens, float Score);
 
 /// <summary>
@@ -53,7 +59,7 @@ public static class Search
             length++;
             if (next == settings.EosId || length >= settings.MaxLength)
             {
-                return new Hypothesis([.. tokens], score);
+                return new Hypothesis([.. tokens], score / (float)Math.Pow(tokens.Count, settings.LengthPenalty));
             }
 
             last = next;

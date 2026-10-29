@@ -17,6 +17,9 @@ concurrency:
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  HF_HUB_DISABLE_TELEMETRY: '1'
+  DO_NOT_TRACK: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
 jobs:
   core:
@@ -31,7 +34,18 @@ jobs:
           dotnet --list-sdks
       - name: Build
         run: dotnet build Iris.slnx -c Release
+      - name: Code format (.editorconfig)
+        run: dotnet format Iris.slnx --verify-no-changes
       - name: Tests
+        run: dotnet run --project tests/Iris.Tests -c Release --no-build
+      # the same tests on the paths of older processors: 128-bit vectors only, then no vector instructions at all
+      - name: Tests without AVX2
+        env:
+          DOTNET_EnableAVX2: '0'
+        run: dotnet run --project tests/Iris.Tests -c Release --no-build
+      - name: Tests without vector instructions
+        env:
+          DOTNET_EnableHWIntrinsic: '0'
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       - name: Command line smoke test
         run: dotnet run --project src/Iris.Cli -c Release --no-build -- tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
@@ -43,12 +57,6 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     timeout-minutes: 75
-    env:
-      HF_HUB_DISABLE_TELEMETRY: '1'
-      DO_NOT_TRACK: '1'
-      PIP_DISABLE_PIP_VERSION_CHECK: '1'
-      # the pinned revision of the model (licence Apache-2.0 checked on download)
-      OPUS_MT_EN_SK_REVISION: 04d19ccd4566720bceeff93623d5cf93be659816
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: .NET 10 SDK
@@ -58,11 +66,7 @@ jobs:
       - name: Build
         run: dotnet build src/Iris.Cli -c Release
       - name: Python tools of the reference
-        run: |
-          python3 -m venv /tmp/venv || { sudo apt-get install -y -q python3-venv && python3 -m venv /tmp/venv; }
-          /tmp/venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cpu -r tools/reference/requirements-torch.txt
-          /tmp/venv/bin/pip install -q -r tools/reference/requirements.txt
-          /tmp/venv/bin/python -c "import torch, transformers; print('torch', torch.__version__, 'transformers', transformers.__version__)"
+        run: bash tools/reference/prepare-opus.sh
       - name: Tiny random model – must match exactly
         run: |
           py=/tmp/venv/bin/python
@@ -72,9 +76,7 @@ jobs:
           bash tools/reference/verify.sh /tmp/tiny.iris /tmp/tiny.json --min-greedy 1 --min-beam 1
       - name: OPUS-MT en-sk – download (licence checked) and convert
         run: |
-          py=/tmp/venv/bin/python
-          $py tools/reference/marian_reference.py download Helsinki-NLP/opus-mt-en-sk /tmp/opus-en-sk --revision "$OPUS_MT_EN_SK_REVISION"
-          $py tools/reference/marian_reference.py convert /tmp/opus-en-sk /tmp/opus-en-sk.iris
+          bash tools/reference/prepare-opus.sh /tmp
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll info /tmp/opus-en-sk.iris
       - name: OPUS-MT en-sk – reference of 500 invented sentences
         run: /tmp/venv/bin/python tools/reference/marian_reference.py reference /tmp/opus-en-sk /tmp/opus-en-sk.json --set opus --count 500
@@ -89,17 +91,54 @@ jobs:
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll translate /tmp/opus-en-sk.iris < /tmp/samples.en > /tmp/samples.sk
           paste -d '\t' /tmp/samples.en /tmp/samples.sk | while IFS=$'\t' read -r en sk; do echo "::notice title=EN→SK (IRIS)::$en → $sk"; done
 
-  # F2: int8, speed (title + introduction ≤ 1 s) and quality (chrF on FLORES-200 devtest, int8 not worse than float32)
+  # Windows, where IRIS runs: build, tests, the command line as published for a release, the hardware script
+  windows:
+    name: Windows (build, tests, publish, hardware script)
+    runs-on: windows-2025
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if (-not (dotnet --list-sdks 2>$null | Select-String '^10\.')) {
+            Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $env:RUNNER_TEMP/dotnet-install.ps1
+            & $env:RUNNER_TEMP/dotnet-install.ps1 -Channel 10.0 -InstallDir "$env:ProgramFiles/dotnet"
+          }
+          dotnet --list-sdks
+      - name: Build and tests
+        run: |
+          dotnet build Iris.slnx -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Iris.Tests -c Release --no-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Command line as in a release (self-contained, one file)
+        run: |
+          dotnet publish src/Iris.Cli -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o out/cli
+          $size = [math]::Round((Get-Item out/cli/iris.exe).Length / 1MB, 1)
+          ./out/cli/iris.exe tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "::notice title=iris.exe::self-contained single file, $size MB"
+      - name: Hardware script (Windows PowerShell 5.1 and PowerShell 7)
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps5
+          pwsh -NoProfile -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps7
+          foreach ($name in 'ci-runner-ps5', 'ci-runner-ps7') {
+            $report = Get-Content "tools/hardware/iris-hw-$name.txt" -Raw | ConvertFrom-Json
+            if (-not $report.cpu.name -or -not $report.memory.total_gb) { "::error::hardware report $name is incomplete"; exit 1 }
+            $text = (Get-Content "tools/hardware/iris-hw-$name.txt" -Raw) -replace '%', '%25' -replace "`r?`n", '%0A'
+            "::notice title=hardware $name::$text"
+          }
+
+  # F2: int8, speed (no slower than the base commit; target title + introduction ≤ 1 s) and quality (chrF on FLORES-200 devtest, int8 not worse than float32)
   quality:
     name: Quality and speed (F2)
     runs-on: ubuntu-24.04
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     timeout-minutes: 60
-    env:
-      HF_HUB_DISABLE_TELEMETRY: '1'
-      DO_NOT_TRACK: '1'
-      PIP_DISABLE_PIP_VERSION_CHECK: '1'
-      OPUS_MT_EN_SK_REVISION: 04d19ccd4566720bceeff93623d5cf93be659816
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: .NET 10 SDK
@@ -108,15 +147,17 @@ jobs:
           dotnet --list-sdks
       - name: Build
         run: dotnet build src/Iris.Cli -c Release
-      - name: Python tools of the reference (only for converting the model)
+      - name: OPUS-MT en-sk – Python tools (only for converting), download (licence checked) and convert
+        run: bash tools/reference/prepare-opus.sh /tmp
+      # the speed gate compares with the base commit on the same runner (the pull request's base, or main before the push)
+      - name: Base commit for the speed comparison
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          python3 -m venv /tmp/venv || { sudo apt-get install -y -q python3-venv && python3 -m venv /tmp/venv; }
-          /tmp/venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cpu -r tools/reference/requirements-torch.txt
-          /tmp/venv/bin/pip install -q -r tools/reference/requirements.txt
-      - name: OPUS-MT en-sk – download (licence checked) and convert
-        run: |
-          py=/tmp/venv/bin/python
-          $py tools/reference/marian_reference.py download Helsinki-NLP/opus-mt-en-sk /tmp/opus-en-sk --revision "$OPUS_MT_EN_SK_REVISION"
-          $py tools/reference/marian_reference.py convert /tmp/opus-en-sk /tmp/opus-en-sk.iris
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ]; then echo "no base commit"; exit 0; fi
+          git fetch -q --depth 1 origin "$BASE_SHA"
+          git worktree add -q /tmp/base FETCH_HEAD
+          dotnet build /tmp/base/src/Iris.Cli -c Release > /dev/null
+          echo "BASELINE_IRIS=dotnet /tmp/base/src/Iris.Cli/bin/Release/net10.0/iris.dll" >> "$GITHUB_ENV"
       - name: int8, speed and FLORES-200 quality – gates F2
         run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris

@@ -95,9 +95,9 @@ public static class SpeedAndQualityTests
         var int8Path = tiny.Path + ".int8";
         try
         {
-            var source = ModelFile.Load(tiny.Path);
+            using var source = ModelFile.Load(tiny.Path);
             Quantizer.Write(source, int8Path);
-            var file = ModelFile.Load(int8Path);
+            using var file = ModelFile.Load(int8Path);
             Assert.Equal("i8", file.DTypeOf("embed"), "token vectors in int8");
             Assert.Equal("i8", file.DTypeOf("dec.0.ffn.1.w"), "weights in int8");
             Assert.Equal("f32", file.DTypeOf("dec.0.ffn.1.b"), "biases stay float");
@@ -109,7 +109,7 @@ public static class SpeedAndQualityTests
             Assert.True(stored.Model.IsInt8 && whenRead.Model.IsInt8, "both int8");
             foreach (var text in new[] { "the film premiere is tonight.", "night", "" })
             {
-                Assert.Sequence(whenRead.Translate(text).OutputIds, stored.Translate(text).OutputIds, $"the same translation of '{text}'");
+                Assert.Sequence(whenRead.RunModel(text).OutputIds, stored.RunModel(text).OutputIds, $"the same translation of '{text}'");
             }
         }
         finally

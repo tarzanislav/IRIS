@@ -19,22 +19,18 @@ internal sealed record EncoderLayer(Attention SelfAttention, FeedForward FeedFor
 
 internal sealed record DecoderLayer(Attention SelfAttention, Attention CrossAttention, FeedForward FeedForward);
 
-/// <summary>A source sentence after the encoder: its vectors and, for every decoder layer, the keys and values of cross attention.</summary>
+/// <summary>A source sentence after the encoder: for every decoder layer, the keys and values of cross attention.</summary>
 public sealed class EncodedSource
 {
-    internal EncodedSource(int length, float[] states, float[][] keys, float[][] values)
+    internal EncodedSource(int length, float[][] keys, float[][] values)
     {
         Length = length;
-        States = states;
         Keys = keys;
         Values = values;
     }
 
     /// <summary>Tokens of the source sentence (the end of sentence included).</summary>
     public int Length { get; }
-
-    /// <summary>The output of the encoder, [Length, d_model].</summary>
-    public float[] States { get; }
 
     internal float[][] Keys { get; }
 
@@ -69,9 +65,8 @@ public sealed class MarianModel
         _activation = config.Activation switch
         {
             "swish" or "silu" => Kernels.Silu,
-            "gelu" => Kernels.Gelu,
             "relu" => Kernels.Relu,
-            var other => throw new NotSupportedException($"Marian model: activation {other} is not supported"),
+            var other => throw new FormatException($"Marian model: activation {other} is not supported"),
         };
     }
 
@@ -93,13 +88,9 @@ public sealed class MarianModel
 
         var c = MarianConfig.FromJson(file.Config);
         int d = c.DModel, v = c.VocabSize;
-        if (d % c.EncoderHeads != 0 || d % c.DecoderHeads != 0)
-        {
-            throw new FormatException("Marian model: d_model must be divisible by the number of heads");
-        }
 
         Dense Dense(string name, int inputs, int outputs) =>
-            new(Matrix.Load(file, name + ".w", outputs, inputs, quantize), file.Floats(name + ".b", outputs));
+            new(file.Matrix(name + ".w", outputs, inputs, quantize), file.Floats(name + ".b", outputs));
         Norm Norm(string name) => new(file.Floats(name + ".g", d), file.Floats(name + ".b", d));
         Attention Attention(string name) =>
             new(Dense(name + ".q", d, d), Dense(name + ".k", d, d), Dense(name + ".v", d, d), Dense(name + ".o", d, d), Norm(name + ".ln"));
@@ -109,7 +100,7 @@ public sealed class MarianModel
             .Select(i => new EncoderLayer(Attention($"enc.{i}.attn"), FeedForward($"enc.{i}.ffn", c.EncoderFfn))).ToArray();
         var decoder = Enumerable.Range(0, c.DecoderLayers)
             .Select(i => new DecoderLayer(Attention($"dec.{i}.self"), Attention($"dec.{i}.cross"), FeedForward($"dec.{i}.ffn", c.DecoderFfn))).ToArray();
-        return new MarianModel(c, Matrix.Load(file, "embed", v, d, quantize), file.Floats("out.bias", v), encoder, decoder);
+        return new MarianModel(c, file.Matrix("embed", v, d, quantize), file.Floats("out.bias", v), encoder, decoder);
     }
 
     /// <summary>
@@ -177,13 +168,13 @@ public sealed class MarianModel
             values[l] = _decoder[l].CrossAttention.Value.Apply(x, n);
         }
 
-        return new EncodedSource(n, x, keys, values);
+        return new EncodedSource(n, keys, values);
     }
 
     /// <summary>Starts decoding a source sentence with a number of hypotheses (rows) side by side.</summary>
-    public MarianSession StartDecoding(EncodedSource source, int rows) => new(this, source, rows);
+    public IDecoderSession StartDecoding(EncodedSource source, int rows) => new MarianSession(this, source, rows);
 
-    // one decoder step for every row: the logits of the next token, [rows, vocabulary]
+    // one decoder step for every row: the logits of the next token, [rows, vocabulary], in the buffer of the session
     internal float[] Step(MarianSession s, ReadOnlySpan<int> tokens)
     {
         int rows = s.Rows, d = Config.DModel, t = s.Length;
@@ -235,7 +226,8 @@ public sealed class MarianModel
         }
 
         s.Length = t + 1;
-        return _embed.Linear(x, rows, _outputBias);
+        _embed.Linear(x, rows, _outputBias, s.Logits);
+        return s.Logits;
     }
 
     // token vector × scale + position
@@ -297,8 +289,11 @@ public sealed class MarianModel
     }
 }
 
-/// <summary>Decoding of one source sentence: the hypotheses (rows) and the keys and values of their tokens so far.</summary>
-public sealed class MarianSession : IDecoderSession
+/// <summary>
+/// Decoding of one source sentence: the hypotheses (rows) and the keys and values of their tokens so far. The
+/// logits of a step stay valid until the next step (one buffer per session, so decoding does not allocate them anew).
+/// </summary>
+internal sealed class MarianSession : IDecoderSession
 {
     private readonly MarianModel _model;
     private int _capacity;
@@ -313,6 +308,7 @@ public sealed class MarianSession : IDecoderSession
         _model = model;
         Source = source;
         Rows = rows;
+        Logits = new float[rows * model.Config.VocabSize];
         var layers = model.Config.DecoderLayers;
         Keys = new float[layers][][];
         Values = new float[layers][][];
@@ -336,6 +332,8 @@ public sealed class MarianSession : IDecoderSession
     public int Length { get; internal set; }
 
     internal EncodedSource Source { get; }
+
+    internal float[] Logits { get; }
 
     // [layer][row] → [capacity, d_model]
     internal float[][][] Keys { get; }
@@ -363,12 +361,21 @@ public sealed class MarianSession : IDecoderSession
             return;
         }
 
+        // a parent continued by several rows lends its buffer to the first and is copied into buffers of rows
+        // that no row continues; nothing new is allocated
         var used = Length * _model.Config.DModel;
+        var continued = new bool[Rows];
+        foreach (var p in parents)
+        {
+            continued[p] = true;
+        }
+
         foreach (var cache in new[] { Keys, Values })
         {
             foreach (var layer in cache)
             {
                 var old = (float[][])layer.Clone();
+                var free = new Stack<float[]>(Enumerable.Range(0, Rows).Where(r => !continued[r]).Select(r => old[r]));
                 var taken = new bool[Rows];
                 for (var r = 0; r < Rows; r++)
                 {
@@ -380,7 +387,7 @@ public sealed class MarianSession : IDecoderSession
                     }
                     else
                     {
-                        var copy = new float[old[p].Length];
+                        var copy = free.Pop();
                         old[p].AsSpan(0, used).CopyTo(copy);
                         layer[r] = copy;
                     }

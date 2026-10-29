@@ -55,8 +55,6 @@ public sealed class SentencePieceTokenizer
         }
     }
 
-    public SentencePieceModel Model => _model;
-
     /// <summary>The pieces of a text.</summary>
     public IReadOnlyList<TokenPiece> Encode(string text)
     {
@@ -88,7 +86,9 @@ public sealed class SentencePieceTokenizer
     }
 
     /// <summary>The text of piece ids, as SentencePiece decodes them.</summary>
-    public string Decode(IEnumerable<int> ids) => Decode(ids.Select(id => (_model.Pieces[id].Text, id)));
+    public string Decode(IEnumerable<int> ids) => Decode(ids.Select(id => (uint)id < (uint)_model.Pieces.Count
+        ? (_model.Pieces[id].Text, id)
+        : throw new ArgumentOutOfRangeException(nameof(ids), $"piece id {id} is not in the model")));
 
     /// <summary>The text of pieces (a piece the model does not know is kept as it is written).</summary>
     public string Decode(IEnumerable<string> pieces) => Decode(pieces.Select(p => (p, IdOf(p))));
@@ -166,7 +166,8 @@ public sealed class SentencePieceTokenizer
         Array.Fill(bestStart, -1);
         var unknownScore = _minScore - UnknownPenalty;
         var lookup = _pieces.GetAlternateLookup<ReadOnlySpan<char>>();
-        Span<char> chars = stackalloc char[_maxPieceBytes + 1];
+        // a damaged model with a huge piece must not overflow the stack
+        Span<char> chars = _maxPieceBytes < 512 ? stackalloc char[_maxPieceBytes + 1] : new char[_maxPieceBytes + 1];
         var start = 0;
         while (start < size)
         {

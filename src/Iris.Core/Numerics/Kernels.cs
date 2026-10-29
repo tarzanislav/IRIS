@@ -6,7 +6,7 @@ using System.Runtime.Intrinsics;
 namespace Iris.Numerics;
 
 /// <summary>The arithmetic of the model, written for the processor: dot products in SIMD registers, rows of a matrix in parallel.</summary>
-public static class Kernels
+internal static class Kernels
 {
     /// <summary>Rows below this many multiply-adds are done on one thread.</summary>
     private const long ParallelWork = 1 << 16;
@@ -39,19 +39,27 @@ public static class Kernels
     }
 
     /// <summary>y[t] = x[t] · Wᵀ + b for each of the n rows of x; W is [outputs, inputs] (as PyTorch keeps it).</summary>
-    public static unsafe float[] Linear(float[] x, int n, float[] w, float[]? b, int inputs, int outputs)
+    public static float[] Linear(float[] x, int n, float[] w, float[]? b, int inputs, int outputs)
     {
         var y = new float[n * outputs];
+        Linear(x, n, w, b, inputs, outputs, y);
+        return y;
+    }
+
+    /// <summary>The same into y (n × outputs values), so that a caller can reuse its buffer.</summary>
+    public static unsafe void Linear(float[] x, int n, float[] w, float[]? b, int inputs, int outputs, float[] y)
+    {
+        CheckSizes(x.LongLength, n, w.LongLength, b, inputs, outputs, y.LongLength);
         if (RowKernels.Supported)
         {
             ForRanges(outputs, (long)n * inputs * outputs, (from, to) =>
             {
                 fixed (float* px = x, pw = w, pb = b, py = y)
                 {
-                    RowKernels.Linear<FloatRow>(px, n, pw, sizeof(float), null, pb, inputs, outputs, py, from, to);
+                    RowKernels.Linear<FloatRow>(px, n, pw, null, pb, inputs, outputs, py, from, to);
                 }
             });
-            return y;
+            return;
         }
 
         ForRanges(outputs, (long)n * inputs * outputs, (from, to) =>
@@ -66,7 +74,6 @@ public static class Kernels
                 }
             }
         });
-        return y;
     }
 
     /// <summary>
@@ -74,9 +81,10 @@ public static class Kernels
     /// are widened to float in the registers (AVX2), so a quarter of the bytes is read; without AVX2 each row is
     /// widened once into a buffer and used for all n rows of x.
     /// </summary>
-    public static unsafe float[] LinearInt8(float[] x, int n, sbyte[] w, float[] scales, float[]? b, int inputs, int outputs)
+    public static unsafe void LinearInt8(float[] x, int n, sbyte[] w, float[] scales, float[]? b, int inputs, int outputs, float[] y)
     {
-        var y = new float[n * outputs];
+        CheckSizes(x.LongLength, n, w.LongLength, b, inputs, outputs, y.LongLength);
+        ArgumentOutOfRangeException.ThrowIfLessThan(scales.Length, outputs);
         if (RowKernels.Supported)
         {
             ForRanges(outputs, (long)n * inputs * outputs, (from, to) =>
@@ -84,10 +92,10 @@ public static class Kernels
                 fixed (float* px = x, ps = scales, pb = b, py = y)
                 fixed (sbyte* pw = w)
                 {
-                    RowKernels.Linear<Int8Row>(px, n, pw, sizeof(sbyte), ps, pb, inputs, outputs, py, from, to);
+                    RowKernels.Linear<Int8Row>(px, n, pw, ps, pb, inputs, outputs, py, from, to);
                 }
             });
-            return y;
+            return;
         }
 
         ForRanges(outputs, (long)n * inputs * outputs, (from, to) =>
@@ -104,7 +112,16 @@ public static class Kernels
                 }
             }
         });
-        return y;
+    }
+
+    // the pointer kernels trust these sizes, so they are checked once here
+    private static void CheckSizes(long x, int n, long w, float[]? b, int inputs, int outputs, long y)
+    {
+        if (n < 0 || inputs < 0 || outputs < 0 || x < (long)n * inputs || w < (long)inputs * outputs || y < (long)n * outputs ||
+            (b is not null && b.Length < outputs))
+        {
+            throw new ArgumentException($"linear layer: sizes do not fit (n {n}, inputs {inputs}, outputs {outputs})");
+        }
     }
 
     /// <summary>int8 → float, element by element.</summary>
@@ -283,7 +300,7 @@ public static class Kernels
         }
     }
 
-    /// <summary>The log-softmax of a row (in double, so the sums of a long beam stay exact), in place.</summary>
+    /// <summary>The log-softmax of a row, in place; the sum of the exponentials is kept in double.</summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static void LogSoftmax(Span<float> row)
     {
@@ -341,7 +358,8 @@ public static class Kernels
         return max;
     }
 
-    // Σ exp(x − max): eight exponentials at a time in float (as the reference computes them), summed in double
+    // Σ exp(x − max): eight exponentials at a time in float (Vector256.Exp, within a unit or two in the last place),
+    // summed in double; the few values left over at the end with MathF.Exp
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private static double SumExp(ReadOnlySpan<float> row, float max)
     {
@@ -379,29 +397,12 @@ public static class Kernels
         }
     }
 
-    /// <summary>GELU (exact, with erf), in place.</summary>
-    public static void Gelu(Span<float> x)
-    {
-        for (var i = 0; i < x.Length; i++)
-        {
-            x[i] = 0.5f * x[i] * (1f + Erf(x[i] / MathF.Sqrt(2f)));
-        }
-    }
-
+    /// <summary>ReLU: max(0, x), in place.</summary>
     public static void Relu(Span<float> x)
     {
         for (var i = 0; i < x.Length; i++)
         {
             x[i] = MathF.Max(0, x[i]);
         }
-    }
-
-    // the error function (Abramowitz–Stegun 7.1.26 refined by a Newton step is not needed at float precision)
-    private static float Erf(float x)
-    {
-        var t = 1.0 / (1.0 + 0.5 * Math.Abs(x));
-        var y = 1 - t * Math.Exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 +
-                    t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
-        return (float)(x >= 0 ? y : -y);
     }
 }

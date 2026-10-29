@@ -8,7 +8,7 @@ namespace Iris.Tokenization;
 /// a double-array trie (e.g. NFKC), leading, trailing and repeated spaces dropped, a space put in front, and spaces
 /// written as "▁". Works on UTF-8 bytes exactly as SentencePiece does, so the same text gives the same pieces.
 /// </summary>
-public sealed class Normalizer
+internal sealed class Normalizer
 {
     /// <summary>"▁" (U+2581), how SentencePiece writes a space.</summary>
     public const string SpaceSymbol = "▁";

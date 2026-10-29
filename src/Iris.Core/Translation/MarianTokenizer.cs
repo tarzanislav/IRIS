@@ -93,9 +93,6 @@ public sealed class MarianTokenizer
         return [.. ids];
     }
 
-    /// <summary>The pieces of the ids (for showing what the model sees).</summary>
-    public IEnumerable<string> Pieces(IEnumerable<int> ids) => ids.Select(PieceOf);
-
     /// <summary>The text of a translation: special tokens are left out, the pieces are joined by the target model.</summary>
     public string Decode(IEnumerable<int> ids)
     {

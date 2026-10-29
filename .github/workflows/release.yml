@@ -1,0 +1,96 @@
+name: Release
+
+# A release of IRIS: the core library, the command line for Windows and the int8 model en→sk, with licences and
+# SHA-256 sums. Started by hand (Actions → Release → Run workflow) and run only after the owner approves it in the
+# environment "release". Only a commit of main whose CI passed every gate (F1 reference, F2 quality and speed) is released.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 0.1.0 (must be the <Version> in Directory.Build.props and have docs/releases/vVERSION.md)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  HF_HUB_DISABLE_TELEMETRY: '1'
+  DO_NOT_TRACK: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checks – main, version, notes, gates of this commit
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::only main is released"; exit 1; }
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version $VERSION is not X.Y.Z"; exit 1; }
+          grep -q "<Version>$VERSION</Version>" Directory.Build.props || { echo "::error::Directory.Build.props does not have version $VERSION"; exit 1; }
+          [ -f "docs/releases/v$VERSION.md" ] || { echo "::error::docs/releases/v$VERSION.md is missing"; exit 1; }
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "::error::release v$VERSION exists"; exit 1; fi
+          checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.conclusion != "skipped") | "\(.name)=\(.conclusion)"')
+          echo "$checks"
+          for gate in "Build and tests (Linux)" "Reference (transformers)" "Quality and speed (F2)"; do
+            echo "$checks" | grep -qx "$gate=success" || { echo "::error::CI gate '$gate' has not passed on $GITHUB_SHA"; exit 1; }
+          done
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build and tests
+        run: |
+          dotnet build Iris.slnx -c Release
+          dotnet run --project tests/Iris.Tests -c Release --no-build
+      - name: Library and command line for Windows
+        run: |
+          mkdir -p out/assets out/cli
+          cp src/Iris.Core/bin/Release/net10.0/Iris.Core.dll out/assets/
+          dotnet publish src/Iris.Cli -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o out/cli
+          cp LICENSE out/cli/
+          (cd out/cli && zip -q -r "../assets/iris-$VERSION-win-x64.zip" .)
+      - name: Model en→sk – download (licence checked), convert, int8
+        run: |
+          bash tools/reference/prepare-opus.sh /tmp
+          iris="dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll"
+          $iris quantize /tmp/opus-en-sk.iris out/assets/opus-mt-en-sk-int8.iris
+          $iris info out/assets/opus-mt-en-sk-int8.iris | tee /tmp/model-info.txt
+          sample=$($iris translate out/assets/opus-mt-en-sk-int8.iris "The premiere is tonight.")
+          echo "The premiere is tonight. → $sample"
+          [[ "$sample" == Premiéra* ]] || { echo "::error::the model does not translate as expected: $sample"; exit 1; }
+      - name: Licences, provenance, checksums
+        run: |
+          cp LICENSE out/assets/LICENSE
+          {
+            echo "IRIS $VERSION"
+            echo
+            echo "Code: IRIS (Iris.Core.dll, iris.exe) – Apache-2.0, see LICENSE. Built from commit $GITHUB_SHA."
+            echo "The command line for Windows also contains the .NET runtime (MIT, Microsoft)."
+            echo
+            echo "Model: opus-mt-en-sk-int8.iris – weights of Helsinki-NLP/opus-mt-en-sk (OPUS-MT, Language Technology"
+            echo "Research Group at the University of Helsinki), licence Apache-2.0, revision $OPUS_MT_EN_SK_REVISION,"
+            echo "https://huggingface.co/Helsinki-NLP/opus-mt-en-sk – converted to the IRIS format and quantized to int8"
+            echo "(one scale per row) by tools/reference/marian_reference.py and iris quantize. Provenance inside the file:"
+            grep '^provenance:' /tmp/model-info.txt
+          } > out/assets/NOTICE.txt
+          (cd out/assets && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - name: Publish the release
+        run: |
+          gh release create "v$VERSION" out/assets/* --target "$GITHUB_SHA" --title "IRIS $VERSION" --notes-file "docs/releases/v$VERSION.md"
+          { echo "### IRIS $VERSION"; echo; echo '```'; cat out/assets/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -13,6 +13,7 @@ public static class Quantizer
     public static bool IsWeightMatrix(TensorInfo tensor) =>
         tensor.DType == "f32" && tensor.Shape.Length == 2 && (tensor.Name == "embed" || tensor.Name.EndsWith(".w", StringComparison.Ordinal));
 
+    /// <summary>Writes the int8 copy of an open model file to a path.</summary>
     public static void Write(ModelFile source, string path)
     {
         var tensors = new List<TensorData>();
@@ -21,7 +22,7 @@ public static class Quantizer
             if (IsWeightMatrix(tensor))
             {
                 var matrix = Matrix.FromFloats(source.Floats(tensor.Name), tensor.Shape[0], tensor.Shape[1]).ToInt8();
-                tensors.AddRange(matrix.ToTensors(tensor.Name));
+                tensors.AddRange(ModelFile.TensorsOf(tensor.Name, matrix));
             }
             else
             {

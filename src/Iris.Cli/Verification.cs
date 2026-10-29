@@ -2,11 +2,12 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Iris.Translation;
 
-namespace Iris.Translation;
+namespace Iris.Cli;
 
 /// <summary>One sentence of reference data: what the reference implementation gave for it.</summary>
-public sealed record ReferenceSentence(
+internal sealed record ReferenceSentence(
     string Text,
     int[] Source,
     int[]? Greedy,
@@ -17,7 +18,7 @@ public sealed record ReferenceSentence(
     (int Id, float Logit)[] FirstStep);
 
 /// <summary>Reference data made in CI by tools/reference (Hugging Face transformers + PyTorch).</summary>
-public sealed record ReferenceSet(int Beams, string Description, IReadOnlyList<ReferenceSentence> Sentences)
+internal sealed record ReferenceSet(int Beams, string Description, IReadOnlyList<ReferenceSentence> Sentences)
 {
     public static ReferenceSet Load(string path)
     {
@@ -50,7 +51,7 @@ public sealed record ReferenceSet(int Beams, string Description, IReadOnlyList<R
 }
 
 /// <summary>How well the own core repeats the reference: matches of ids and texts, differences of logits, time.</summary>
-public sealed class CheckReport
+internal sealed class CheckReport
 {
     private const int ShownMismatches = 20;
 
@@ -123,7 +124,7 @@ public sealed class CheckReport
 }
 
 /// <summary>Checks the own core against reference data, sentence by sentence.</summary>
-public static class ReferenceCheck
+internal static class ReferenceCheck
 {
     public static CheckReport Run(Translator translator, ReferenceSet reference, bool greedy = true, bool beam = true, int? limit = null,
         Action<int, int>? progress = null)
@@ -165,7 +166,11 @@ public static class ReferenceCheck
                 greedyWatch.Stop();
                 report.GreedyChecked++;
                 report.GeneratedTokens += found.Tokens.Length;
-                Compare(report, i, "greedy", expectedGreedy, found.Tokens, ok => report.GreedyMatches += ok ? 1 : 0);
+                if (Same(report, i, "greedy", expectedGreedy, found.Tokens))
+                {
+                    report.GreedyMatches++;
+                }
+
                 if (s.GreedyText is { } text && translator.Tokenizer.Decode(found.Tokens) == text)
                 {
                     report.GreedyTextMatches++;
@@ -179,10 +184,13 @@ public static class ReferenceCheck
                 beamWatch.Stop();
                 report.BeamChecked++;
                 report.GeneratedTokens += found.Tokens.Length;
-                var same = Compare(report, i, "beam", expectedBeam, found.Tokens, ok => report.BeamMatches += ok ? 1 : 0);
-                if (same && s.BeamScore is { } score)
+                if (Same(report, i, "beam", expectedBeam, found.Tokens))
                 {
-                    report.BeamScoreDifference = Math.Max(report.BeamScoreDifference, Math.Abs(found.Score - score));
+                    report.BeamMatches++;
+                    if (s.BeamScore is { } score)
+                    {
+                        report.BeamScoreDifference = Math.Max(report.BeamScoreDifference, Math.Abs(found.Score - score));
+                    }
                 }
 
                 if (s.BeamText is { } text && translator.Tokenizer.Decode(found.Tokens) == text)
@@ -199,23 +207,23 @@ public static class ReferenceCheck
         return report;
     }
 
-    private static bool Compare(CheckReport report, int index, string what, int[] expected, int[] actual, Action<bool> count)
+    // the ids are the same; when not, the first difference is noted
+    private static bool Same(CheckReport report, int index, string what, int[] expected, int[] actual)
     {
-        var same = expected.SequenceEqual(actual);
-        count(same);
-        if (!same)
+        if (expected.SequenceEqual(actual))
         {
-            var at = 0;
-            while (at < expected.Length && at < actual.Length && expected[at] == actual[at])
-            {
-                at++;
-            }
-
-            report.Note($"#{index} {what}: first difference at token {at} of {expected.Length}: expected [{Show(expected.Skip(at).Take(8))}], " +
-                        $"actual [{Show(actual.Skip(at).Take(8))}]");
+            return true;
         }
 
-        return same;
+        var at = 0;
+        while (at < expected.Length && at < actual.Length && expected[at] == actual[at])
+        {
+            at++;
+        }
+
+        report.Note($"#{index} {what}: first difference at token {at} of {expected.Length}: expected [{Show(expected.Skip(at).Take(8))}], " +
+                    $"actual [{Show(actual.Skip(at).Take(8))}]");
+        return false;
     }
 
     private static string Show(IEnumerable<int> ids) => string.Join(" ", ids);

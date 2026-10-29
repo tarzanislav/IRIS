@@ -7,6 +7,9 @@ namespace Iris.Numerics;
 /// <summary>How a row of weights is read into float lanes: float32 as it is, int8 widened in the register.</summary>
 internal unsafe interface IWeightRow
 {
+    /// <summary>Bytes of one weight.</summary>
+    static abstract int Size { get; }
+
     static abstract Vector256<float> Load(void* row, int index);
 
     static abstract float Scalar(void* row, int index);
@@ -14,6 +17,8 @@ internal unsafe interface IWeightRow
 
 internal readonly unsafe struct FloatRow : IWeightRow
 {
+    public static int Size => sizeof(float);
+
     public static Vector256<float> Load(void* row, int index) => Avx.LoadVector256((float*)row + index);
 
     public static float Scalar(void* row, int index) => ((float*)row)[index];
@@ -21,6 +26,8 @@ internal readonly unsafe struct FloatRow : IWeightRow
 
 internal readonly unsafe struct Int8Row : IWeightRow
 {
+    public static int Size => sizeof(sbyte);
+
     // 8 bytes → 8 int32 (sign extended) → 8 floats, without touching memory in between
     public static Vector256<float> Load(void* row, int index) => Avx.ConvertToVector256Single(Avx2.ConvertToVector256Int32((sbyte*)row + index));
 
@@ -136,12 +143,12 @@ internal static unsafe class RowKernels
     /// of TRow elements, scales null = 1.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    public static void Linear<TRow>(float* x, int n, void* w, int elementSize, float* scales, float* b, int inputs, int outputs,
+    public static void Linear<TRow>(float* x, int n, void* w, float* scales, float* b, int inputs, int outputs,
         float* y, int from, int to)
         where TRow : struct, IWeightRow
     {
         var result = stackalloc float[4];
-        long rowBytes = (long)inputs * elementSize;
+        long rowBytes = (long)inputs * TRow.Size;
         var o = from;
         if (n == 1)
         {
