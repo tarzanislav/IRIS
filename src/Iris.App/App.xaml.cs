@@ -88,6 +88,13 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Contains(SelfTest.Argument))
+        {
+            _exiting = true;
+            Shutdown(SelfTest.Run(this));
+            return;
+        }
+
         _instance = new Mutex(true, InstanceName, out var first);
         if (!first)
         {

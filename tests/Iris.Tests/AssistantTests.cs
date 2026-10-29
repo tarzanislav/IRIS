@@ -255,6 +255,47 @@ public static class AssistantTests
         static string Placeholders(string text) => string.Join(",", Regex.Matches(text, @"\{\d+\}").Select(m => m.Value).Order(StringComparer.Ordinal));
     }
 
+    [Test]
+    public static void TheApplicationUsesOnlyExistingTexts()
+    {
+        // the window is built only on Windows, so its texts are checked here, from the sources
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "Iris.slnx")))
+        {
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("the repository is not above the tests");
+        }
+
+        var english = Texts.For("en");
+        var groups = english.Keys.Select(k => k[..k.IndexOf('.', StringComparison.Ordinal)]).ToHashSet(StringComparer.Ordinal);
+        var used = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(root, "src", "Iris.App"), "*.*", SearchOption.AllDirectories))
+        {
+            var pattern = Path.GetExtension(file) switch
+            {
+                ".xaml" => @"\[([a-z]+\.[A-Za-z]+)\]",
+                ".cs" => @"""([a-z]+\.[A-Za-z]+)""",
+                _ => null,
+            };
+            if (pattern is null || file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (Match match in Regex.Matches(File.ReadAllText(file), pattern))
+            {
+                var key = match.Groups[1].Value;
+                if (groups.Contains(key[..key.IndexOf('.', StringComparison.Ordinal)]))
+                {
+                    used.Add(key);
+                }
+            }
+        }
+
+        Assert.True(used.Count > 50, $"the texts of the application are found ({used.Count})");
+        var missing = used.Where(k => !english.Keys.Contains(k)).ToList();
+        Assert.True(missing.Count == 0, $"texts without a translation: {string.Join(", ", missing)}");
+    }
+
     private static string Sha(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
     // a minimal Word document: a heading, a paragraph of two runs (one bold) and an empty paragraph
