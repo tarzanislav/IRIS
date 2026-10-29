@@ -118,13 +118,16 @@ public partial class App : Application
 
         _show = new EventWaitHandle(false, EventResetMode.AutoReset, ShowName);
         var show = _show;
-        new Thread(() =>
+        var listener = new Thread(() =>
         {
             while (show.WaitOne() && !_exiting)
             {
                 Dispatcher.Invoke(() => ShowMain());
             }
-        }) { IsBackground = true, Name = "IRIS show" }.Start();
+        });
+        listener.IsBackground = true;
+        listener.Name = "IRIS show";
+        listener.Start();
 
         _messages = new MessageWindow();
         _tray = new TrayIcon(_messages, "IRIS");
