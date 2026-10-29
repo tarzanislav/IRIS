@@ -85,8 +85,20 @@ public sealed record MarianConfig
 
     public GenerationSettings Generation { get; init; } = new();
 
-    /// <summary>Reads the "config" of an IRIS model file of kind "marian".</summary>
+    /// <summary>Reads the "config" of an IRIS model file of kind "marian"; a damaged config is a FormatException.</summary>
     public static MarianConfig FromJson(JsonObject config)
+    {
+        try
+        {
+            return Parse(config);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new FormatException($"Marian model: damaged config ({ex.Message})", ex);
+        }
+    }
+
+    private static MarianConfig Parse(JsonObject config)
     {
         int Int(string key) => config[key]?.GetValue<int>() ?? throw new FormatException($"Marian model: config.{key} is missing");
         var specials = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -116,7 +128,7 @@ public sealed record MarianConfig
             EosId = eos,
             DecoderStartId = start,
         };
-        return new MarianConfig
+        var result = new MarianConfig
         {
             DModel = Int("d_model"),
             EncoderLayers = Int("encoder_layers"),
@@ -137,6 +149,34 @@ public sealed record MarianConfig
             SpecialTokens = specials,
             Generation = settings,
         };
+        result.Validate();
+        return result;
+    }
+
+    // a damaged or unsupported config is refused when the model is read, not halfway through a translation
+    private void Validate()
+    {
+        void Require(bool condition, string what)
+        {
+            if (!condition)
+            {
+                throw new FormatException($"Marian model: {what}");
+            }
+        }
+
+        Require(DModel > 0 && EncoderLayers > 0 && DecoderLayers > 0 && EncoderFfn > 0 && DecoderFfn > 0, "sizes must be positive");
+        Require(EncoderHeads > 0 && DecoderHeads > 0 && DModel % EncoderHeads == 0 && DModel % DecoderHeads == 0,
+            "d_model must be divisible by the number of heads");
+        Require(VocabSize > 0 && MaxPositions > 0, "the vocabulary and positions must not be empty");
+        Require(Activation is "swish" or "silu" or "relu", $"activation {Activation} is not supported (swish, silu, relu)");
+        bool Token(int id) => (uint)id < (uint)VocabSize;
+        Require(Token(PadId) && Token(EosId) && Token(UnknownId) && Token(DecoderStartId) && SpecialTokens.Values.All(Token),
+            "special tokens must lie in the vocabulary");
+        var g = Generation;
+        Require(g.BadTokens.All(Token) && g.ForcedEosTokens.All(Token), "bad and forced tokens must lie in the vocabulary");
+        Require(g.NumBeams >= 1, "num_beams must be at least 1");
+        Require(g.MaxLength >= 2 && g.MaxLength - 1 <= MaxPositions, $"max_length must be 2 to {MaxPositions + 1}");
+        Require(float.IsFinite(g.LengthPenalty), "length_penalty must be a number");
     }
 
     private static int[] Ints(JsonNode? node) => node is JsonArray array ? [.. array.Select(n => n!.GetValue<int>())] : [];

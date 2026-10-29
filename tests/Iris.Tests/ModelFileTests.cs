@@ -17,7 +17,7 @@ public static class ModelFileTests
             ModelFile.Write(path, "test", new JsonObject { ["d_model"] = 3 }, new JsonObject { ["license"] = "Apache-2.0" },
                 [("enc.0.w", [2, 3], weights), ("bias", [1], [7f])], [("source.spm", blob)]);
 
-            var model = ModelFile.Load(path);
+            using var model = ModelFile.Load(path);
             Assert.Equal("test", model.Kind);
             Assert.Equal(3, model.Config["d_model"]!.GetValue<int>());
             Assert.Sequence(weights, model.Floats("enc.0.w", 2, 3));

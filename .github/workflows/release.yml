@@ -24,7 +24,6 @@ env:
   HF_HUB_DISABLE_TELEMETRY: '1'
   DO_NOT_TRACK: '1'
   PIP_DISABLE_PIP_VERSION_CHECK: '1'
-  OPUS_MT_EN_SK_REVISION: 04d19ccd4566720bceeff93623d5cf93be659816
 
 jobs:
   release:
@@ -68,12 +67,7 @@ jobs:
           (cd out/cli && zip -q -r "../assets/iris-$VERSION-win-x64.zip" .)
       - name: Model en→sk – download (licence checked), convert, int8
         run: |
-          python3 -m venv /tmp/venv || { sudo apt-get install -y -q python3-venv && python3 -m venv /tmp/venv; }
-          /tmp/venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cpu -r tools/reference/requirements-torch.txt
-          /tmp/venv/bin/pip install -q -r tools/reference/requirements.txt
-          py=/tmp/venv/bin/python
-          $py tools/reference/marian_reference.py download Helsinki-NLP/opus-mt-en-sk /tmp/opus-en-sk --revision "$OPUS_MT_EN_SK_REVISION"
-          $py tools/reference/marian_reference.py convert /tmp/opus-en-sk /tmp/opus-en-sk.iris
+          bash tools/reference/prepare-opus.sh /tmp
           iris="dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll"
           $iris quantize /tmp/opus-en-sk.iris out/assets/opus-mt-en-sk-int8.iris
           $iris info out/assets/opus-mt-en-sk-int8.iris | tee /tmp/model-info.txt

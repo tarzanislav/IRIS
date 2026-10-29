@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>iris</AssemblyName>
     <RootNamespace>Iris.Cli</RootNamespace>
+    <Description>iris – the command line of the IRIS translator.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Iris.Core\Iris.Core.csproj" />

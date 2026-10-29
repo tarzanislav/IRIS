@@ -13,6 +13,7 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 MAX_SECONDS=${MAX_SECONDS:-1}
 MAX_CHRF_DROP=${MAX_CHRF_DROP:-0.5}
 FLORES_URL=https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz
+FLORES_SHA256=b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6
 status=0
 
 # one annotation with several lines (GitHub shows at most 10 annotations of a kind per step)
@@ -61,6 +62,10 @@ note notice "glossary placeholders: kept in $used of $(wc -l < /tmp/glossary.en)
 mkdir -p /tmp/flores
 curl -fsSL "$FLORES_URL" -o /tmp/flores/flores.tar.gz
 flores_sha=$(sha256sum /tmp/flores/flores.tar.gz | cut -c1-64)
+if [ "$flores_sha" != "$FLORES_SHA256" ]; then
+  note error "FLORES-200 changed" "SHA-256 $flores_sha, expected $FLORES_SHA256 – the test set is not the one measured so far"
+  exit 1
+fi
 tar -xzf /tmp/flores/flores.tar.gz -C /tmp/flores --wildcards '*/devtest/eng_Latn.devtest' '*/devtest/slk_Latn.devtest'
 src=$(find /tmp/flores -name eng_Latn.devtest)
 ref=$(find /tmp/flores -name slk_Latn.devtest)

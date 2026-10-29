@@ -29,7 +29,8 @@ public static class MarianTests
     public static void ReorderedRowsContinueTheirParents()
     {
         using var tiny = TinyModel.Create();
-        var model = MarianModel.Load(ModelFile.Load(tiny.Path));
+        using var file = ModelFile.Load(tiny.Path);
+        var model = MarianModel.Load(file);
         var source = model.Encode([5, 9, 7, 0]);
         var start = model.Config.DecoderStartId;
 
@@ -111,14 +112,18 @@ public static class MarianTests
     {
         using var tiny = TinyModel.Create();
         var translator = Translator.Load(tiny.Path);
-        var greedy = translator.Translate("The film premiere is tonight.", beams: 1);
-        var again = translator.Translate("The film premiere is tonight.", beams: 1);
+        var greedy = translator.RunModel("The film premiere is tonight.", beams: 1);
+        var again = translator.RunModel("The film premiere is tonight.", beams: 1);
         Assert.Sequence(greedy.OutputIds, again.OutputIds, "the same text gives the same translation");
         Assert.True(greedy.OutputIds.Length is > 0 and <= 7, $"at most max_length − 1 tokens: {greedy.OutputIds.Length}");
         Assert.True(!greedy.OutputIds.Contains(translator.Model.Config.PadId), "padding is never generated");
-        var beam = translator.Translate("The film premiere is tonight.");
+        var beam = translator.RunModel("The film premiere is tonight.");
         Assert.True(beam.OutputIds.Length is > 0 and <= 7 && !beam.OutputIds.Contains(translator.Model.Config.PadId), "beam search gives a result");
-        Assert.Throws<FormatException>(() => MarianModel.Load(ModelFile.Load(tiny.WriteOther())), "a file of another kind");
+        Assert.Throws<FormatException>(() =>
+        {
+            using var other = ModelFile.Load(tiny.WriteOther());
+            MarianModel.Load(other);
+        }, "a file of another kind");
     }
 
     // a Markov chain over 4 tokens: the next token depends only on the last one
@@ -163,7 +168,7 @@ internal sealed class TinyModel : IDisposable
 
     public string Path { get; }
 
-    public static TinyModel Create(int d = 16, int layers = 2, int heads = 4, int ffn = 32)
+    public static TinyModel Create(int d = 16, int layers = 2, int heads = 4, int ffn = 32, string activation = "swish")
     {
         var spmPath = System.IO.Path.Combine(AppContext.BaseDirectory, "testdata", "tokenizer", "nfkc.model");
         var spm = SentencePieceModel.Load(spmPath);
@@ -221,13 +226,28 @@ internal sealed class TinyModel : IDisposable
 
         var config = new JsonObject
         {
-            ["d_model"] = d, ["encoder_layers"] = layers, ["decoder_layers"] = layers, ["encoder_heads"] = heads,
-            ["decoder_heads"] = heads, ["encoder_ffn"] = ffn, ["decoder_ffn"] = ffn, ["vocab_size"] = v, ["max_positions"] = 32,
-            ["activation"] = "swish", ["scale_embedding"] = true, ["pad_id"] = pad, ["eos_id"] = 0, ["unk_id"] = 1,
-            ["decoder_start_id"] = pad, ["special_tokens"] = new JsonObject { ["</s>"] = 0, ["<unk>"] = 1, ["<pad>"] = pad },
+            ["d_model"] = d,
+            ["encoder_layers"] = layers,
+            ["decoder_layers"] = layers,
+            ["encoder_heads"] = heads,
+            ["decoder_heads"] = heads,
+            ["encoder_ffn"] = ffn,
+            ["decoder_ffn"] = ffn,
+            ["vocab_size"] = v,
+            ["max_positions"] = 32,
+            ["activation"] = activation,
+            ["scale_embedding"] = true,
+            ["pad_id"] = pad,
+            ["eos_id"] = 0,
+            ["unk_id"] = 1,
+            ["decoder_start_id"] = pad,
+            ["special_tokens"] = new JsonObject { ["</s>"] = 0, ["<unk>"] = 1, ["<pad>"] = pad },
             ["generation"] = new JsonObject
             {
-                ["num_beams"] = 3, ["max_length"] = 8, ["bad_tokens"] = new JsonArray(pad), ["forced_eos"] = new JsonArray(0),
+                ["num_beams"] = 3,
+                ["max_length"] = 8,
+                ["bad_tokens"] = new JsonArray(pad),
+                ["forced_eos"] = new JsonArray(0),
             },
         };
         var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"iris-tiny-{Guid.NewGuid():N}.iris");

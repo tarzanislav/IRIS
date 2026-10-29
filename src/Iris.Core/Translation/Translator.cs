@@ -33,7 +33,12 @@ public sealed record TextTranslation(IReadOnlyList<Segment> Segments, IReadOnlyL
     public string Text => Segmenter.Join(Segments, [.. Sentences.Select(s => s.Target)]);
 }
 
-/// <summary>Translates text with a Marian model file: tokenizer, model and search in one place.</summary>
+/// <summary>
+/// Translates text with a Marian model file: tokenizer, model and search in one place. The main entry is
+/// <see cref="TranslateText"/>; <see cref="RunModel"/> is the bare model for one sentence. A translator does not
+/// change after it is loaded, so it can translate on several threads at once (a memory and a glossary passed to it
+/// must not be changed meanwhile).
+/// </summary>
 public sealed class Translator
 {
     public Translator(MarianModel model, MarianTokenizer tokenizer)
@@ -49,7 +54,11 @@ public sealed class Translator
     public GenerationSettings Settings => Model.Config.Generation;
 
     /// <summary>Loads a Marian model file; with int8, float32 weights are turned into int8 as they are read.</summary>
-    public static Translator Load(string path, bool int8 = false) => Load(ModelFile.Load(path), int8);
+    public static Translator Load(string path, bool int8 = false)
+    {
+        using var file = ModelFile.Load(path);
+        return Load(file, int8);
+    }
 
     public static Translator Load(ModelFile file, bool int8 = false)
     {
@@ -65,19 +74,11 @@ public sealed class Translator
         return new Translator(model, tokenizer);
     }
 
-    /// <summary>Translates a text; beams = 1 is greedy search, null = the beams of the model.</summary>
-    public TranslationResult Translate(string text, int? beams = null)
-    {
-        var source = Tokenizer.Encode(text);
-        var best = Generate(source, beams ?? Settings.NumBeams);
-        return new TranslationResult(Tokenizer.Decode(best.Tokens), source, best.Tokens, best.Score);
-    }
-
     /// <summary>
-    /// Translates a longer text sentence by sentence; lines, paragraphs and spaces between sentences stay as they are.
-    /// A sentence in the translation memory gets its remembered translation; glossary terms are hidden from the
-    /// model behind placeholders and come back in their wanted form (when a placeholder is lost, the sentence is
-    /// translated without the glossary and the note says so).
+    /// Translates a text sentence by sentence; lines, paragraphs and spaces between sentences stay as they are.
+    /// A sentence in the translation memory gets its remembered translation; glossary terms are hidden from the model
+    /// behind placeholders and come back in their wanted form; a sentence too long for the model is translated in
+    /// parts. Each sentence says where its translation came from and, in Note, what could not be done.
     /// </summary>
     public TextTranslation TranslateText(string text, int? beams = null, TranslationMemory? memory = null, Glossary? glossary = null)
     {
@@ -98,16 +99,37 @@ public sealed class Translator
         if (matches.Count > 0)
         {
             var (hidden, marks) = Placeholders.Protect(sentence, matches);
-            if (marks.Count > 0 && Placeholders.TryRestore(Translate(hidden, beams).Text, marks, out var restored))
+            if (marks.Count == 0)
             {
-                return new SentenceTranslation(sentence, restored, TranslationOrigin.Glossary);
+                var (plain, longNote) = ModelText(sentence, beams);
+                return new SentenceTranslation(sentence, plain, TranslationOrigin.Model,
+                    Join("the sentence has no free placeholder numbers; translated without the glossary", longNote));
             }
 
-            return new SentenceTranslation(sentence, Translate(sentence, beams).Text, TranslationOrigin.Model,
-                "the glossary terms did not survive the translation; translated without the glossary");
+            var (protectedText, note) = ModelText(hidden, beams);
+            if (Placeholders.TryRestore(protectedText, marks, out var restored))
+            {
+                return new SentenceTranslation(sentence, restored, TranslationOrigin.Glossary, note);
+            }
+
+            var (fallback, fallbackNote) = ModelText(sentence, beams);
+            return new SentenceTranslation(sentence, fallback, TranslationOrigin.Model,
+                Join("the glossary terms did not survive the translation; translated without the glossary", fallbackNote));
         }
 
-        return new SentenceTranslation(sentence, Translate(sentence, beams).Text, TranslationOrigin.Model);
+        var (text, sentenceNote) = ModelText(sentence, beams);
+        return new SentenceTranslation(sentence, text, TranslationOrigin.Model, sentenceNote);
+    }
+
+    /// <summary>
+    /// The bare model: translates one sentence as it is (no memory, glossary or splitting); beams = 1 is greedy
+    /// search, null = the beams of the model. A sentence longer than the positions of the model is refused.
+    /// </summary>
+    public TranslationResult RunModel(string sentence, int? beams = null)
+    {
+        var source = Tokenizer.Encode(sentence);
+        var best = Generate(source, beams ?? Settings.NumBeams);
+        return new TranslationResult(Tokenizer.Decode(best.Tokens), source, best.Tokens, best.Score);
     }
 
     /// <summary>Searches the translation of source ids with the given number of beams (1 = greedy).</summary>
@@ -118,4 +140,62 @@ public sealed class Translator
         var session = Model.StartDecoding(encoded, beams);
         return beams == 1 ? Search.Greedy(session, Settings) : Search.Beam(session, Settings);
     }
+
+    // the model's translation of a sentence; one too long for the model is cut into parts that fit – at ", ; :" or
+    // between words, as near the middle as possible – whose translations are joined
+    private (string Text, string? Note) ModelText(string sentence, int? beams)
+    {
+        if (Fits(sentence))
+        {
+            return (RunModel(sentence, beams).Text, null);
+        }
+
+        var parts = new List<string>();
+        Cut(sentence, parts);
+        return (string.Join(" ", parts.Select(p => RunModel(p, beams).Text)),
+            $"the sentence was too long for the model and was translated in {parts.Count} parts");
+    }
+
+    private bool Fits(string text) => Tokenizer.Encode(text).Length <= Model.Config.MaxPositions;
+
+    private void Cut(string text, List<string> parts)
+    {
+        if (Fits(text) || text.Length < 2)
+        {
+            parts.Add(text);
+            return;
+        }
+
+        var middle = text.Length / 2;
+        var at = Boundary(text, middle, c => c is ',' or ';' or ':');
+        if (at < 0)
+        {
+            at = Boundary(text, middle, _ => true);
+        }
+
+        if (at < 0)
+        {
+            at = middle;
+        }
+
+        Cut(text[..at].Trim(), parts);
+        Cut(text[at..].Trim(), parts);
+    }
+
+    // the place after a separator followed by a space nearest to the middle, or -1
+    private static int Boundary(string text, int middle, Func<char, bool> separator)
+    {
+        var best = -1;
+        for (var i = 1; i < text.Length - 1; i++)
+        {
+            if (char.IsWhiteSpace(text[i]) && separator(text[i - 1]) && (best < 0 || Math.Abs(i - middle) < Math.Abs(best - middle)))
+            {
+                best = i;
+            }
+        }
+
+        return best;
+    }
+
+    private static string Join(string first, string? second) => second is null ? first : $"{first}; {second}";
 }

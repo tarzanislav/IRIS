@@ -64,7 +64,7 @@ internal static class Assert
     }
 }
 
-/// <summary>Runs every [Test] of this assembly; the exit code is the number of failures. Arguments filter by name.</summary>
+/// <summary>Runs every [Test] of this assembly (arguments filter by name); exit code 1 when a test fails or none runs.</summary>
 internal static class Program
 {
     public static async Task<int> Main(string[] args)
@@ -109,6 +109,6 @@ internal static class Program
         }
 
         Console.WriteLine($"{passed} passed, {failed} failed, {skipped} skipped in {total.Elapsed.TotalSeconds:0.0} s");
-        return failed;
+        return failed == 0 && tests.Count > 0 ? 0 : 1;
     }
 }

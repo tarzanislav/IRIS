@@ -5,8 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- the package audit needs nuget.org; IRIS has no packages, an unreachable audit is no error -->
-    <WarningsNotAsErrors>NU1900</WarningsNotAsErrors>
+    <!-- IRIS has no packages: nothing to audit, and the build does not contact nuget.org for it -->
+    <NuGetAudit>false</NuGetAudit>
     <AnalysisLevel>latest</AnalysisLevel>
     <Deterministic>true</Deterministic>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

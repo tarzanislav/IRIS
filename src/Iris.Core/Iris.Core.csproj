@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- The IRIS core: tokenizer, model, translation, learning. No third-party packages – everything here is own code. -->
+  <!-- The IRIS core: tokenizer, model, translation, memory. No third-party packages – everything here is own code. -->
   <PropertyGroup>
+    <Description>IRIS – own machine translator: SentencePiece and Marian tokenizers, Marian transformer (float32 and int8), greedy and beam search, translation memory and glossary.</Description>
     <RootNamespace>Iris</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>

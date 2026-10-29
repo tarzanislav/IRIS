@@ -13,15 +13,22 @@ public readonly record struct Segment(string Text, bool IsSentence);
 /// </summary>
 public static class Segmenter
 {
+    // abbreviations after which a capital letter does not start a new sentence ("Mr. Hale", "Gen. Morrow", "napr. Film")
     private static readonly HashSet<string> Abbreviations = new(StringComparer.OrdinalIgnoreCase)
     {
         // English
-        "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "etc", "e.g", "i.e", "u.s", "u.k", "u.n", "no", "nos",
-        "vol", "inc", "ltd", "co", "corp", "dept", "est", "fig", "approx", "gen", "gov", "sen", "rep", "sgt", "capt", "lt",
-        "col", "mt", "ft", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "a.m", "p.m",
+        "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "e.g", "i.e", "u.s", "u.k", "u.n", "inc", "ltd", "corp",
+        "dept", "gen", "gov", "sen", "rep", "sgt", "capt", "lt", "col", "mt", "a.m", "p.m",
         // Czech and Slovak
-        "např", "napr", "tzv", "atd", "apod", "resp", "tj", "t.j", "č", "čís", "str", "s", "r", "mj", "pozn", "příp", "prip",
-        "ing", "mgr", "bc", "doc", "phdr", "mudr", "judr", "rndr", "sv", "ul", "nám", "tel", "min", "max",
+        "např", "napr", "tzv", "resp", "tj", "t.j", "mj", "pozn", "příp", "prip", "ing", "mgr", "bc", "doc", "phdr", "mudr",
+        "judr", "rndr", "sv", "ul", "nám",
+    };
+
+    // abbreviations that stand before a number ("No. 5", "Jan. 12", "č. 7", "min. 3"); before a word they end a sentence
+    private static readonly HashSet<string> NumberAbbreviations = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "no", "nos", "vol", "fig", "est", "approx", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+        "nov", "dec", "p", "pp", "ch", "č", "čís", "str", "obr", "kap", "tab", "tel", "min", "max",
     };
 
     private const string Closers = "\"'”’»)]";
@@ -89,7 +96,7 @@ public static class Segmenter
                     return stop;
                 }
 
-                if (char.IsWhiteSpace(text[stop]) && StartsSentence(text, stop) && !(c == '.' && Abbreviation(text, start, i)))
+                if (char.IsWhiteSpace(text[stop]) && StartsSentence(text, stop, out var next) && !(c == '.' && Abbreviation(text, start, i, next)))
                 {
                     return stop;
                 }
@@ -114,9 +121,11 @@ public static class Segmenter
         return end;
     }
 
-    // after the spaces comes a capital letter, a digit or an opening quote or bracket (or a line break)
-    private static bool StartsSentence(string text, int i)
+    // after the spaces comes a capital letter or something that is not a letter (a digit, a quote, a bracket), or the
+    // text ends or a line breaks; next is the character that comes ('\0' at the end)
+    private static bool StartsSentence(string text, int i, out char next)
     {
+        next = '\0';
         while (i < text.Length && char.IsWhiteSpace(text[i]))
         {
             if (text[i] is '\n' or '\r')
@@ -132,12 +141,12 @@ public static class Segmenter
             return true;
         }
 
-        var c = text[i];
-        return char.IsUpper(c) || char.IsDigit(c) || Openers.Contains(c) || (!char.IsLetter(c) && c is not (',' or ';' or ':'));
+        next = text[i];
+        return char.IsUpper(next) || (!char.IsLetter(next) && next is not (',' or ';' or ':'));
     }
 
-    // the word before the dot at `dot` is an abbreviation or an initial
-    private static bool Abbreviation(string text, int start, int dot)
+    // the word before the dot at `dot` is an abbreviation or an initial ("J. K.")
+    private static bool Abbreviation(string text, int start, int dot, char next)
     {
         var w = dot;
         while (w > start && !char.IsWhiteSpace(text[w - 1]) && !Openers.Contains(text[w - 1]))
@@ -146,12 +155,10 @@ public static class Segmenter
         }
 
         var word = text[w..dot];
-        if (word.Length == 1 && char.IsLetter(word[0]))
-        {
-            return true;
-        }
-
-        return Abbreviations.Contains(word) || (word.Length <= 4 && word.Contains('.', StringComparison.Ordinal) && word.Count(char.IsLetter) <= 3);
+        return (word.Length == 1 && char.IsLetter(word[0])) ||
+               Abbreviations.Contains(word) ||
+               (NumberAbbreviations.Contains(word) && char.IsDigit(next)) ||
+               (word.Length <= 4 && word.Contains('.', StringComparison.Ordinal) && word.Count(char.IsLetter) <= 3);
     }
 
     /// <summary>Puts translated sentences back in place of the sentences of the segments.</summary>

@@ -271,9 +271,11 @@ def convert(model_dir: Path, out: Path) -> None:
         key = f"model.{side}.embed_positions.weight"
         table = getattr(m, side).embed_positions.weight.detach().float().numpy()
         used.add(key)
-        diff = float(np.max(np.abs(table - own)))
-        if diff > 1e-6:
-            raise SystemExit(f"{side} positions differ from the formula of the core by {diff}")
+        # within one unit in the last place of float32 (an absolute bound would let small values differ widely)
+        ulp = np.spacing(np.maximum(np.abs(table), np.abs(own)))
+        if not np.all(np.abs(table - own) <= ulp):
+            worst = float(np.max(np.abs(table - own) / ulp))
+            raise SystemExit(f"{side} positions differ from the formula of the core by up to {worst:.1f} ulp")
     unknown = sorted(k for k in state if k not in used)
     if unknown:
         raise SystemExit(f"weights the core does not know: {unknown}")

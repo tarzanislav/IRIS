@@ -9,12 +9,14 @@ public sealed record MemoryEntry(string Source, string Target, DateTimeOffset Up
 /// <summary>
 /// The translation memory: sentences whose translation the owner corrected are translated the same way the next
 /// time. Kept in one local file of JSON lines – every change is a new line (a correction or "forget"), so nothing is
-/// rewritten while it is used; <see cref="Compact"/> keeps only what holds. Sentences are matched exactly, after
-/// joining runs of whitespace and Unicode normalization (NFC). Nothing ever leaves the computer.
+/// rewritten while it is used; <see cref="Compact"/> keeps only what holds. A line cut off by a crash is skipped and the
+/// next change starts on a new line. Sentences are matched exactly, after joining runs of whitespace and Unicode
+/// normalization (NFC). Safe to use from several threads of one program; nothing ever leaves the computer.
 /// </summary>
 public sealed class TranslationMemory
 {
     private readonly Dictionary<string, MemoryEntry> _entries = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
     private readonly string? _path;
 
     private TranslationMemory(string? path) => _path = path;
@@ -67,51 +69,82 @@ public sealed class TranslationMemory
         return memory;
     }
 
-    public int Count => _entries.Count;
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _entries.Count;
+            }
+        }
+    }
 
-    public IEnumerable<MemoryEntry> Entries => _entries.Values;
+    /// <summary>A copy of the remembered sentences.</summary>
+    public IReadOnlyList<MemoryEntry> Entries
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _entries.Values];
+            }
+        }
+    }
 
     /// <summary>The remembered translation of a sentence, if there is one.</summary>
     public bool TryGet(string source, out string target)
     {
-        if (_entries.TryGetValue(Key(source), out var entry))
+        lock (_gate)
         {
-            target = entry.Target;
-            return true;
+            if (_entries.TryGetValue(Key(source), out var entry))
+            {
+                target = entry.Target;
+                return true;
+            }
         }
 
         target = "";
         return false;
     }
 
-    /// <summary>Remembers the translation of a sentence (a correction of the owner).</summary>
+    /// <summary>Remembers the translation of a sentence (a correction of the owner); written to the file first.</summary>
     public void Remember(string source, string target)
     {
-        if (Key(source).Length == 0)
+        var key = Key(source);
+        if (key.Length == 0)
         {
             throw new ArgumentException("an empty sentence cannot be remembered");
         }
 
         var entry = new MemoryEntry(source.Trim(), target.Trim(), DateTimeOffset.UtcNow);
-        _entries[Key(source)] = entry;
-        Append(Line(entry));
+        lock (_gate)
+        {
+            Append(Line(entry));
+            _entries[key] = entry;
+        }
     }
 
     /// <summary>Forgets the translation of a sentence; false when it was not remembered.</summary>
     public bool Forget(string source)
     {
-        if (!_entries.Remove(Key(source)))
+        var key = Key(source);
+        lock (_gate)
         {
-            return false;
-        }
+            if (!_entries.ContainsKey(key))
+            {
+                return false;
+            }
 
-        Append(JsonSerializerLine(writer =>
-        {
-            writer.WriteString("source", source.Trim());
-            writer.WriteBoolean("forget", true);
-            writer.WriteString("updated", DateTimeOffset.UtcNow);
-        }));
-        return true;
+            Append(JsonLine(writer =>
+            {
+                writer.WriteString("source", source.Trim());
+                writer.WriteBoolean("forget", true);
+                writer.WriteString("updated", DateTimeOffset.UtcNow);
+            }));
+            _entries.Remove(key);
+            return true;
+        }
     }
 
     /// <summary>Rewrites the file with only what holds now (through a temporary file, so a crash loses nothing).</summary>
@@ -122,9 +155,13 @@ public sealed class TranslationMemory
             return;
         }
 
-        var temporary = _path + ".tmp";
-        File.WriteAllLines(temporary, _entries.Values.OrderBy(e => e.Updated).Select(Line), new UTF8Encoding(false));
-        File.Move(temporary, _path, overwrite: true);
+        lock (_gate)
+        {
+            var temporary = _path + ".tmp";
+            var text = string.Concat(_entries.Values.OrderBy(e => e.Updated).Select(e => Line(e) + "\n"));
+            File.WriteAllText(temporary, text, new UTF8Encoding(false));
+            File.Move(temporary, _path, overwrite: true);
+        }
     }
 
     /// <summary>The key of a sentence: trimmed, runs of whitespace as one space, Unicode NFC.</summary>
@@ -152,6 +189,8 @@ public sealed class TranslationMemory
         return text.ToString();
     }
 
+    // one line at the end of the file; when the file does not end with a line break (a line cut off by a crash),
+    // the new line starts on a line of its own
     private void Append(string line)
     {
         if (_path is null)
@@ -164,17 +203,30 @@ public sealed class TranslationMemory
             Directory.CreateDirectory(directory);
         }
 
-        File.AppendAllText(_path, line + "\n", new UTF8Encoding(false));
+        using var file = new FileStream(_path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+        var text = line + "\n";
+        if (file.Length > 0)
+        {
+            file.Seek(-1, SeekOrigin.End);
+            if (file.ReadByte() != '\n')
+            {
+                text = "\n" + text;
+            }
+        }
+
+        file.Seek(0, SeekOrigin.End);
+        file.Write(Encoding.UTF8.GetBytes(text));
+        file.Flush(flushToDisk: true);
     }
 
-    private static string Line(MemoryEntry entry) => JsonSerializerLine(writer =>
+    private static string Line(MemoryEntry entry) => JsonLine(writer =>
     {
         writer.WriteString("source", entry.Source);
         writer.WriteString("target", entry.Target);
         writer.WriteString("updated", entry.Updated);
     });
 
-    private static string JsonSerializerLine(Action<Utf8JsonWriter> write)
+    private static string JsonLine(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
