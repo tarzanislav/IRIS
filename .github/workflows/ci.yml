@@ -88,3 +88,35 @@ jobs:
             "Where is the nearest cinema?" "The second season will have eight episodes." > /tmp/samples.en
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll translate /tmp/opus-en-sk.iris < /tmp/samples.en > /tmp/samples.sk
           paste -d '\t' /tmp/samples.en /tmp/samples.sk | while IFS=$'\t' read -r en sk; do echo "::notice title=EN→SK (IRIS)::$en → $sk"; done
+
+  # F2: int8, speed (title + introduction ≤ 1 s) and quality (chrF on FLORES-200 devtest, int8 not worse than float32)
+  quality:
+    name: Quality and speed (F2)
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 60
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      DO_NOT_TRACK: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      OPUS_MT_EN_SK_REVISION: 04d19ccd4566720bceeff93623d5cf93be659816
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build
+        run: dotnet build src/Iris.Cli -c Release
+      - name: Python tools of the reference (only for converting the model)
+        run: |
+          python3 -m venv /tmp/venv || { sudo apt-get install -y -q python3-venv && python3 -m venv /tmp/venv; }
+          /tmp/venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cpu -r tools/reference/requirements-torch.txt
+          /tmp/venv/bin/pip install -q -r tools/reference/requirements.txt
+      - name: OPUS-MT en-sk – download (licence checked) and convert
+        run: |
+          py=/tmp/venv/bin/python
+          $py tools/reference/marian_reference.py download Helsinki-NLP/opus-mt-en-sk /tmp/opus-en-sk --revision "$OPUS_MT_EN_SK_REVISION"
+          $py tools/reference/marian_reference.py convert /tmp/opus-en-sk /tmp/opus-en-sk.iris
+      - name: int8, speed and FLORES-200 quality – gates F2
+        run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris

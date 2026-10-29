@@ -21,11 +21,12 @@ public sealed class Translator
 
     public GenerationSettings Settings => Model.Config.Generation;
 
-    public static Translator Load(string path) => Load(ModelFile.Load(path));
+    /// <summary>Loads a Marian model file; with int8, float32 weights are turned into int8 as they are read.</summary>
+    public static Translator Load(string path, bool int8 = false) => Load(ModelFile.Load(path), int8);
 
-    public static Translator Load(ModelFile file)
+    public static Translator Load(ModelFile file, bool int8 = false)
     {
-        var model = MarianModel.Load(file);
+        var model = MarianModel.Load(file, int8);
         var c = model.Config;
         var tokenizer = new MarianTokenizer(SentencePieceModel.Parse(file.Blob("source.spm")), SentencePieceModel.Parse(file.Blob("target.spm")),
             MarianTokenizer.ReadVocabulary(file.Blob("vocab.json")), c.SpecialTokens, c.UnknownId, c.EosId);
@@ -43,6 +44,16 @@ public sealed class Translator
         var source = Tokenizer.Encode(text);
         var best = Generate(source, beams ?? Settings.NumBeams);
         return new TranslationResult(Tokenizer.Decode(best.Tokens), source, best.Tokens, best.Score);
+    }
+
+    /// <summary>
+    /// Translates a longer text sentence by sentence; lines, paragraphs and spaces between sentences stay as they are.
+    /// </summary>
+    public string TranslateText(string text, int? beams = null)
+    {
+        var segments = Segmenter.Split(text);
+        var translations = segments.Where(s => s.IsSentence).Select(s => Translate(s.Text, beams).Text).ToList();
+        return Segmenter.Join(segments, translations);
     }
 
     /// <summary>Searches the translation of source ids with the given number of beams (1 = greedy).</summary>

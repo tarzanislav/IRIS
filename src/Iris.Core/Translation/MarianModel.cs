@@ -3,10 +3,10 @@ using Iris.Numerics;
 
 namespace Iris.Translation;
 
-/// <summary>A dense layer: y = x · Wᵀ + b, W kept as [outputs, inputs].</summary>
-internal sealed record Dense(float[] Weight, float[] Bias, int Inputs, int Outputs)
+/// <summary>A dense layer: y = x · Wᵀ + b, W kept as [outputs, inputs] in float32 or int8.</summary>
+internal sealed record Dense(Matrix Weight, float[] Bias)
 {
-    public float[] Apply(float[] x, int rows) => Kernels.Linear(x, rows, Weight, Bias, Inputs, Outputs);
+    public float[] Apply(float[] x, int rows) => Weight.Linear(x, rows, Bias);
 }
 
 internal sealed record Norm(float[] Gain, float[] Bias);
@@ -49,7 +49,7 @@ public sealed class EncodedSource
 /// </summary>
 public sealed class MarianModel
 {
-    private readonly float[] _embed;
+    private readonly Matrix _embed;
     private readonly float[] _outputBias;
     private readonly float[] _positions;
     private readonly EncoderLayer[] _encoder;
@@ -57,7 +57,7 @@ public sealed class MarianModel
     private readonly float _embedScale;
     private readonly Action<Span<float>> _activation;
 
-    private MarianModel(MarianConfig config, float[] embed, float[] outputBias, EncoderLayer[] encoder, DecoderLayer[] decoder)
+    private MarianModel(MarianConfig config, Matrix embed, float[] outputBias, EncoderLayer[] encoder, DecoderLayer[] decoder)
     {
         Config = config;
         _embed = embed;
@@ -77,8 +77,14 @@ public sealed class MarianModel
 
     public MarianConfig Config { get; }
 
-    /// <summary>Reads a model file of kind "marian" (tensor names: embed, out.bias, enc.N.*, dec.N.*).</summary>
-    public static MarianModel Load(ModelFile file)
+    /// <summary>The weights are kept as int8 (one scale per row).</summary>
+    public bool IsInt8 => _embed.IsInt8;
+
+    /// <summary>
+    /// Reads a model file of kind "marian" (tensor names: embed, out.bias, enc.N.*, dec.N.*). Weights may be stored
+    /// as float32 or int8; with quantize, float32 weights become int8 as they are read.
+    /// </summary>
+    public static MarianModel Load(ModelFile file, bool quantize = false)
     {
         if (file.Kind != "marian")
         {
@@ -93,7 +99,7 @@ public sealed class MarianModel
         }
 
         Dense Dense(string name, int inputs, int outputs) =>
-            new(file.Floats(name + ".w", outputs, inputs), file.Floats(name + ".b", outputs), inputs, outputs);
+            new(Matrix.Load(file, name + ".w", outputs, inputs, quantize), file.Floats(name + ".b", outputs));
         Norm Norm(string name) => new(file.Floats(name + ".g", d), file.Floats(name + ".b", d));
         Attention Attention(string name) =>
             new(Dense(name + ".q", d, d), Dense(name + ".k", d, d), Dense(name + ".v", d, d), Dense(name + ".o", d, d), Norm(name + ".ln"));
@@ -103,7 +109,7 @@ public sealed class MarianModel
             .Select(i => new EncoderLayer(Attention($"enc.{i}.attn"), FeedForward($"enc.{i}.ffn", c.EncoderFfn))).ToArray();
         var decoder = Enumerable.Range(0, c.DecoderLayers)
             .Select(i => new DecoderLayer(Attention($"dec.{i}.self"), Attention($"dec.{i}.cross"), FeedForward($"dec.{i}.ffn", c.DecoderFfn))).ToArray();
-        return new MarianModel(c, file.Floats("embed", v, d), file.Floats("out.bias", v), encoder, decoder);
+        return new MarianModel(c, Matrix.Load(file, "embed", v, d, quantize), file.Floats("out.bias", v), encoder, decoder);
     }
 
     /// <summary>
@@ -229,7 +235,7 @@ public sealed class MarianModel
         }
 
         s.Length = t + 1;
-        return Kernels.Linear(x, rows, _embed, _outputBias, d, Config.VocabSize);
+        return _embed.Linear(x, rows, _outputBias);
     }
 
     // token vector × scale + position
@@ -241,11 +247,11 @@ public sealed class MarianModel
         }
 
         var d = Config.DModel;
-        var e = _embed.AsSpan(id * d, d);
+        _embed.Row(id, output);
         var p = _positions.AsSpan(position * d, d);
         for (var i = 0; i < d; i++)
         {
-            output[i] = e[i] * _embedScale + p[i];
+            output[i] = output[i] * _embedScale + p[i];
         }
     }
 
