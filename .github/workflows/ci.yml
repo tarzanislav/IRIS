@@ -149,5 +149,23 @@ jobs:
         run: dotnet build src/Iris.Cli -c Release
       - name: OPUS-MT en-sk – Python tools (only for converting), download (licence checked) and convert
         run: bash tools/reference/prepare-opus.sh /tmp
+      - name: TEMPORARY A/B speed, main vs this branch on the same runner
+        run: |
+          git fetch -q --depth 1 origin main
+          git worktree add -q /tmp/main FETCH_HEAD
+          dotnet build /tmp/main/src/Iris.Cli -c Release > /dev/null
+          new="dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll"
+          old="dotnet /tmp/main/src/Iris.Cli/bin/Release/net10.0/iris.dll"
+          $new quantize /tmp/opus-en-sk.iris /tmp/ab8.iris > /dev/null
+          for round in 1 2; do
+            for v in old new; do
+              out=$(${!v} bench /tmp/ab8.iris --runs 3 | grep -E '^(greedy|beam)' | cut -d'(' -f1 | tr '\n' ' ')
+              echo "::notice title=AB $v round $round::$out"
+            done
+            out=$(DOTNET_TieredCompilation=0 $new bench /tmp/ab8.iris --runs 3 | grep -E '^(greedy|beam)' | cut -d'(' -f1 | tr '\n' ' ')
+            echo "::notice title=AB new no-tiering round $round::$out"
+            out=$(DOTNET_TieredCompilation=0 $old bench /tmp/ab8.iris --runs 3 | grep -E '^(greedy|beam)' | cut -d'(' -f1 | tr '\n' ' ')
+            echo "::notice title=AB old no-tiering round $round::$out"
+          done
       - name: int8, speed and FLORES-200 quality – gates F2
         run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris
