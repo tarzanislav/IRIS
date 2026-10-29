@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Iris.Evaluation;
+using Iris.Memory;
 using Iris.Model;
 using Iris.Tokenization;
 using Iris.Translation;
@@ -20,6 +21,7 @@ try
         ["quantize", var source, var target] => Quantize(source, target),
         ["chrf", var hypotheses, var references] => ChrfOfFiles(hypotheses, references),
         ["score", var model, var source, var references, .. var rest] => Score(model, source, references, rest),
+        ["remember", var memoryPath, var source, var target] => Remember(memoryPath, source, target),
         _ => Usage(),
     };
 }
@@ -54,6 +56,8 @@ static int Translate(string modelPath, string[] rest)
     int? beams = null;
     var showIds = false;
     var int8 = false;
+    TranslationMemory? memory = null;
+    Glossary? glossary = null;
     var words = new List<string>();
     for (var i = 0; i < rest.Length; i++)
     {
@@ -72,6 +76,12 @@ static int Translate(string modelPath, string[] rest)
             case "--int8":
                 int8 = true;
                 break;
+            case "--memory" when i + 1 < rest.Length:
+                memory = TranslationMemory.Open(rest[++i]);
+                break;
+            case "--glossary" when i + 1 < rest.Length:
+                glossary = Glossary.Load(rest[++i]);
+                break;
             default:
                 words.Add(rest[i]);
                 break;
@@ -85,7 +95,13 @@ static int Translate(string modelPath, string[] rest)
     {
         if (!showIds)
         {
-            Console.WriteLine(translator.TranslateText(text, beams));
+            var translation = translator.TranslateText(text, beams, memory, glossary);
+            Console.WriteLine(translation.Text);
+            foreach (var sentence in translation.Sentences.Where(s => s.Origin != TranslationOrigin.Model || s.Note is not null))
+            {
+                Console.Error.WriteLine($"  {sentence.Origin.ToString().ToLowerInvariant()}: {sentence.Source}{(sentence.Note is null ? "" : $" ({sentence.Note})")}");
+            }
+
             return;
         }
 
@@ -317,6 +333,15 @@ static int Score(string modelPath, string sourcePath, string referencesPath, str
     return 0;
 }
 
+// iris remember <memory.jsonl> <source sentence> <translation>: a correction for the translation memory
+static int Remember(string memoryPath, string source, string target)
+{
+    var memory = TranslationMemory.Open(memoryPath);
+    memory.Remember(source, target);
+    Console.WriteLine($"remembered ({memory.Count} sentences in the memory)");
+    return 0;
+}
+
 static int Usage()
 {
     Console.Error.WriteLine("""
@@ -328,6 +353,8 @@ static int Usage()
             --greedy                               greedy search (1 beam)
             --ids                                  also shows the token ids
             --int8                                 int8 weights (float32 models are turned into int8 when read)
+            --memory <file>                        translation memory (corrected sentences, JSON lines)
+            --glossary <file>                      names and titles: "term" or "term TAB translation" per line
         iris verify <model.iris> <reference.json> [options]
                                                    compares the core with reference data (tools/reference)
             --min-greedy R                         greedy matches needed (default 0.99)
@@ -342,6 +369,8 @@ static int Usage()
                                                    an int8 copy of a model file (about a quarter of the size)
         iris score <model.iris> <source.txt> <references.txt> [--beams N | --greedy] [--int8] [--limit N] [--out file]
                                                    translates a test set line by line, chrF against the references
+        iris remember <memory.jsonl> <sentence> <translation>
+                                                   remembers a corrected translation of a sentence
         iris chrf <translations.txt> <references.txt>
                                                    chrF (character 6-grams, β = 2, as sacreBLEU) of two files
         """);
