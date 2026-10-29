@@ -37,7 +37,7 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
 - `src/Iris.Cli` – príkaz `iris` a overenie proti referencii (`verify`).
 - `tests/Iris.Tests` – vlastný spúšťač testov (`dotnet run --project tests/Iris.Tests`).
 - `tools/reference` – skripty v Pythone, ktoré vyrábajú referenčné dáta (len pre CI a testy).
-- `tools/hardware/iris-hw.ps1` – prehľad hardvéru počítača pre ladenie rýchlosti (žiadne osobné údaje).
+- `tools/hardware/iris-hw.bat` – prehľad hardvéru počítača pre ladenie rýchlosti (žiadne osobné údaje).
 
 ## Príkazy
 ```
@@ -76,9 +76,9 @@ v prostredí `release`. Vydá sa len commit vetvy `main`, ktorý prešiel všetk
 `NOTICE.txt` (pôvod a licencie) a `SHA256SUMS.txt`. Poznámky k vydaniu sú v `docs/releases/`.
 
 ## Hardvér
-`powershell -ExecutionPolicy Bypass -File tools\hardware\iris-hw.ps1 -Nazov notebook` zapíše `iris-hw-notebook.txt`
-(procesor a jeho inštrukcie, pamäť, grafika, disky, systém, .NET) a skopíruje ho do schránky. Nezbiera mená, adresy
-ani súbory.
+`tools\hardware\iris-hw.bat` – spustí sa dvojklikom, opýta sa na názov počítača a zapíše `iris-hw-<názov>.txt`
+(procesor a jeho inštrukcie, pamäť a rýchlosť jej čítania, grafika, disky, systém, .NET); výsledok skopíruje do
+schránky. Nezbiera mená, adresy ani súbory. Je to jeden súbor: dávka, ktorá sa spustí v PowerShelli.
 
 ## Formát `.iris`
 `IRISMDL1` · dĺžka hlavičky (8 B, little endian) · hlavička JSON (`kind`, `config`, `provenance`, tabuľka tenzorov a
