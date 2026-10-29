@@ -3,13 +3,13 @@
 setlocal
 set "IRIS_HW_FILE=%~f0"
 set "IRIS_HW_NAME=%~1"
-if not defined IRIS_HW_PS (where pwsh >nul 2>nul && set "IRIS_HW_PS=pwsh" || set "IRIS_HW_PS=powershell")
-%IRIS_HW_PS% -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression ([System.IO.File]::ReadAllText($env:IRIS_HW_FILE, [System.Text.Encoding]::UTF8))"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Expression ([System.IO.File]::ReadAllText($env:IRIS_HW_FILE, [System.Text.Encoding]::UTF8))"
 set "IRIS_HW_EXIT=%ERRORLEVEL%"
 if "%~1"=="" pause
 exit /b %IRIS_HW_EXIT%
 #>
-# The lines above are the batch part (for PowerShell they are a comment): the file runs itself in PowerShell.
+# The lines above are the batch part (for PowerShell they are a comment): the file runs itself in Windows PowerShell 5.1,
+# which every Windows has (PowerShell 7 compiles the memory test below without optimizations, so it would measure less).
 # Zistí parametre počítača pre IRIS: procesor (a či vie AVX2 / AVX-512), pamäť a jej rýchlosť, grafickú kartu, disky
 # a systém. Nezbiera nič osobné: žiadne meno počítača ani používateľa, sériové čísla, sieťové adresy ani kľúče.
 # Výsledok uloží do iris-hw-<názov>.txt vedľa tohto súboru a skopíruje ho do schránky. Nič neinštaluje a nič neposiela.
@@ -40,7 +40,14 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
     $features['Avx'] = [IrisHw.Kernel]::IsProcessorFeaturePresent(39)
     $features['Avx2'] = [IrisHw.Kernel]::IsProcessorFeaturePresent(40)
     $features['Avx512F'] = [IrisHw.Kernel]::IsProcessorFeaturePresent(41)
-    $features['note'] = 'Windows PowerShell 5.1: FMA and VNNI not detectable here'
+    # PowerShell 7 (.NET), if installed, knows the rest
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($pwsh) {
+        $query = 'foreach ($f in ''Fma'', ''Avx512BW'', ''AvxVnni'') { $t = (''System.Runtime.Intrinsics.X86.'' + $f) -as [type]; $f + ''='' + [bool]($t -and $t::IsSupported) }'
+        $more = & $pwsh.Source -NoProfile -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($query))) 2>$null
+        foreach ($line in $more) { $k, $v = "$line" -split '=', 2; if ($k -and $v) { $features[$k] = $v -eq 'True' } }
+    }
+    if (-not $features.Contains('Fma')) { $features['note'] = 'FMA and VNNI not detectable without PowerShell 7' }
 }
 
 # --- memory, and how fast it can be read (the output layer of the model reads 30 MB per word, so this sets the speed)
@@ -50,11 +57,9 @@ $memoryType = switch (($modules | Select-Object -First 1).SMBIOSMemoryType) {
     20 { 'DDR' } 21 { 'DDR2' } 24 { 'DDR3' } 26 { 'DDR4' } 34 { 'DDR5' } 35 { 'LPDDR5' } 30 { 'LPDDR4' } default { 'unknown' }
 }
 $speeds = $modules | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } else { $_.Speed } }
-$optimize = if ($PSVersionTable.PSVersion.Major -ge 7) { '[MethodImpl(MethodImplOptions.AggressiveOptimization)]' } else { '' }
-$memoryTest = @'
+Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 public static class IrisHwMemory
@@ -81,8 +86,6 @@ public static class IrisHwMemory
         return sink == 1 ? 0 : Math.Round(best, 1);
     }
 
-    // optimized at once in PowerShell 7 (.NET); the compiler of Windows PowerShell 5.1 does not know the flag
-    /*OPTIMIZE*/
     private static long Sum(long[] data, int from, int to)
     {
         long a = 0, b = 0, c = 0, d = 0;
@@ -91,7 +94,6 @@ public static class IrisHwMemory
     }
 }
 '@
-Add-Type -TypeDefinition $memoryTest.Replace('/*OPTIMIZE*/', $optimize)
 $threadsAll = [Environment]::ProcessorCount
 $readOne = [IrisHwMemory]::Read(1)
 $readAll = [IrisHwMemory]::Read($threadsAll)
