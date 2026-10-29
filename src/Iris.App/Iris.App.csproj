@@ -10,7 +10,6 @@
     <RootNamespace>Iris.App</RootNamespace>
     <ApplicationIcon>Assets\iris.ico</ApplicationIcon>
     <Description>IRIS – own translator for Windows: text, files, memory, glossary, offline.</Description>
-    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Iris.Assistant\Iris.Assistant.csproj" />
