@@ -64,32 +64,73 @@ public static class Kernels
         return y;
     }
 
-    /// <summary>Normalizes each of the n rows (mean 0, variance 1) and scales and shifts it, in place.</summary>
+    /// <summary>
+    /// Normalizes each of the n rows (mean 0, variance 1) and scales and shifts it, in place. Mean and variance are
+    /// summed in double, so they are as exact as float allows whatever the width.
+    /// </summary>
     public static void LayerNorm(float[] x, int n, int width, float[] gain, float[] bias, float epsilon = 1e-5f)
     {
         for (var t = 0; t < n; t++)
         {
             var row = x.AsSpan(t * width, width);
-            float mean = 0;
+            double sum = 0;
             foreach (var v in row)
             {
-                mean += v;
+                sum += v;
             }
 
-            mean /= width;
-            float variance = 0;
+            var mean = sum / width;
+            double squares = 0;
             foreach (var v in row)
             {
-                variance += (v - mean) * (v - mean);
+                squares += (v - mean) * (v - mean);
             }
 
-            variance /= width;
-            var scale = 1f / MathF.Sqrt(variance + epsilon);
+            var m = (float)mean;
+            var scale = (float)(1.0 / Math.Sqrt(squares / width + epsilon));
             for (var i = 0; i < width; i++)
             {
-                row[i] = (row[i] - mean) * scale * gain[i] + bias[i];
+                row[i] = (row[i] - m) * scale * gain[i] + bias[i];
             }
         }
+    }
+
+    /// <summary>y += a · x, element by element.</summary>
+    public static void AddScaled(Span<float> y, ReadOnlySpan<float> x, float a)
+    {
+        var i = 0;
+        if (Vector.IsHardwareAccelerated && y.Length >= Vector<float>.Count)
+        {
+            var vy = MemoryMarshal.Cast<float, Vector<float>>(y);
+            var vx = MemoryMarshal.Cast<float, Vector<float>>(x[..y.Length]);
+            var va = new Vector<float>(a);
+            for (var k = 0; k < vy.Length; k++)
+            {
+                vy[k] += va * vx[k];
+            }
+
+            i = vy.Length * Vector<float>.Count;
+        }
+
+        for (; i < y.Length; i++)
+        {
+            y[i] += a * x[i];
+        }
+    }
+
+    /// <summary>The index of the largest value; the first one when several are equal (as argmax in PyTorch).</summary>
+    public static int ArgMax(ReadOnlySpan<float> x)
+    {
+        var best = 0;
+        for (var i = 1; i < x.Length; i++)
+        {
+            if (x[i] > x[best])
+            {
+                best = i;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>a += b, element by element.</summary>

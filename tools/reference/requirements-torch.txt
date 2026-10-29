@@ -1,0 +1,2 @@
+# PyTorch (CPU build) for the reference only – installed from https://download.pytorch.org/whl/cpu, never part of IRIS
+torch==2.15.0

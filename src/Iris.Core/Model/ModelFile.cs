@@ -22,17 +22,23 @@ public sealed class ModelFile
     public static readonly byte[] Magic = "IRISMDL1"u8.ToArray();
     private const int Alignment = 64;
 
-    private readonly byte[] _data;
+    // the whole file; the data begin at _dataStart (no second copy of a model of hundreds of megabytes)
+    private readonly byte[] _file;
+    private readonly int _dataStart;
     private readonly Dictionary<string, TensorInfo> _tensors;
     private readonly Dictionary<string, TensorInfo> _blobs;
 
-    private ModelFile(JsonObject header, byte[] data, Dictionary<string, TensorInfo> tensors, Dictionary<string, TensorInfo> blobs)
+    private ModelFile(JsonObject header, byte[] file, int dataStart, Dictionary<string, TensorInfo> tensors, Dictionary<string, TensorInfo> blobs)
     {
         Header = header;
-        _data = data;
+        _file = file;
+        _dataStart = dataStart;
         _tensors = tensors;
         _blobs = blobs;
     }
+
+    /// <summary>Where the model came from (source, revision, licence, checksums).</summary>
+    public JsonObject Provenance => Header["provenance"] as JsonObject ?? [];
 
     /// <summary>The whole header (kind, config, provenance …).</summary>
     public JsonObject Header { get; }
@@ -61,14 +67,14 @@ public sealed class ModelFile
 
         var header = JsonNode.Parse(file.AsSpan(16, (int)headerLength)) as JsonObject ?? throw new FormatException("IRIS model: header is not an object");
         var dataStart = Align(16 + headerLength);
-        var data = file.AsSpan((int)dataStart).ToArray();
+        var dataLength = file.Length - dataStart;
         Dictionary<string, TensorInfo> Read(string key)
         {
             var items = new Dictionary<string, TensorInfo>(StringComparer.Ordinal);
             foreach (var node in header[key] as JsonArray ?? [])
             {
                 var info = FromJson(node) ?? throw new FormatException($"IRIS model: damaged {key}");
-                if (info.Offset < 0 || info.Offset + info.Length > data.Length)
+                if (info.Offset < 0 || info.Length < 0 || info.Offset + info.Length > dataLength)
                 {
                     throw new FormatException($"IRIS model: {info.Name} lies outside the data");
                 }
@@ -79,7 +85,7 @@ public sealed class ModelFile
             return items;
         }
 
-        return new ModelFile(header, data, Read("tensors"), Read("blobs"));
+        return new ModelFile(header, file, (int)dataStart, Read("tensors"), Read("blobs"));
     }
 
     public bool Has(string name) => _tensors.ContainsKey(name);
@@ -103,18 +109,22 @@ public sealed class ModelFile
             throw new FormatException($"IRIS model: {name} has a wrong length");
         }
 
-        var values = new float[info.Count];
-        MemoryMarshal.Cast<byte, float>(_data.AsSpan((int)info.Offset, (int)info.Length)).CopyTo(values);
         if (!BitConverter.IsLittleEndian)
         {
             throw new PlatformNotSupportedException("IRIS models are little endian");
         }
 
+        var values = new float[info.Count];
+        MemoryMarshal.Cast<byte, float>(Data(info)).CopyTo(values);
         return values;
     }
 
+    public bool HasBlob(string name) => _blobs.ContainsKey(name);
+
     public byte[] Blob(string name) =>
-        _blobs.TryGetValue(name, out var info) ? _data.AsSpan((int)info.Offset, (int)info.Length).ToArray() : throw new FormatException($"IRIS model: blob {name} is missing");
+        _blobs.TryGetValue(name, out var info) ? Data(info).ToArray() : throw new FormatException($"IRIS model: blob {name} is missing");
+
+    private ReadOnlySpan<byte> Data(TensorInfo info) => _file.AsSpan(_dataStart + (int)info.Offset, (int)info.Length);
 
     /// <summary>Writes a model file: the header (kind, config, provenance), the float tensors and the blobs.</summary>
     public static void Write(string path, string kind, JsonObject config, JsonObject provenance,

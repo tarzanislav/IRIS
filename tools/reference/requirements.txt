@@ -1,0 +1,4 @@
+# Python tools of the reference (only in CI and for test data, never part of IRIS)
+transformers==5.21.0
+sentencepiece==0.2.2
+numpy==2.5.4

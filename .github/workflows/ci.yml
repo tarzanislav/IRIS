@@ -35,3 +35,56 @@ jobs:
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       - name: Command line smoke test
         run: dotnet run --project src/Iris.Cli -c Release --no-build -- tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
+
+  # The own core against the reference implementation (Hugging Face transformers + PyTorch, CPU). Python runs only
+  # here; IRIS itself has no Python. Heavy, so not on every push of a branch – on pull requests, main and by hand.
+  reference:
+    name: Reference (transformers)
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 75
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      DO_NOT_TRACK: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      # the model revision is pinned once known (the download step reports it)
+      OPUS_MT_EN_SK_REVISION: main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build
+        run: dotnet build src/Iris.Cli -c Release
+      - name: Python tools of the reference
+        run: |
+          python3 -m venv /tmp/venv || { sudo apt-get install -y -q python3-venv && python3 -m venv /tmp/venv; }
+          /tmp/venv/bin/pip install -q --index-url https://download.pytorch.org/whl/cpu -r tools/reference/requirements-torch.txt
+          /tmp/venv/bin/pip install -q -r tools/reference/requirements.txt
+          /tmp/venv/bin/python -c "import torch, transformers; print('torch', torch.__version__, 'transformers', transformers.__version__)"
+      - name: Tiny random model – must match exactly
+        run: |
+          py=/tmp/venv/bin/python
+          $py tools/reference/marian_reference.py tiny /tmp/tiny
+          $py tools/reference/marian_reference.py convert /tmp/tiny /tmp/tiny.iris
+          $py tools/reference/marian_reference.py reference /tmp/tiny /tmp/tiny.json --set tiny
+          bash tools/reference/verify.sh /tmp/tiny.iris /tmp/tiny.json --min-greedy 1 --min-beam 1
+      - name: OPUS-MT en-sk – download (licence checked) and convert
+        run: |
+          py=/tmp/venv/bin/python
+          $py tools/reference/marian_reference.py download Helsinki-NLP/opus-mt-en-sk /tmp/opus-en-sk --revision "$OPUS_MT_EN_SK_REVISION"
+          $py tools/reference/marian_reference.py convert /tmp/opus-en-sk /tmp/opus-en-sk.iris
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll info /tmp/opus-en-sk.iris
+      - name: OPUS-MT en-sk – reference of 500 invented sentences
+        run: /tmp/venv/bin/python tools/reference/marian_reference.py reference /tmp/opus-en-sk /tmp/opus-en-sk.json --set opus --count 500
+      - name: OPUS-MT en-sk – gate F1 (greedy ≥ 99 %, beam ≥ 95 %)
+        run: bash tools/reference/verify.sh /tmp/opus-en-sk.iris /tmp/opus-en-sk.json --min-greedy 0.99 --min-beam 0.95
+      - name: First translations of the own core
+        if: always()
+        run: |
+          [ -f /tmp/opus-en-sk.iris ] || exit 0
+          printf '%s\n' "The premiere is tonight." "Critics praised the music but found the ending too slow." \
+            "Where is the nearest cinema?" "The second season will have eight episodes." > /tmp/samples.en
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll translate /tmp/opus-en-sk.iris < /tmp/samples.en > /tmp/samples.sk
+          paste -d '\t' /tmp/samples.en /tmp/samples.sk | while IFS=$'\t' read -r en sk; do echo "::notice title=EN→SK (IRIS)::$en → $sk"; done
