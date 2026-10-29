@@ -12,6 +12,16 @@ public sealed record TensorInfo(string Name, string DType, int[] Shape, long Off
     public long Count => Shape.Aggregate(1L, (a, b) => a * b);
 }
 
+/// <summary>A tensor to write: its name, element type ("f32" or "i8"), shape and bytes (little endian).</summary>
+public sealed record TensorData(string Name, string DType, int[] Shape, byte[] Bytes)
+{
+    public static TensorData F32(string name, int[] shape, float[] values) =>
+        new(name, "f32", shape, MemoryMarshal.AsBytes(values.AsSpan()).ToArray());
+
+    public static TensorData I8(string name, int[] shape, sbyte[] values) =>
+        new(name, "i8", shape, MemoryMarshal.AsBytes(values.AsSpan()).ToArray());
+}
+
 /// <summary>
 /// The IRIS model file – one file holds everything a model needs: settings, tensors (weights), blobs (tokenizer
 /// models, vocabulary) and where it came from (source, licence). Layout: "IRISMDL1", the length of the header
@@ -90,13 +100,47 @@ public sealed class ModelFile
 
     public bool Has(string name) => _tensors.ContainsKey(name);
 
+    /// <summary>The element type of a tensor ("f32", "i8"), or null when the model does not have it.</summary>
+    public string? DTypeOf(string name) => _tensors.TryGetValue(name, out var t) ? t.DType : null;
+
+    /// <summary>A tensor as it is stored (for copying it into another model file).</summary>
+    public TensorData Raw(string name)
+    {
+        var info = _tensors.TryGetValue(name, out var t) ? t : throw new FormatException($"IRIS model: tensor {name} is missing");
+        return new TensorData(info.Name, info.DType, info.Shape, Data(info).ToArray());
+    }
+
+    public IEnumerable<string> BlobNames => _blobs.Keys;
+
+    /// <summary>An int8 tensor (a copy), checked against the expected shape when one is given.</summary>
+    public sbyte[] Int8(string name, params int[] shape)
+    {
+        var info = Info(name, "i8", 1, shape);
+        var values = new sbyte[info.Count];
+        MemoryMarshal.Cast<byte, sbyte>(Data(info)).CopyTo(values);
+        return values;
+    }
+
     /// <summary>A float32 tensor (a copy), checked against the expected shape when one is given.</summary>
     public float[] Floats(string name, params int[] shape)
     {
-        var info = _tensors.TryGetValue(name, out var t) ? t : throw new FormatException($"IRIS model: tensor {name} is missing");
-        if (info.DType != "f32")
+        if (!BitConverter.IsLittleEndian)
         {
-            throw new FormatException($"IRIS model: {name} is {info.DType}, expected f32");
+            throw new PlatformNotSupportedException("IRIS models are little endian");
+        }
+
+        var info = Info(name, "f32", 4, shape);
+        var values = new float[info.Count];
+        MemoryMarshal.Cast<byte, float>(Data(info)).CopyTo(values);
+        return values;
+    }
+
+    private TensorInfo Info(string name, string dtype, int size, int[] shape)
+    {
+        var info = _tensors.TryGetValue(name, out var t) ? t : throw new FormatException($"IRIS model: tensor {name} is missing");
+        if (info.DType != dtype)
+        {
+            throw new FormatException($"IRIS model: {name} is {info.DType}, expected {dtype}");
         }
 
         if (shape.Length > 0 && !shape.SequenceEqual(info.Shape))
@@ -104,19 +148,12 @@ public sealed class ModelFile
             throw new FormatException($"IRIS model: {name} has shape [{string.Join(",", info.Shape)}], expected [{string.Join(",", shape)}]");
         }
 
-        if (info.Length != info.Count * 4)
+        if (info.Length != info.Count * size)
         {
             throw new FormatException($"IRIS model: {name} has a wrong length");
         }
 
-        if (!BitConverter.IsLittleEndian)
-        {
-            throw new PlatformNotSupportedException("IRIS models are little endian");
-        }
-
-        var values = new float[info.Count];
-        MemoryMarshal.Cast<byte, float>(Data(info)).CopyTo(values);
-        return values;
+        return info;
     }
 
     public bool HasBlob(string name) => _blobs.ContainsKey(name);
@@ -128,7 +165,12 @@ public sealed class ModelFile
 
     /// <summary>Writes a model file: the header (kind, config, provenance), the float tensors and the blobs.</summary>
     public static void Write(string path, string kind, JsonObject config, JsonObject provenance,
-        IEnumerable<(string Name, int[] Shape, float[] Values)> tensors, IEnumerable<(string Name, byte[] Bytes)> blobs)
+        IEnumerable<(string Name, int[] Shape, float[] Values)> tensors, IEnumerable<(string Name, byte[] Bytes)> blobs) =>
+        Write(path, kind, config, provenance, tensors.Select(t => TensorData.F32(t.Name, t.Shape, t.Values)), blobs);
+
+    /// <summary>Writes a model file with tensors of any element type.</summary>
+    public static void Write(string path, string kind, JsonObject config, JsonObject provenance,
+        IEnumerable<TensorData> tensors, IEnumerable<(string Name, byte[] Bytes)> blobs)
     {
         var data = new MemoryStream();
         JsonArray Place(IEnumerable<(string Name, string DType, int[] Shape, byte[] Bytes)> items)
@@ -151,7 +193,7 @@ public sealed class ModelFile
             ["kind"] = kind,
             ["config"] = config.DeepClone(),
             ["provenance"] = provenance.DeepClone(),
-            ["tensors"] = Place(tensors.Select(t => (t.Name, "f32", t.Shape, MemoryMarshal.AsBytes(t.Values.AsSpan()).ToArray()))),
+            ["tensors"] = Place(tensors.Select(t => (t.Name, t.DType, t.Shape, t.Bytes))),
             ["blobs"] = Place(blobs.Select(b => (b.Name, "u8", new[] { b.Bytes.Length }, b.Bytes))),
         };
         var headerBytes = Encoding.UTF8.GetBytes(header.ToJsonString());

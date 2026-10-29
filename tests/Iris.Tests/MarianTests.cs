@@ -240,7 +240,7 @@ internal sealed class TinyModel : IDisposable
     public string WriteOther()
     {
         var other = Path + ".other";
-        ModelFile.Write(other, "other", [], [], [], []);
+        ModelFile.Write(other, "other", [], [], Array.Empty<TensorData>(), []);
         return other;
     }
 

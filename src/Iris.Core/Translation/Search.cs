@@ -45,7 +45,7 @@ public static class Search
         {
             // the choice is made on the logits themselves (as the reference does); the score is the log-probability
             var logits = session.Step([last]);
-            var normalizer = LogSumExp(logits);
+            var normalizer = Kernels.LogSumExp(logits);
             Restrict(logits, length, settings);
             var next = Kernels.ArgMax(logits);
             score += (float)(logits[next] - normalizer);
@@ -92,12 +92,18 @@ public static class Search
             var logits = session.Step(last);
             for (var b = 0; b < beams; b++)
             {
+                // log-probabilities, then the forbidden and forced tokens; with renormalization the reference
+                // normalizes once more after restricting, which is one normalization of the restricted logits
                 var row = logits.AsSpan(b * vocab, vocab);
-                Kernels.LogSoftmax(row);
-                Restrict(row, length, settings);
                 if (settings.Renormalize)
                 {
+                    Restrict(row, length, settings);
                     Kernels.LogSoftmax(row);
+                }
+                else
+                {
+                    Kernels.LogSoftmax(row);
+                    Restrict(row, length, settings);
                 }
 
                 for (var v = 0; v < vocab; v++)
@@ -230,23 +236,6 @@ public static class Search
                 row[eos] = 0;
             }
         }
-    }
-
-    private static double LogSumExp(ReadOnlySpan<float> row)
-    {
-        var max = float.NegativeInfinity;
-        foreach (var v in row)
-        {
-            max = MathF.Max(max, v);
-        }
-
-        double sum = 0;
-        foreach (var v in row)
-        {
-            sum += Math.Exp(v - max);
-        }
-
-        return max + Math.Log(sum);
     }
 
     // the indices of the k largest values, largest first; equal values keep their order
