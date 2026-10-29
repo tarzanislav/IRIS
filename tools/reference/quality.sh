@@ -28,6 +28,25 @@ level=$([ "$gate" = PASSED ] && echo notice || echo error)
 echo "::$level title=gate F2 speed $gate::int8 title + introduction ≤ $MAX_SECONDS s (greedy and beam)"
 grep '^  ' /tmp/bench-int8.txt | head -4 | sed 's/^  /::notice title=bench translation (int8)::/'
 
+# glossary: do the placeholders of names and titles survive the real model? (invented names, measured only)
+printf '%s\n' "Harbor Lights" "The Night Desk" "Mara Velin" "Tomas Brek" "Silver Meridian" \
+  $'The Glass Orchard\tSklenený sad' $'Kestrel Bay\tZáliv Kestrel' > /tmp/glossary.tsv
+printf '%s\n' "Harbor Lights returns for a third season with a new detective." \
+  "The crime drama The Night Desk will end after five seasons." \
+  "Mara Velin plays the lead in Silver Meridian, which opens on Friday." \
+  "Critics loved The Glass Orchard, but the audience stayed away." \
+  "Tomas Brek joins the cast of Kestrel Bay as a young doctor." \
+  "Is Silver Meridian worth watching on a quiet evening?" \
+  "After the screening, Mara Velin and Tomas Brek answered questions for almost an hour." \
+  "The second season of Harbor Lights will have eight episodes." \
+  "Why did the detective leave Kestrel Bay in the first episode?" \
+  "The Night Desk and Harbor Lights were the most watched series of the year." > /tmp/glossary.en
+$iris translate "$int8" --glossary /tmp/glossary.tsv < /tmp/glossary.en > /tmp/glossary.sk 2> /tmp/glossary.log
+used=$(grep -c '^  glossary:' /tmp/glossary.log || true)
+lost=$(grep -c 'did not survive' /tmp/glossary.log || true)
+echo "::notice title=glossary placeholders::kept in $used of $(wc -l < /tmp/glossary.en) sentences, lost in $lost (int8, beam)"
+paste -d '\t' /tmp/glossary.en /tmp/glossary.sk | head -5 | while IFS=$'\t' read -r en sk; do echo "::notice title=glossary EN→SK::$en → $sk"; done
+
 # quality
 mkdir -p /tmp/flores
 curl -fsSL "$FLORES_URL" -o /tmp/flores/flores.tar.gz
