@@ -6,9 +6,9 @@
 set -euo pipefail
 declare -A REVISIONS=(
   [en-sk]=04d19ccd4566720bceeff93623d5cf93be659816
-  [en-cs]=main
-  [sk-en]=main
-  [cs-en]=main
+  [en-cs]=2820c6a540ddc2b7c4ea4c95c39b3150bd3ac27e
+  [sk-en]=dd1de0d53e787147ac621680946dd55966049354
+  [cs-en]=577d2053d249b476aefec9524a37ec945ccbd331
 )
 here=$(cd "$(dirname "$0")" && pwd)
 venv=${IRIS_VENV:-/tmp/venv}

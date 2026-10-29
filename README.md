@@ -27,6 +27,7 @@ Preklady komerčných služieb sa na učenie ani na hodnotenie **nepoužívajú*
 | chrF (ako sacreBLEU), meranie na FLORES-200 v CI | hotové (F2) |
 | Pamäť prekladov a slovník mien | hotové (F2) |
 | Vydanie (knižnica, `iris.exe`, int8 model, SHA-256) | v0.1.0, v0.2.0 (napojenie) |
+| Ďalšie smery EN→CS, SK→EN, CS→EN (overené ako jazykové balíky) | hotové (CI) |
 | Učenie z opráv | F3 – ďalší krok |
 
 ## Štruktúra
