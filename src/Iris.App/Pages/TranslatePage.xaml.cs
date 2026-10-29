@@ -393,7 +393,7 @@ public partial class TranslatePage : UserControl
         }
 
         var dialog = new SaveFileDialog { Filter = "TXT|*.txt", FileName = $"{Localizer.Instance["translate.target"]}.txt", AddExtension = true };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        if (dialog.ShowDialog(Window.GetWindow(this)!) == true)
         {
             File.WriteAllText(dialog.FileName, _last.Text, new UTF8Encoding(false));
             AddToHistory(_last);
@@ -408,5 +408,5 @@ public partial class TranslatePage : UserControl
         }
     }
 
-    private void OpenPacks(object sender, RoutedEventArgs e) => ((MainWindow)Window.GetWindow(this)).OpenPacks();
+    private void OpenPacks(object sender, RoutedEventArgs e) => ((MainWindow)Window.GetWindow(this)!).OpenPacks();
 }

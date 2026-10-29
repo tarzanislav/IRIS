@@ -197,7 +197,7 @@ public partial class SettingsPage : UserControl
     private async void InstallFromFile(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog { Filter = "IRIS|*.iris" };
-        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        if (dialog.ShowDialog(Window.GetWindow(this)!) != true)
         {
             return;
         }
@@ -236,7 +236,7 @@ public partial class SettingsPage : UserControl
     private void Changed()
     {
         App.Current.Update(s => s);
-        ((MainWindow)Window.GetWindow(this)).ShowPacks();
+        ((MainWindow)Window.GetWindow(this)!).ShowPacks();
     }
 
     private void OpenLink(object sender, RequestNavigateEventArgs e)

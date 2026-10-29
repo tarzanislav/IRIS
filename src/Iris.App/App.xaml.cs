@@ -76,7 +76,7 @@ public partial class App : Application
     }
 
     /// <summary>Ends IRIS (the tray menu).</summary>
-    public void Exit()
+    public void Quit()
     {
         _exiting = true;
         Shutdown();
@@ -192,7 +192,7 @@ public partial class App : Application
         var open = new MenuItem { Header = Localizer.Instance["tray.open"] };
         open.Click += (_, _) => ShowMain();
         var exit = new MenuItem { Header = Localizer.Instance["tray.exit"] };
-        exit.Click += (_, _) => Exit();
+        exit.Click += (_, _) => Quit();
         menu.Items.Add(open);
         menu.Items.Add(new Separator());
         menu.Items.Add(exit);

@@ -145,7 +145,7 @@ public partial class FilesPage : UserControl
     private void ChooseFiles(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog { Multiselect = true, Filter = "TXT, SRT, DOCX|*.txt;*.srt;*.docx;*.md" };
-        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        if (dialog.ShowDialog(Window.GetWindow(this)!) == true)
         {
             Add(dialog.FileNames);
         }
