@@ -19,5 +19,7 @@ csharp_style_namespace_declarations = file_scoped:warning
 csharp_style_var_for_built_in_types = true:suggestion
 dotnet_sort_system_directives_first = true
 
-[*.ps1]
-charset = utf-8-bom
+[*.bat]
+# no BOM (cmd reads the first line), CRLF for cmd
+charset = utf-8
+end_of_line = crlf

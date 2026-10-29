@@ -122,13 +122,16 @@ jobs:
           ./out/cli/iris.exe tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "::notice title=iris.exe::self-contained single file, $size MB"
-      - name: Hardware script (Windows PowerShell 5.1 and PowerShell 7)
+      - name: Hardware script (iris-hw.bat)
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps5
-          pwsh -NoProfile -File tools/hardware/iris-hw.ps1 -Nazov ci-runner-ps7
-          foreach ($name in 'ci-runner-ps5', 'ci-runner-ps7') {
+          cmd /c tools\hardware\iris-hw.bat ci-runner
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in @('ci-runner')) {
             $report = Get-Content "tools/hardware/iris-hw-$name.txt" -Raw | ConvertFrom-Json
-            if (-not $report.cpu.name -or -not $report.memory.total_gb) { "::error::hardware report $name is incomplete"; exit 1 }
+            if (-not $report.cpu.name -or -not $report.memory.total_gb -or -not $report.memory.read_gbs_all_threads -or
+                $null -eq $report.cpu.features.Fma) {
+              "::error::hardware report $name is incomplete"; exit 1
+            }
             $text = (Get-Content "tools/hardware/iris-hw-$name.txt" -Raw) -replace '%', '%25' -replace "`r?`n", '%0A'
             "::notice title=hardware $name::$text"
           }
