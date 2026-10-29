@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using Iris.App.Pages;
+using Iris.Assistant;
 
 namespace Iris.App;
 
