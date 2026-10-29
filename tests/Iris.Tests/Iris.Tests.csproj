@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Own test runner, no third-party test framework. Run: dotnet run (project tests/Iris.Tests) -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Iris.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Iris.Core\Iris.Core.csproj" />
+    <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

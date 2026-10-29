@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  core:
+    name: Build and tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # the runner image's .NET 10 SDK, else the Ubuntu package
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build
+        run: dotnet build Iris.slnx -c Release
+      - name: Tests
+        run: dotnet run --project tests/Iris.Tests -c Release --no-build
+      - name: Command line smoke test
+        run: dotnet run --project src/Iris.Cli -c Release --no-build -- tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."

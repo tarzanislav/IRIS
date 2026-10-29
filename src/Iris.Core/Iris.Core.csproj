@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The IRIS core: tokenizer, model, translation, learning. No third-party packages – everything here is own code. -->
+  <PropertyGroup>
+    <RootNamespace>Iris</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Iris.Tests" />
+  </ItemGroup>
+</Project>
