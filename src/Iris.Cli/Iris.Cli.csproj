@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Iris.Core\Iris.Core.csproj" />
+    <ProjectReference Include="..\Iris.Vision\Iris.Vision.csproj" />
   </ItemGroup>
 </Project>

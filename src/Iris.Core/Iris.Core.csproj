@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Iris.Tests" />
+    <InternalsVisibleTo Include="Iris.Vision" />
   </ItemGroup>
 </Project>
