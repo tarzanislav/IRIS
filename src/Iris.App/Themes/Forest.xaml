@@ -1,6 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- Forest: a dark forest window with light sage cards and menu (the same names in every theme; used as DynamicResource).
+    <!-- Forest: a dark forest window with misty light cards and a grey-green menu (the same names in every theme; used as DynamicResource).
          Text colors keep at least 4.5:1 against the surfaces they stand on. -->
 
     <LinearGradientBrush x:Key="WindowBackground" StartPoint="0,0" EndPoint="1,1">
@@ -8,56 +8,56 @@
         <GradientStop Color="#183129" Offset="0.55" />
         <GradientStop Color="#10201B" Offset="1" />
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Background" Color="#E3F0E8" />
-    <SolidColorBrush x:Key="Sidebar" Color="#D5E7DC" />
-    <SolidColorBrush x:Key="Surface" Color="#F3F9F5" />
-    <SolidColorBrush x:Key="SurfaceAlt" Color="#E3F0E8" />
-    <SolidColorBrush x:Key="Border" Color="#C9E0D2" />
-    <SolidColorBrush x:Key="Control" Color="#AECDBB" />
-    <SolidColorBrush x:Key="Text" Color="#1B2D24" />
-    <SolidColorBrush x:Key="TextMuted" Color="#46604F" />
-    <SolidColorBrush x:Key="Accent" Color="#1D6B45" />
-    <SolidColorBrush x:Key="AccentHover" Color="#1D6B45" />
+    <SolidColorBrush x:Key="Background" Color="#E8EDEA" />
+    <SolidColorBrush x:Key="Sidebar" Color="#DCE3DF" />
+    <SolidColorBrush x:Key="Surface" Color="#F4F6F5" />
+    <SolidColorBrush x:Key="SurfaceAlt" Color="#E8EDEA" />
+    <SolidColorBrush x:Key="Border" Color="#DDE4E0" />
+    <SolidColorBrush x:Key="Control" Color="#BCC9C2" />
+    <SolidColorBrush x:Key="Text" Color="#1F2925" />
+    <SolidColorBrush x:Key="TextMuted" Color="#4E5B55" />
+    <SolidColorBrush x:Key="Accent" Color="#35665A" />
+    <SolidColorBrush x:Key="AccentHover" Color="#35665A" />
     <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="AccentSoft" Color="#D2EBDD" />
-    <SolidColorBrush x:Key="AccentSoftText" Color="#175636" />
-    <SolidColorBrush x:Key="DropZone" Color="#F3F9F5" />
-    <SolidColorBrush x:Key="DropLine" Color="#8CC3A5" />
+    <SolidColorBrush x:Key="AccentSoft" Color="#E2EAE6" />
+    <SolidColorBrush x:Key="AccentSoftText" Color="#24493F" />
+    <SolidColorBrush x:Key="DropZone" Color="#F4F6F5" />
+    <SolidColorBrush x:Key="DropLine" Color="#A9BFB5" />
     <SolidColorBrush x:Key="PageText" Color="#EEF8F2" />
     <SolidColorBrush x:Key="PageMuted" Color="#BCD6C8" />
     <SolidColorBrush x:Key="PageWarn" Color="#F6CF84" />
     <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#1D6B45" Offset="0" />
-        <GradientStop Color="#4A7A26" Offset="1" />
+        <GradientStop Color="#35665A" Offset="0" />
+        <GradientStop Color="#4B6B7A" Offset="1" />
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="TitleGradient" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#BDEBD3" Offset="0" />
-        <GradientStop Color="#DCF0B8" Offset="1" />
+        <GradientStop Color="#DDE8E3" Offset="0" />
+        <GradientStop Color="#B9CEC8" Offset="1" />
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="BrandGradient" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#1D6B45" Offset="0" />
-        <GradientStop Color="#4A7A26" Offset="1" />
+        <GradientStop Color="#35665A" Offset="0" />
+        <GradientStop Color="#4B6B7A" Offset="1" />
     </LinearGradientBrush>
     <DropShadowEffect x:Key="CardShadow" Color="#000000" BlurRadius="28" ShadowDepth="6" Direction="270" Opacity="0.35" />
     <DropShadowEffect x:Key="ButtonShadow" Color="#000000" BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.4" />
 
     <!-- the pastel of each part of IRIS (soft fill) and its deeper tone -->
-    <SolidColorBrush x:Key="Lavender" Color="#ECE7FF" />
-    <SolidColorBrush x:Key="LavenderDeep" Color="#5B45D6" />
-    <SolidColorBrush x:Key="Pink" Color="#FFE4EF" />
-    <SolidColorBrush x:Key="PinkDeep" Color="#B8336F" />
-    <SolidColorBrush x:Key="Peach" Color="#FFEADB" />
-    <SolidColorBrush x:Key="PeachDeep" Color="#A9510F" />
-    <SolidColorBrush x:Key="Mint" Color="#DDF5EA" />
-    <SolidColorBrush x:Key="MintDeep" Color="#1F7A4D" />
-    <SolidColorBrush x:Key="Sky" Color="#DEEEFF" />
-    <SolidColorBrush x:Key="SkyDeep" Color="#2363A8" />
-    <SolidColorBrush x:Key="Lilac" Color="#F3E3FB" />
-    <SolidColorBrush x:Key="LilacDeep" Color="#8A3BA6" />
+    <SolidColorBrush x:Key="Lavender" Color="#E6E4F2" />
+    <SolidColorBrush x:Key="LavenderDeep" Color="#4F4A86" />
+    <SolidColorBrush x:Key="Pink" Color="#F1E3E8" />
+    <SolidColorBrush x:Key="PinkDeep" Color="#8C3D5A" />
+    <SolidColorBrush x:Key="Peach" Color="#F2E6DC" />
+    <SolidColorBrush x:Key="PeachDeep" Color="#8A5228" />
+    <SolidColorBrush x:Key="Mint" Color="#E0EDE5" />
+    <SolidColorBrush x:Key="MintDeep" Color="#2F6A4A" />
+    <SolidColorBrush x:Key="Sky" Color="#E1E9F2" />
+    <SolidColorBrush x:Key="SkyDeep" Color="#2F5B86" />
+    <SolidColorBrush x:Key="Lilac" Color="#EBE3F0" />
+    <SolidColorBrush x:Key="LilacDeep" Color="#6E4785" />
 
-    <SolidColorBrush x:Key="Good" Color="#1F7A4D" />
-    <SolidColorBrush x:Key="GoodSoft" Color="#E1F6EA" />
-    <SolidColorBrush x:Key="GoodLine" Color="#90D4AE" />
+    <SolidColorBrush x:Key="Good" Color="#2F6A4A" />
+    <SolidColorBrush x:Key="GoodSoft" Color="#E4F1E8" />
+    <SolidColorBrush x:Key="GoodLine" Color="#9CC9AC" />
     <SolidColorBrush x:Key="Warn" Color="#8F5300" />
     <SolidColorBrush x:Key="WarnSoft" Color="#FFF3D9" />
     <SolidColorBrush x:Key="WarnLine" Color="#EDBB5A" />
