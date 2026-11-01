@@ -23,6 +23,8 @@ try
             Options.Parse(rest, ["--int8"], ["--epochs", "--batch", "--rate", "--rank", "--smoothing", "--limit", "--layers"])),
         ["check-learning", var model, var adapter, var reference] => CheckLearning(model, adapter, reference),
         ["lines", var picture, .. var rest] => Lines(picture, Options.Parse(rest, [], ["--out"])),
+        ["ocr", var model, var picture] => Ocr(model, picture),
+        ["check-ocr", var model, var folder, .. var rest] => CheckOcr(model, folder, Options.Parse(rest, [], ["--min-text"])),
         ["verify", var model, var reference, .. var rest] => Verify(model, reference,
             Options.Parse(rest, ["--no-greedy", "--no-beam", "--int8"], ["--min-greedy", "--min-beam", "--min-tokenizer", "--limit"])),
         ["bench", var model, .. var rest] => Bench(model, Options.Parse(rest, ["--int8"], ["--runs", "--max-seconds"])),
@@ -465,6 +467,80 @@ static int Lines(string picturePath, Options options)
     return 0;
 }
 
+// OCR: the text of a picture of a page, line by line
+static int Ocr(string modelPath, string picturePath)
+{
+    var watch = Stopwatch.StartNew();
+    var reader = Iris.Vision.Ocr.LineReader.Load(modelPath);
+    var page = Iris.Vision.Layout.PageReader.Prepare(Iris.Vision.Imaging.ImageFile.Read(picturePath));
+    var lines = new string[page.Lines.Count];
+    Parallel.For(0, lines.Length, i => lines[i] = reader.Read(page.Lines[i].Image).Text);
+    foreach (var line in lines)
+    {
+        Console.WriteLine(line);
+    }
+
+    Console.Error.WriteLine($"{lines.Length} lines, slant {page.Skew.ToString("0.00", CultureInfo.InvariantCulture)}°, {watch.Elapsed.TotalSeconds:0.00} s");
+    return 0;
+}
+
+// the C# reader against what PyTorch gave for the same line pictures (tools/ocr/train.py writes the reference)
+static int CheckOcr(string modelPath, string folder, Options options)
+{
+    options.NoWords();
+    var reader = Iris.Vision.Ocr.LineReader.Load(modelPath);
+    var reference = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "reference.json")))!["lines"]!.AsArray();
+    int sameText = 0, sameFrames = 0, frames = 0;
+    double worst = 0;
+    foreach (var item in reference)
+    {
+        var picture = Iris.Vision.Imaging.ImageFile.Read(Path.Combine(folder, item!["file"]!.GetValue<string>()));
+        var reading = reader.Read(picture);
+        var expected = item["best"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray();
+        if (reading.Frames != expected.Length)
+        {
+            Console.WriteLine($"  FAIL {item["file"]}: {reading.Frames} frames instead of {expected.Length}");
+            continue;
+        }
+
+        sameText += reading.Text == item["read"]!.GetValue<string>() ? 1 : 0;
+        for (var t = 0; t < reading.Frames; t++)
+        {
+            sameFrames += Kernels(reading, t) == expected[t] ? 1 : 0;
+        }
+
+        frames += reading.Frames;
+        foreach (var (key, t) in new[] { ("logits_first", 0), ("logits_middle", reading.Frames / 2) })
+        {
+            var values = item[key]!.AsArray().Select(n => n!.GetValue<double>()).ToArray();
+            for (var k = 0; k < values.Length; k++)
+            {
+                worst = Math.Max(worst, Math.Abs(values[k] - reading.Logits[t * reading.Classes + k]) / (1 + Math.Abs(values[k])));
+            }
+        }
+    }
+
+    var textRate = (double)sameText / reference.Count;
+    Console.WriteLine($"{reference.Count} lines: the same text in {sameText}, the same best class in {sameFrames} of {frames} frames, " +
+                      $"largest logit difference {worst:e1}");
+    var needed = options.Number("--min-text") ?? 0.95;
+    return textRate >= needed && worst < 1e-3 ? 0 : 1;
+
+    static int Kernels(Iris.Vision.Ocr.LineReading r, int t)
+    {
+        var best = 0;
+        for (var k = 1; k < r.Classes; k++)
+        {
+            if (r.Logits[t * r.Classes + k] > r.Logits[t * r.Classes + best])
+            {
+                best = k;
+            }
+        }
+
+        return best;
+    }
+}
+
 static int Usage()
 {
     Console.Error.WriteLine("""
@@ -494,6 +570,9 @@ static int Usage()
             --min-greedy R, --min-beam R, --min-tokenizer R   matches needed (0.99, 0.95, 1)
             --limit N, --no-greedy, --no-beam, --int8
         iris lines <picture.png|jpg> [--out folder]     OCR: straightens a page photo or scan and finds its lines
+        iris ocr <iris-ocr.iris> <picture.png|jpg>      OCR: the text of a page photo or scan
+        iris check-ocr <iris-ocr.iris> <reference folder> [--min-text R]
+                                                       compares the OCR reader with the PyTorch reference (tools/ocr)
         iris info <model.iris>                         what a model file holds
         iris tokenize <model.spm> <text>               pieces and ids of a SentencePiece model
         """);
