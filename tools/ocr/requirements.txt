@@ -1,0 +1,2 @@
+# Tools of the OCR learning (only in CI, never part of IRIS): Pillow draws and spoils the line pictures
+pillow==12.3.0
