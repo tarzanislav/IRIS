@@ -199,3 +199,22 @@ jobs:
           echo "BASELINE_IRIS=dotnet /tmp/base/src/Iris.Cli/bin/Release/net10.0/iris.dll" >> "$GITHUB_ENV"
       - name: int8, speed and FLORES-200 quality – gates F2
         run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris
+
+  # F3: learning – loss and gradient as PyTorch computes them, learning from corrections, no harm on FLORES-200 devtest
+  learning:
+    name: Learning (F3)
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Build
+        run: dotnet build src/Iris.Cli -c Release
+      - name: OPUS-MT en-sk – Python tools, download (licence checked) and convert
+        run: bash tools/reference/prepare-opus.sh /tmp
+      - name: Reference, learning and no harm – gates F3
+        run: bash tools/reference/learning.sh /tmp/opus-en-sk /tmp/opus-en-sk.iris eng_Latn slk_Latn

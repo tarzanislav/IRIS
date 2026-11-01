@@ -63,6 +63,20 @@ public sealed class Translator
         return Load(file, int8);
     }
 
+    /// <summary>
+    /// This translator with a learned adapter. The adapter must have been learned on this very model file: its SHA-256
+    /// is compared with the one the adapter records (pass the SHA-256 of the file the model was loaded from).
+    /// </summary>
+    public Translator WithAdapter(Learning.Adapter adapter, string modelSha256)
+    {
+        if (!string.Equals(adapter.BaseSha256, modelSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new FormatException("the adapter was learned on another model file");
+        }
+
+        return new Translator(Model.WithAdapter(adapter), Tokenizer);
+    }
+
     public static Translator Load(ModelFile file, bool int8 = false)
     {
         var model = MarianModel.Load(file, int8);

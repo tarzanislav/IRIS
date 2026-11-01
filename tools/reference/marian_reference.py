@@ -6,6 +6,9 @@ program. The C# core must repeat what this script writes.
   convert MODEL_DIR OUT.iris          a Marian model → the IRIS model file (own tensor names, provenance, checksums)
   reference MODEL_DIR OUT.json [--set tiny|opus] [--count N]
                                       greedy and beam outputs of transformers for invented sentences
+  learning MODEL_DIR ADAPTER.iris OUT.json [--count N]
+                                      F3: a random low-rank adapter (queries and values of every attention) and, for
+                                      pairs of invented sentences, the loss and its gradient as PyTorch computes them
 """
 import argparse
 import datetime
@@ -367,6 +370,88 @@ def reference(model_dir: Path, out: Path, texts: list) -> None:
            f"greedy = beam in {sum(i['greedy'] == i['beam'] for i in items)} sentences")
 
 
+# ---------------------------------------------------------------------------------------------------- learning (F3)
+def learning(model_dir: Path, adapter_out: Path, out: Path, count: int) -> None:
+    """The adapter is added by hand (W·x + scale·B·A·x on q_proj and v_proj) – no further library."""
+    import torch
+    import transformers
+    from transformers import MarianMTModel, MarianTokenizer
+
+    torch.manual_seed(0)
+    model = MarianMTModel.from_pretrained(model_dir, attn_implementation="eager").eval()
+    tokenizer = MarianTokenizer.from_pretrained(model_dir)
+    for p in model.parameters():
+        p.requires_grad_(False)
+    c = model.config
+    rank, alpha, smoothing = 4, 8.0, 0.1
+    scale = alpha / rank
+    generator = torch.Generator().manual_seed(1)
+    layers = {}
+    for side, own, n in (("encoder", "enc", c.encoder_layers), ("decoder", "dec", c.decoder_layers)):
+        for i in range(n):
+            layer = getattr(model.model, side).layers[i]
+            blocks = [("self_attn", "attn" if side == "encoder" else "self")]
+            if side == "decoder":
+                blocks.append(("encoder_attn", "cross"))
+            for hf_block, own_block in blocks:
+                for proj, short in (("q_proj", "q"), ("v_proj", "v")):
+                    linear = getattr(getattr(layer, hf_block), proj)
+                    a = (torch.rand(rank, linear.in_features, generator=generator) * 2 - 1) / math.sqrt(linear.in_features)
+                    b = (torch.rand(linear.out_features, rank, generator=generator) * 2 - 1) * 0.02
+                    a.requires_grad_(True)
+                    b.requires_grad_(True)
+                    name = f"{own}.{i}.{own_block}.{short}"
+                    layers[name] = (a, b)
+                    linear.register_forward_hook(
+                        lambda module, inputs, output, a=a, b=b: output + scale * (inputs[0] @ a.T) @ b.T)
+
+    texts = invented.sentences(count)
+    targets = translated(model_dir, texts)
+    # half of the pairs get the translation of another sentence: a large loss, so every part of the gradient counts
+    pairs = [(texts[i], targets[i] if i % 2 == 0 else targets[(i + 1) % len(texts)]) for i in range(len(texts))]
+    start = int(c.decoder_start_token_id)
+    items = []
+    total = 0.0
+    for source, target in pairs:
+        encoded = tokenizer(source, text_target=target, return_tensors="pt")
+        labels = encoded["labels"][0]
+        decoder_input = torch.cat([torch.tensor([start]), labels[:-1]]).unsqueeze(0)
+        logits = model(input_ids=encoded["input_ids"], attention_mask=encoded["attention_mask"],
+                       decoder_input_ids=decoder_input).logits[0].float()
+        logp = torch.log_softmax(logits, dim=-1)
+        loss = (-(1 - smoothing) * logp.gather(1, labels.unsqueeze(1)).squeeze(1) - smoothing * logp.mean(dim=1)).sum()
+        loss.backward()
+        total += float(loss)
+        items.append({"source": source, "target": target, "source_ids": encoded["input_ids"][0].tolist(),
+                      "target_ids": labels.tolist(), "loss": float(loss)})
+
+    gradients = {}
+    probe = torch.Generator().manual_seed(2)
+    for name, (a, b) in layers.items():
+        entry = {}
+        for key, value in (("a", a), ("b", b)):
+            g = value.grad.detach().reshape(-1)
+            picks = torch.randint(0, g.numel(), (8,), generator=probe).tolist()
+            entry[key + "_norm"] = float(g.norm())
+            entry[key + "_values"] = [[int(i), float(g[i])] for i in picks]
+        gradients[name] = entry
+
+    tensors = {}
+    for name, (a, b) in layers.items():
+        tensors[name + ".lora_a"] = a.detach().numpy()
+        tensors[name + ".lora_b"] = b.detach().numpy()
+    config = {"rank": rank, "alpha": alpha, "base_sha256": "reference", "layers": sorted(layers)}
+    iris_file.write(adapter_out, "iris-adapter", config, {"source": "random adapter of the reference"},
+                    {k: tensors[k] for k in sorted(tensors)}, {})
+    source = json.loads((Path(model_dir) / SOURCE_FILE).read_text(encoding="utf-8"))
+    data = {"format": 1, "label_smoothing": smoothing,
+            "model": {"repo": source.get("repo"), "revision": source.get("revision"),
+                      "transformers": transformers.__version__, "torch": torch.__version__},
+            "pairs": items, "gradients": gradients}
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=0), encoding="utf-8")
+    notice(f"learning reference {out.name}: {len(items)} pairs, loss {total:.3f}, {len(layers)} adapted layers, rank {rank}")
+
+
 def translated(model_dir: Path, texts: list) -> list:
     """Texts translated by a model (greedy, as transformers does it) – invented sentences in another language."""
     import torch
@@ -400,6 +485,11 @@ def main() -> None:
     r.add_argument("--count", type=int, default=500)
     r.add_argument("--via", type=Path, help="a model (e.g. en-sk) that first translates the invented English sentences "
                                              "into the source language of the checked model (e.g. sk-en)")
+    lr = commands.add_parser("learning")
+    lr.add_argument("model", type=Path)
+    lr.add_argument("adapter", type=Path)
+    lr.add_argument("out", type=Path)
+    lr.add_argument("--count", type=int, default=12)
     args = parser.parse_args()
     if args.command == "tiny":
         make_tiny(args.out)
@@ -407,6 +497,8 @@ def main() -> None:
         download(args.repo, args.out, args.revision)
     elif args.command == "convert":
         convert(args.model, args.out)
+    elif args.command == "learning":
+        learning(args.model, args.adapter, args.out, args.count)
     else:
         texts = tiny_texts() if args.set == "tiny" else invented.sentences(args.count)
         if args.via:

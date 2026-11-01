@@ -93,6 +93,31 @@ public sealed class MarianTokenizer
         return [.. ids];
     }
 
+    /// <summary>
+    /// The ids of a translation (a target text, for learning): cut by the target model, the end of sentence added, as
+    /// the reference does for text_target. Special tokens in the text stay whole.
+    /// </summary>
+    public int[] EncodeTarget(string text)
+    {
+        var ids = new List<int>();
+        foreach (var (part, special) in Split(text))
+        {
+            if (special)
+            {
+                ids.Add(IdOf(part));
+                continue;
+            }
+
+            foreach (var piece in _target.Encode(part))
+            {
+                ids.Add(IdOf(piece.Text));
+            }
+        }
+
+        ids.Add(EosId);
+        return [.. ids];
+    }
+
     /// <summary>The text of a translation: special tokens are left out, the pieces are joined by the target model.</summary>
     public string Decode(IEnumerable<int> ids)
     {

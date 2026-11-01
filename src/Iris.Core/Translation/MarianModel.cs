@@ -1,12 +1,27 @@
+using Iris.Learning;
 using Iris.Model;
 using Iris.Numerics;
 
 namespace Iris.Translation;
 
-/// <summary>A dense layer: y = x · Wᵀ + b, W kept as [outputs, inputs] in float32 or int8.</summary>
-internal sealed record Dense(Matrix Weight, float[] Bias)
+/// <summary>
+/// A dense layer: y = x · Wᵀ + b, W kept as [outputs, inputs] in float32 or int8; with a learned low-rank part
+/// also + scale · (x · Aᵀ) · Bᵀ (the frozen W is never changed).
+/// </summary>
+internal sealed record Dense(Matrix Weight, float[] Bias, LowRank? Low = null, float LowScale = 0)
 {
-    public float[] Apply(float[] x, int rows) => Weight.Linear(x, rows, Bias);
+    public float[] Apply(float[] x, int rows)
+    {
+        var y = Weight.Linear(x, rows, Bias);
+        if (Low is { } low)
+        {
+            var h = Kernels.Linear(x, rows, low.A, null, low.Inputs, low.Rank);
+            var delta = Kernels.Linear(h, rows, low.B, null, low.Rank, low.Outputs);
+            Kernels.AddScaled(y, delta, LowScale);
+        }
+
+        return y;
+    }
 }
 
 internal sealed record Norm(float[] Gain, float[] Bias);
@@ -74,6 +89,90 @@ public sealed class MarianModel
 
     /// <summary>The weights are kept as int8 (one scale per row).</summary>
     public bool IsInt8 => _embed.IsInt8;
+
+    /// <summary>Whether a learned adapter is in use.</summary>
+    public bool HasAdapter { get; private init; }
+
+    internal Matrix Embedding => _embed;
+
+    internal float[] OutputBias => _outputBias;
+
+    internal float EmbedScale => _embedScale;
+
+    internal ReadOnlySpan<float> PositionRow(int position) => _positions.AsSpan(position * Config.DModel, Config.DModel);
+
+    internal IReadOnlyList<EncoderLayer> Encoder => _encoder;
+
+    internal IReadOnlyList<DecoderLayer> Decoder => _decoder;
+
+    /// <summary>Every dense layer with its name as in the model file (without ".w"), e.g. "dec.0.cross.q".</summary>
+    internal IEnumerable<(string Name, Dense Dense)> DenseLayers()
+    {
+        var list = new List<(string, Dense)>();
+        Map((name, dense) =>
+        {
+            list.Add((name, dense));
+            return dense;
+        });
+        return list;
+    }
+
+    /// <summary>
+    /// This model with a learned adapter: its low-rank parts are added to the layers they belong to. The weights are
+    /// shared, nothing is copied. An adapter learned on another model is refused by its shapes; which model file it
+    /// belongs to is checked by the caller (<see cref="Adapter.BaseSha256"/>).
+    /// </summary>
+    public MarianModel WithAdapter(Adapter adapter)
+    {
+        var used = 0;
+        var layers = adapter.Layers;
+        var model = Map((name, dense) =>
+        {
+            if (!layers.TryGetValue(name, out var low))
+            {
+                return dense with { Low = null, LowScale = 0 };
+            }
+
+            if (low.Inputs != dense.Weight.Columns || low.Outputs != dense.Weight.Rows)
+            {
+                throw new FormatException($"the adapter does not fit the model: {name}");
+            }
+
+            used++;
+            return dense with { Low = low, LowScale = adapter.Scale };
+        });
+        if (used != layers.Count)
+        {
+            throw new FormatException("the adapter has layers the model does not have");
+        }
+
+        return model;
+    }
+
+    // a copy of the model with every dense layer passed through change (in the order of the model file)
+    private MarianModel Map(Func<string, Dense, Dense> change)
+    {
+        Attention Attention(string name, Attention a) => new(change(name + ".q", a.Query), change(name + ".k", a.Key),
+            change(name + ".v", a.Value), change(name + ".o", a.Output), a.Norm);
+        FeedForward FeedForward(string name, FeedForward f) => new(change(name + ".1", f.Up), change(name + ".2", f.Down), f.Norm);
+
+        var encoder = _encoder.Select((layer, i) =>
+            new EncoderLayer(Attention($"enc.{i}.attn", layer.SelfAttention), FeedForward($"enc.{i}.ffn", layer.FeedForward))).ToArray();
+        var decoder = _decoder.Select((layer, i) => new DecoderLayer(Attention($"dec.{i}.self", layer.SelfAttention),
+            Attention($"dec.{i}.cross", layer.CrossAttention), FeedForward($"dec.{i}.ffn", layer.FeedForward))).ToArray();
+        return new MarianModel(Config, _embed, _outputBias, encoder, decoder)
+        {
+            HasAdapter = encoder.Any(l => Has(l.SelfAttention) || Has(l.FeedForward)) ||
+                decoder.Any(l => Has(l.SelfAttention) || Has(l.CrossAttention) || Has(l.FeedForward)),
+        };
+
+        static bool Has(object block) => block switch
+        {
+            Attention a => a.Query.Low is not null || a.Key.Low is not null || a.Value.Low is not null || a.Output.Low is not null,
+            FeedForward f => f.Up.Low is not null || f.Down.Low is not null,
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// Reads a model file of kind "marian" (tensor names: embed, out.bias, enc.N.*, dec.N.*). Weights may be stored
@@ -248,11 +347,13 @@ public sealed class MarianModel
     }
 
     // x = LayerNorm(x + y), post-LayerNorm as in Marian
-    private void Residual(float[] x, float[] y, int rows, Norm norm)
+    internal void Residual(float[] x, float[] y, int rows, Norm norm)
     {
         Kernels.Add(x, y);
         Kernels.LayerNorm(x, rows, Config.DModel, norm.Gain, norm.Bias, Config.LayerNormEpsilon);
     }
+
+    internal void Activate(Span<float> x) => _activation(x);
 
     private float[] FeedForwardOf(FeedForward f, float[] x, int rows)
     {
