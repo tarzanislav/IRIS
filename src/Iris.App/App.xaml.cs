@@ -183,13 +183,9 @@ public partial class App : Application
 
     private void ApplyTheme()
     {
-        IsDark = Settings.Theme switch
-        {
-            Theme.Dark => true,
-            Theme.Light => false,
-            _ => WindowsTheme.SystemIsDark(),
-        };
-        var colors = new ResourceDictionary { Source = new Uri(IsDark ? "Themes/Dark.xaml" : "Themes/Light.xaml", UriKind.Relative) };
+        var theme = Settings.Theme == Theme.System ? (WindowsTheme.SystemIsDark() ? Theme.Dark : Theme.Light) : Settings.Theme;
+        IsDark = theme is Theme.Dark or Theme.Blue;
+        var colors = new ResourceDictionary { Source = new Uri($"Themes/{theme}.xaml", UriKind.Relative) };
         Resources.MergedDictionaries[0] = colors;
         foreach (Window window in Windows)
         {

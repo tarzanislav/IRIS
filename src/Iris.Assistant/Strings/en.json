@@ -67,8 +67,8 @@
  "settings.languageSystem": "As the system",
  "settings.theme": "Appearance",
  "settings.themeSystem": "As the system",
- "settings.themeLight": "Light",
- "settings.themeDark": "Dark",
+ "settings.themeLight": "Light pastel",
+ "settings.themeDark": "Dark pastel",
  "settings.shortcut": "Translate selected text",
  "settings.privacy": "Privacy",
  "settings.privacyText": "IRIS sends nothing to the internet. The one exception: downloading a language pack when you ask for it.",
@@ -139,5 +139,7 @@
  "study.pictures": "Photos and scans of pages",
  "study.reading": "Reading the text of the pictures…",
  "study.readPages": "Pages read: {0}, lines: {1}. Check the text before pairing it.",
- "study.noOcr": "The OCR model is not installed yet. Choose the file iris-ocr.iris (part of an IRIS release)."
+ "study.noOcr": "The OCR model is not installed yet. Choose the file iris-ocr.iris (part of an IRIS release).",
+ "settings.themeMint": "Soft green",
+ "settings.themeBlue": "Blue"
 }

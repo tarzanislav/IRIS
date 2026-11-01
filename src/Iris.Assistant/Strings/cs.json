@@ -67,8 +67,8 @@
  "settings.languageSystem": "Podle systému",
  "settings.theme": "Vzhled",
  "settings.themeSystem": "Podle systému",
- "settings.themeLight": "Světlý",
- "settings.themeDark": "Tmavý",
+ "settings.themeLight": "Světlý pastelový",
+ "settings.themeDark": "Tmavý pastelový",
  "settings.shortcut": "Přeložit označený text",
  "settings.privacy": "Soukromí",
  "settings.privacyText": "IRIS nic neposílá na internet. Výjimka: stažení jazykového balíčku, když o něj požádáš.",
@@ -139,5 +139,7 @@
  "study.pictures": "Fotky a skeny stran",
  "study.reading": "Čtu text z obrázků…",
  "study.readPages": "Přečtené strany: {0}, řádky: {1}. Zkontrolujte text, než ho spárujete.",
- "study.noOcr": "Model OCR ještě není nainstalován. Vyberte soubor iris-ocr.iris (je součástí vydání IRIS)."
+ "study.noOcr": "Model OCR ještě není nainstalován. Vyberte soubor iris-ocr.iris (je součástí vydání IRIS).",
+ "settings.themeMint": "Jemně zelený",
+ "settings.themeBlue": "Modrý"
 }

@@ -19,7 +19,7 @@ internal static class SelfTest
     {
         try
         {
-            foreach (var theme in new[] { Theme.Light, Theme.Dark })
+            foreach (var theme in Enum.GetValues<Theme>())
             {
                 foreach (var language in Assistant.Strings.Texts.Languages)
                 {
