@@ -119,6 +119,7 @@ public partial class App : Application
         };
 
         Settings = Settings.Load(UserData.SettingsPath);
+        Service.UseLearned = Settings.UseLearned;
         Localizer.Instance.Use(Settings.InterfaceLanguage);
         ApplyTheme();
         SystemEvents.UserPreferenceChanged += (_, _) => Dispatcher.Invoke(ApplyTheme);

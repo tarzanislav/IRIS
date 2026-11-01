@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Iris.Assistant.Packs;
+using Iris.Learning;
 using Iris.Memory;
+using Iris.Model;
 using Iris.Translation;
 
 namespace Iris.Assistant;
@@ -18,8 +20,11 @@ public sealed record AppTranslation(string Text, IReadOnlyList<SentenceTranslati
 /// may be used from several threads. A sentence the owner corrected for this direction is taken from the memory first;
 /// without a direct pack the sentence goes through English, each half with its own glossary.
 /// </summary>
-public sealed class TranslationService(PackStore packs, Func<LanguagePair, TranslationMemory> memoryOf, Func<LanguagePair, Glossary> glossaryOf)
+public sealed class TranslationService(PackStore packs, Func<LanguagePair, TranslationMemory> memoryOf, Func<LanguagePair, Glossary> glossaryOf,
+    Func<LanguagePair, string>? learnedOf = null)
 {
+    private bool _useLearned = true;
+
     private readonly ConcurrentDictionary<LanguagePair, Lazy<Translator>> _translators = new();
     private readonly ConcurrentDictionary<LanguagePair, TranslationMemory> _memories = new();
     private readonly ConcurrentDictionary<LanguagePair, Glossary> _glossaries = new();
@@ -28,7 +33,32 @@ public sealed class TranslationService(PackStore packs, Func<LanguagePair, Trans
     public static TranslationService ForThisComputer() => new(
         new PackStore(IrisPaths.Models),
         pair => TranslationMemory.Open(IrisPaths.Memory(pair.ToString())),
-        pair => File.Exists(IrisPaths.Glossary(pair.ToString())) ? Glossary.Load(IrisPaths.Glossary(pair.ToString())) : new Glossary());
+        pair => File.Exists(IrisPaths.Glossary(pair.ToString())) ? Glossary.Load(IrisPaths.Glossary(pair.ToString())) : new Glossary(),
+        pair => IrisPaths.Learned(pair.ToString()));
+
+    /// <summary>
+    /// Whether translations use what IRIS learned for a direction (its adapter, if one passed its check). Changing it
+    /// reloads the models when they are next needed.
+    /// </summary>
+    public bool UseLearned
+    {
+        get => _useLearned;
+        set
+        {
+            if (_useLearned != value)
+            {
+                _useLearned = value;
+                _translators.Clear();
+            }
+        }
+    }
+
+    /// <summary>The file of what IRIS learned for a direction (it may not exist), or null when this service keeps none.</summary>
+    public string? LearnedPath(LanguagePair pair) => learnedOf?.Invoke(pair);
+
+    /// <summary>Whether a direction translates with a learned adapter now (after it was loaded).</summary>
+    public bool IsLearned(LanguagePair pair) =>
+        _translators.TryGetValue(pair, out var lazy) && lazy.IsValueCreated && lazy.Value.Model.HasAdapter;
 
     public PackStore Packs { get; } = packs;
 
@@ -100,5 +130,26 @@ public sealed class TranslationService(PackStore packs, Func<LanguagePair, Trans
     }
 
     private Translator TranslatorOf(LanguagePair pair) =>
-        _translators.GetOrAdd(pair, p => new Lazy<Translator>(() => Translator.Load(Packs.PathOf(p)), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        _translators.GetOrAdd(pair, p => new Lazy<Translator>(() => Load(p), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    // the model of a pack, with its learned adapter when it is wanted and belongs to this very pack file
+    private Translator Load(LanguagePair pair)
+    {
+        var path = Packs.PathOf(pair);
+        var translator = Translator.Load(path);
+        if (!_useLearned || LearnedPath(pair) is not { } learned || !File.Exists(learned))
+        {
+            return translator;
+        }
+
+        try
+        {
+            return translator.WithAdapter(Adapter.Load(learned), ModelFile.Sha256(path));
+        }
+        catch (Exception ex) when (ex is FormatException or IOException)
+        {
+            // learned on another version of the pack, or damaged: the pack alone still translates
+            return translator;
+        }
+    }
 }

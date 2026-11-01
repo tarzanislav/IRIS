@@ -23,11 +23,12 @@ internal static class SelfTest
             {
                 foreach (var language in Assistant.Strings.Texts.Languages)
                 {
-                    app.Update(s => s with { Theme = theme, InterfaceLanguage = language });
+                    // the study room is built both off and on
+                    app.Update(s => s with { Theme = theme, InterfaceLanguage = language, StudyRoom = language != "sk" });
                     Build(new MainWindow());
                     foreach (var page in new UserControl[]
                     {
-                        new TranslatePage(), new FilesPage(), new MemoryPage(), new SettingsPage(), new SoonPage("nav.voice"),
+                        new TranslatePage(), new FilesPage(), new MemoryPage(), new SettingsPage(), new SoonPage("nav.voice"), new StudyPage(),
                     })
                     {
                         var host = new Window { Content = page };

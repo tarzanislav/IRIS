@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Iris.Assistant.Study;
 
 namespace Iris.Assistant;
 
@@ -32,6 +33,12 @@ public sealed record Settings
 
     /// <summary>Whether translations are kept in the history.</summary>
     public bool SaveHistory { get; init; } = true;
+
+    /// <summary>Whether the study room is shown (learning from verified translations; off until the owner turns it on).</summary>
+    public bool StudyRoom { get; init; }
+
+    /// <summary>Whether translations use what IRIS learned (an adapter that passed its check).</summary>
+    public bool UseLearned { get; init; } = true;
 
     /// <summary>The shortcut that translates the selected text in any application.</summary>
     public string TranslateShortcut { get; init; } = "Ctrl+Shift+T";
@@ -78,4 +85,6 @@ public sealed record Settings
 internal sealed partial class SettingsJson : JsonSerializerContext;
 
 [JsonSerializable(typeof(HistoryEntry))]
+[JsonSerializable(typeof(StudyPair))]
+[JsonSerializable(typeof(LearningReport))]
 internal sealed partial class HistoryJson : JsonSerializerContext;
