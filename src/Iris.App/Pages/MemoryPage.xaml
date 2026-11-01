@@ -7,7 +7,7 @@
             <TextBlock DockPanel.Dock="Left" Style="{StaticResource PageTitle}" VerticalAlignment="Center"
                        Text="{Binding [memory.title], Source={x:Static app:Localizer.Instance}}" />
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"
+                <TextBlock Style="{StaticResource PageNote}" VerticalAlignment="Center" Margin="0,0,8,0"
                            Text="{Binding [memory.direction], Source={x:Static app:Localizer.Instance}}" />
                 <ComboBox x:Name="Direction" SelectionChanged="DirectionChanged"
                           AutomationProperties.Name="{Binding [memory.direction], Source={x:Static app:Localizer.Instance}}" />
@@ -15,15 +15,18 @@
         </DockPanel>
 
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-            <Border DockPanel.Dock="Left" Background="{DynamicResource SurfaceAlt}" CornerRadius="12" Padding="4">
+            <Border DockPanel.Dock="Left" Background="{DynamicResource Mint}" CornerRadius="20" Padding="4">
                 <StackPanel Orientation="Horizontal">
-                    <RadioButton x:Name="TabCorrections" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged" />
-                    <RadioButton x:Name="TabTerms" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged" />
-                    <RadioButton x:Name="TabHistory" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged"
+                    <RadioButton x:Name="TabCorrections" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged" />
+                    <RadioButton x:Name="TabTerms" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged" />
+                    <RadioButton x:Name="TabHistory" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged"
                                  Content="{Binding [memory.history], Source={x:Static app:Localizer.Instance}}" />
                 </StackPanel>
             </Border>
-            <TextBlock DockPanel.Dock="Right" x:Name="Shared" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0"
+            <TextBlock DockPanel.Dock="Right" x:Name="Shared" Style="{StaticResource PageNote}" VerticalAlignment="Center" Margin="12,0,0,0"
                        Text="{Binding [memory.shared], Source={x:Static app:Localizer.Instance}}" />
             <TextBox x:Name="Search" Margin="12,0,0,0" TextChanged="SearchChanged"
                      AutomationProperties.Name="{Binding [memory.search], Source={x:Static app:Localizer.Instance}}" />

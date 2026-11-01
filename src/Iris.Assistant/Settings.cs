@@ -8,9 +8,38 @@ namespace Iris.Assistant;
 /// <summary>The look of the application.</summary>
 public enum Theme
 {
+    /// <summary>Light or dark pastel, as Windows is set.</summary>
     System,
+
+    /// <summary>Light pastel: lavender, blush and mint.</summary>
     Light,
+
+    /// <summary>Dark pastel: deep violet.</summary>
     Dark,
+
+    /// <summary>Light with a soft pastel green.</summary>
+    Mint,
+
+    /// <summary>A calm, not too dark blue.</summary>
+    Blue,
+
+    /// <summary>Warm peach and coral.</summary>
+    Peach,
+
+    /// <summary>Airy sky blue.</summary>
+    Sky,
+
+    /// <summary>Rose and lilac.</summary>
+    Rose,
+
+    /// <summary>Soft sand and cream.</summary>
+    Cream,
+
+    /// <summary>A dark forest window with light sage cards.</summary>
+    Forest,
+
+    /// <summary>A graphite window with warm light cards.</summary>
+    Graphite,
 }
 
 /// <summary>

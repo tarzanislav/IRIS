@@ -133,7 +133,7 @@ jobs:
             "::error title=iris-app --selftest::$text"; exit 1
           }
           $size = [math]::Round((Get-Item out/app/iris-app.exe).Length / 1MB, 1)
-          "::notice title=iris-app.exe::self-contained single file, $size MB, every window and page built in SK, CS, EN, light and dark"
+          "::notice title=iris-app.exe::self-contained single file, $size MB, every window and page built in SK, CS, EN and every look"
       - name: Hardware script (iris-hw.bat)
         run: |
           cmd /c tools\hardware\iris-hw.bat ci-runner
