@@ -62,11 +62,28 @@ public sealed class PackStore(string folder)
     }
 
     /// <summary>Installs a pack from a stream (a download or a file the user has); checked like a download.</summary>
-    public async Task InstallAsync(PackInfo pack, Stream source, IProgress<InstallProgress>? progress = null,
+    public Task InstallAsync(PackInfo pack, Stream source, IProgress<InstallProgress>? progress = null,
+        CancellationToken cancellation = default) =>
+        SaveCheckedAsync(source, pack.File, pack.Size, pack.Sha256, PathOf(pack.Pair), progress, cancellation);
+
+    /// <summary>Downloads the OCR model of the release (models/iris-ocr.iris), checked like a pack.</summary>
+    public async Task InstallOcrAsync(OcrModelInfo model, HttpClient http, Uri releaseFolder, IProgress<InstallProgress>? progress = null,
         CancellationToken cancellation = default)
     {
+        var url = new Uri(releaseFolder, Uri.EscapeDataString(model.File));
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellation).ConfigureAwait(false);
+        await SaveCheckedAsync(stream, model.File, model.Size, model.Sha256, Path.Combine(Folder, "iris-ocr.iris"), progress, cancellation)
+            .ConfigureAwait(false);
+    }
+
+    // copies a stream to a temporary file, checks size and SHA-256, and only then puts it in place
+    private async Task SaveCheckedAsync(Stream source, string name, long size, string sha256, string target,
+        IProgress<InstallProgress>? progress, CancellationToken cancellation)
+    {
         Directory.CreateDirectory(Folder);
-        var target = PathOf(pack.Pair);
+        var pack = (File: name, Size: size, Sha256: sha256);
         var temporary = target + ".part";
         try
         {

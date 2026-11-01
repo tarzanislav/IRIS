@@ -119,26 +119,9 @@ public partial class StudyPage : UserControl
     private async void FromPicture(object sender, RoutedEventArgs e)
     {
         var box = (string)((FrameworkElement)sender).Tag == "Original" ? Original : Verified;
-        if (!File.Exists(IrisPaths.Ocr))
+        if (!File.Exists(IrisPaths.Ocr) && !await InstallOcr())
         {
-            Message.Text = Localizer.Instance["study.noOcr"];
-            var model = new Microsoft.Win32.OpenFileDialog { Filter = "IRIS OCR|*.iris" };
-            if (model.ShowDialog(Window.GetWindow(this)!) != true)
-            {
-                return;
-            }
-
-            try
-            {
-                Iris.Vision.Ocr.LineReader.Load(model.FileName);
-                Directory.CreateDirectory(IrisPaths.Models);
-                File.Copy(model.FileName, IrisPaths.Ocr, overwrite: true);
-            }
-            catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException)
-            {
-                Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
-                return;
-            }
+            return;
         }
 
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Localizer.Instance["study.pictures"] + "|*.jpg;*.jpeg;*.png", Multiselect = true };
@@ -163,6 +146,48 @@ public partial class StudyPage : UserControl
         catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException or NotSupportedException)
         {
             Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
+        }
+    }
+
+    // the OCR model: downloaded from this version's release when it offers one (checked by size and SHA-256), or
+    // chosen as a file; true when it is installed afterwards
+    private async Task<bool> InstallOcr()
+    {
+        var app = App.Current;
+        if (app.Catalog?.Ocr is { } offered)
+        {
+            Message.Text = Localizer.Instance.Format("study.downloadingOcr", Math.Round(offered.Size / 1e6));
+            try
+            {
+                await app.Service.Packs.InstallOcrAsync(offered, app.Http, app.ReleaseFolder);
+                Message.Text = "";
+                return true;
+            }
+            catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or IOException or InvalidDataException or TaskCanceledException)
+            {
+                Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
+                return false;
+            }
+        }
+
+        Message.Text = Localizer.Instance["study.noOcr"];
+        var model = new Microsoft.Win32.OpenFileDialog { Filter = "IRIS OCR|*.iris" };
+        if (model.ShowDialog(Window.GetWindow(this)!) != true)
+        {
+            return false;
+        }
+
+        try
+        {
+            Iris.Vision.Ocr.LineReader.Load(model.FileName);
+            Directory.CreateDirectory(IrisPaths.Models);
+            File.Copy(model.FileName, IrisPaths.Ocr, overwrite: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException)
+        {
+            Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
+            return false;
         }
     }
 

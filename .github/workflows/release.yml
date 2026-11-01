@@ -10,9 +10,13 @@ on:
       version:
         description: 'Version, e.g. 0.1.0 (must be the <Version> in Directory.Build.props and have docs/releases/vVERSION.md)'
         required: true
+      ocr_run:
+        description: 'Run ID of "OCR learning" whose model goes into the release (empty = no OCR model)'
+        default: 
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: release
@@ -33,6 +37,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+      actions: read
     env:
       VERSION: ${{ inputs.version }}
       GH_TOKEN: ${{ github.token }}
@@ -49,7 +54,8 @@ jobs:
           checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq '.check_runs[] | select(.conclusion != "skipped") | "\(.name)=\(.conclusion)"')
           echo "$checks"
           for gate in "Build and tests (Linux)" "Reference (transformers)" "Quality and speed (F2)" \
-            "Windows (build, tests, publish, hardware script)" "Language pair en-cs" "Language pair sk-en" "Language pair cs-en"; do
+            "Windows (build, tests, publish, hardware script)" "Language pair en-cs" "Language pair sk-en" "Language pair cs-en" \
+            "Learning (F3)"; do
             echo "$checks" | grep -qx "$gate=success" || { echo "::error::CI gate '$gate' has not passed on $GITHUB_SHA"; exit 1; }
           done
       - name: .NET 10 SDK
@@ -82,8 +88,18 @@ jobs:
             echo "$pair: $text → $sample"
             [[ "${sample,,}" == *premi* ]] || { echo "::error::the $pair model does not translate as expected: $sample"; exit 1; }
           done
-          set -a; . "$GITHUB_ENV"; set +a
           bash tools/ci/packs.sh out/assets $PAIRS | tee out/assets/packs.json
+      - name: OCR model (from the OCR learning run), checked against its PyTorch reference
+        if: inputs.ocr_run != ''
+        run: |
+          gh run download "${{ inputs.ocr_run }}" -n ocr-model -D /tmp/ocr-model
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr /tmp/ocr-model/iris-ocr.iris /tmp/ocr-model/reference
+          cp /tmp/ocr-model/iris-ocr.iris out/assets/iris-ocr.iris
+          cer=$(python3 -c "import json; r = json.load(open('/tmp/ocr-model/result.json')); print(f'CER {r[\"cer_known\"]} % / {r[\"cer_unseen\"]} % (unseen font), step {r[\"step\"]}')")
+          source="IRIS OCR, learning run ${{ inputs.ocr_run }}, $cer"
+          echo "OCR_SOURCE=$source" >> "$GITHUB_ENV"
+          echo "::notice title=OCR model::$cer"
+          OCR_FILE=iris-ocr.iris OCR_SOURCE="$source" bash tools/ci/packs.sh out/assets $PAIRS | tee out/assets/packs.json
       - name: Application for Windows (with the catalog of this release)
         run: |
           cp out/assets/packs.json src/Iris.App/packs.json
@@ -109,6 +125,12 @@ jobs:
             done
             echo "Provenance inside the files:"
             grep ' provenance:' /tmp/model-info.txt
+            if [ -f out/assets/iris-ocr.iris ]; then
+              echo
+              echo "OCR model: iris-ocr.iris – own IRIS line reader (tools/ocr), learned on generated lines (invented texts and"
+              echo "their translations by the models above, drawn with free fonts: DejaVu, Liberation, Noto, TeX Gyre, Carlito,"
+              echo "Linux Libertine) – no text or picture of anyone. ${OCR_SOURCE:-}"
+            fi
           } > out/assets/NOTICE.txt
           (cd out/assets && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
       - name: Publish the release

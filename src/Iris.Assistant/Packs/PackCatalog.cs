@@ -5,21 +5,32 @@ namespace Iris.Assistant.Packs;
 /// <summary>A language pack of a release: one model file of a pair, its size, SHA-256 and where the weights came from.</summary>
 public sealed record PackInfo(LanguagePair Pair, string File, long Size, string Sha256, string License, string Source);
 
+/// <summary>The OCR model a release offers (reads text from photos and scans of pages).</summary>
+public sealed record OcrModelInfo(string File, long Size, string Sha256, string Source);
+
 /// <summary>
 /// The language packs a release offers (packs.json, published with every release next to the model files). The
 /// application reads the catalog of its own version, so a pack is always one its core was checked with.
 /// </summary>
 public sealed class PackCatalog
 {
-    private PackCatalog(IReadOnlyList<PackInfo> packs) => Packs = packs;
+    private PackCatalog(IReadOnlyList<PackInfo> packs, OcrModelInfo? ocr)
+    {
+        Packs = packs;
+        Ocr = ocr;
+    }
 
     public IReadOnlyList<PackInfo> Packs { get; }
+
+    /// <summary>The OCR model of the release, if it has one.</summary>
+    public OcrModelInfo? Ocr { get; }
 
     public PackInfo? Find(LanguagePair pair) => Packs.FirstOrDefault(p => p.Pair == pair);
 
     /// <summary>
     /// Reads packs.json: {"format":1,"packs":[{"pair":"en-sk","file":"opus-mt-en-sk-int8.iris","size":…,"sha256":"…",
-    /// "license":"apache-2.0","source":"…"}]}. Anything else is refused, so a damaged catalog never installs a file.
+    /// "license":"apache-2.0","source":"…"}], "ocr": {"file":"iris-ocr.iris","size":…,"sha256":"…","source":"…"}} – the OCR entry
+    /// is optional. Anything else is refused, so a damaged catalog never installs a file.
     /// </summary>
     public static PackCatalog Parse(string json)
     {
@@ -49,7 +60,22 @@ public sealed class PackCatalog
                     item.GetProperty("source").GetString() ?? ""));
             }
 
-            return new PackCatalog(packs);
+            OcrModelInfo? ocr = null;
+            if (root.TryGetProperty("ocr", out var item2))
+            {
+                var file = item2.GetProperty("file").GetString() ?? "";
+                var sha = item2.GetProperty("sha256").GetString() ?? "";
+                var size = item2.GetProperty("size").GetInt64();
+                if (file.Length == 0 || file != Path.GetFileName(file) || !file.EndsWith(".iris", StringComparison.Ordinal) ||
+                    sha.Length != 64 || !sha.All(char.IsAsciiHexDigit) || size <= 0)
+                {
+                    throw new FormatException("packs.json: damaged OCR entry");
+                }
+
+                ocr = new OcrModelInfo(file, size, sha.ToLowerInvariant(), item2.GetProperty("source").GetString() ?? "");
+            }
+
+            return new PackCatalog(packs, ocr);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
