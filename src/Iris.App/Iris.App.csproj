@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Iris.Assistant\Iris.Assistant.csproj" />
+    <ProjectReference Include="..\Iris.Vision\Iris.Vision.csproj" />
     <Resource Include="Assets\iris.ico" />
     <EmbeddedResource Include="packs.json" Condition="Exists('packs.json')" LogicalName="Iris.App.packs.json" />
   </ItemGroup>

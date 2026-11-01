@@ -38,8 +38,12 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <DockPanel Grid.Column="0">
-                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Margin="0,0,0,6" MinHeight="32"
-                                   Text="{Binding [study.original], Source={x:Static app:Localizer.Instance}}" />
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" MinHeight="32">
+                            <Button DockPanel.Dock="Right" Click="FromPicture" Tag="Original" Padding="10,2" MinHeight="28"
+                                    Content="{Binding [study.fromPicture], Source={x:Static app:Localizer.Instance}}" />
+                            <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Text="{Binding [study.original], Source={x:Static app:Localizer.Instance}}" />
+                        </DockPanel>
                         <TextBox x:Name="Original" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"
                                  AutomationProperties.Name="{Binding [study.original], Source={x:Static app:Localizer.Instance}}" />
                     </DockPanel>
@@ -55,8 +59,12 @@
                                  AutomationProperties.Name="{Binding [study.other], Source={x:Static app:Localizer.Instance}}" />
                     </DockPanel>
                     <DockPanel Grid.Column="4">
-                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Margin="0,0,0,6" MinHeight="32"
-                                   Text="{Binding [study.verified], Source={x:Static app:Localizer.Instance}}" />
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" MinHeight="32">
+                            <Button DockPanel.Dock="Right" Click="FromPicture" Tag="Verified" Padding="10,2" MinHeight="28"
+                                    Content="{Binding [study.fromPicture], Source={x:Static app:Localizer.Instance}}" />
+                            <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Text="{Binding [study.verified], Source={x:Static app:Localizer.Instance}}" />
+                        </DockPanel>
                         <TextBox x:Name="Verified" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"
                                  BorderBrush="{DynamicResource GoodLine}"
                                  AutomationProperties.Name="{Binding [study.verified], Source={x:Static app:Localizer.Instance}}" />
