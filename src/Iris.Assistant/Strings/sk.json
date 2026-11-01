@@ -147,5 +147,6 @@
  "settings.themeRose": "Ružový",
  "settings.themeCream": "Krémový",
  "settings.themeForest": "Lesný",
- "settings.themeGraphite": "Grafitový"
+ "settings.themeGraphite": "Grafitový",
+ "study.downloadingOcr": "Sťahujem model OCR ({0} MB, len raz)…"
 }

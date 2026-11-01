@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Release: the catalog of language packs (packs.json) for the model files in a folder, read by the application of the
 # same version. Usage: tools/ci/packs.sh <folder> <pair>...   (file of a pair: opus-mt-<pair>-int8.iris; the revision
-# of each pair comes from OPUS_MT_<PAIR>_REVISION, set by tools/reference/prepare-opus.sh)
+# of each pair comes from OPUS_MT_<PAIR>_REVISION, set by tools/reference/prepare-opus.sh). With OCR_FILE (a file in
+# the folder) and OCR_SOURCE set, the catalog also offers the OCR model.
 set -euo pipefail
 folder=$1
 shift
@@ -21,5 +22,12 @@ shift
       "$separator" "$pair" "$file" "$size" "$sha" "$pair" "$revision"
     separator=$',\n'
   done
-  printf '\n  ]\n}\n'
+  printf '\n  ]'
+  if [ -n "${OCR_FILE:-}" ]; then
+    path="$folder/$OCR_FILE"
+    [ -f "$path" ] || { echo "::error::$OCR_FILE is missing" >&2; exit 1; }
+    printf ',\n  "ocr": {"file": "%s", "size": %s, "sha256": "%s", "source": "%s"}' \
+      "$OCR_FILE" "$(stat -c %s "$path")" "$(sha256sum "$path" | cut -d' ' -f1)" "${OCR_SOURCE:-IRIS OCR}"
+  fi
+  printf '\n}\n'
 }

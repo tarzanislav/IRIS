@@ -147,5 +147,6 @@
  "settings.themeRose": "Rose",
  "settings.themeCream": "Cream",
  "settings.themeForest": "Forest",
- "settings.themeGraphite": "Graphite"
+ "settings.themeGraphite": "Graphite",
+ "study.downloadingOcr": "Downloading the OCR model ({0} MB, only once)…"
 }

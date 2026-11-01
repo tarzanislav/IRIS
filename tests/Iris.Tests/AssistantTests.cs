@@ -30,6 +30,11 @@ public static class AssistantTests
         var catalog = PackCatalog.Parse($$"""{"format":1,"packs":[{"pair":"en-sk","file":"opus-mt-en-sk-int8.iris","size":5,"sha256":"{{sha}}","license":"apache-2.0","source":"x"}]}""");
         Assert.Equal(5L, catalog.Find(LanguagePair.Parse("en-sk"))!.Size, "an entry");
         Assert.True(catalog.Find(LanguagePair.Parse("en-cs")) is null, "a missing pair");
+        Assert.True(catalog.Ocr is null, "no OCR model offered");
+        var withOcr = PackCatalog.Parse($$$"""{"format":1,"packs":[],"ocr":{"file":"iris-ocr.iris","size":9,"sha256":"{{{sha}}}","source":"run 1"}}""");
+        Assert.Equal(9L, withOcr.Ocr!.Size, "the OCR model of a release");
+        Assert.Throws<FormatException>(() => PackCatalog.Parse($$$"""{"format":1,"packs":[],"ocr":{"file":"../x.iris","size":9,"sha256":"{{{sha}}}","source":""}}"""),
+            "an OCR file outside the models folder");
         Assert.Throws<FormatException>(() => PackCatalog.Parse($$"""{"format":1,"packs":[{"pair":"en-sk","file":"../evil.iris","size":5,"sha256":"{{sha}}","license":"","source":""}]}"""),
             "a file outside the models folder");
         Assert.Throws<FormatException>(() => PackCatalog.Parse("""{"format":1,"packs":[{"pair":"en-sk"}]}"""), "an incomplete entry");
