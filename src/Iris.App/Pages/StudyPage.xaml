@@ -8,7 +8,7 @@
                 <TextBlock DockPanel.Dock="Left" Style="{StaticResource PageTitle}" VerticalAlignment="Center"
                            Text="{Binding [study.title], Source={x:Static app:Localizer.Instance}}" />
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                    <TextBlock Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"
+                    <TextBlock Style="{StaticResource PageNote}" VerticalAlignment="Center" Margin="0,0,8,0"
                                Text="{Binding [memory.direction], Source={x:Static app:Localizer.Instance}}" />
                     <ComboBox x:Name="Direction" SelectionChanged="DirectionChanged" MinWidth="160"
                               AutomationProperties.Name="{Binding [memory.direction], Source={x:Static app:Localizer.Instance}}" />
@@ -27,7 +27,7 @@
             </Border>
 
             <StackPanel x:Name="On">
-                <TextBlock Style="{StaticResource Muted}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,12"
+                <TextBlock Style="{StaticResource PageNote}" FontSize="14" TextWrapping="Wrap" Margin="0,0,0,12"
                            Text="{Binding [study.note], Source={x:Static app:Localizer.Instance}}" />
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -41,7 +41,7 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" MinHeight="32">
                             <Button DockPanel.Dock="Right" Click="FromPicture" Tag="Original" Padding="10,2" MinHeight="28"
                                     Content="{Binding [study.fromPicture], Source={x:Static app:Localizer.Instance}}" />
-                            <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap"
+                            <TextBlock Style="{StaticResource PageCaption}" VerticalAlignment="Center" TextWrapping="Wrap"
                                        Text="{Binding [study.original], Source={x:Static app:Localizer.Instance}}" />
                         </DockPanel>
                         <TextBox x:Name="Original" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"
@@ -51,7 +51,7 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" MinHeight="32">
                             <Button DockPanel.Dock="Right" Click="FillIris" Padding="10,2" MinHeight="28"
                                     Content="{Binding [study.irisTranslation], Source={x:Static app:Localizer.Instance}}" />
-                            <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap"
+                            <TextBlock Style="{StaticResource PageCaption}" VerticalAlignment="Center" TextWrapping="Wrap"
                                        Text="{Binding [study.other], Source={x:Static app:Localizer.Instance}}" />
                         </DockPanel>
                         <TextBox x:Name="Other" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"
@@ -62,7 +62,7 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" MinHeight="32">
                             <Button DockPanel.Dock="Right" Click="FromPicture" Tag="Verified" Padding="10,2" MinHeight="28"
                                     Content="{Binding [study.fromPicture], Source={x:Static app:Localizer.Instance}}" />
-                            <TextBlock Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap"
+                            <TextBlock Style="{StaticResource PageCaption}" VerticalAlignment="Center" TextWrapping="Wrap"
                                        Text="{Binding [study.verified], Source={x:Static app:Localizer.Instance}}" />
                         </DockPanel>
                         <TextBox x:Name="Verified" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"
@@ -74,11 +74,11 @@
                 <DockPanel Margin="0,12,0,0">
                     <Button DockPanel.Dock="Right" Style="{StaticResource Primary}" Click="PairSentences" x:Name="PairButton" Margin="12,0,0,0"
                             Content="{Binding [study.pair], Source={x:Static app:Localizer.Instance}}" />
-                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0"
+                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource PageNote}" VerticalAlignment="Center" Margin="0,0,8,0"
                                Text="{Binding [study.label], Source={x:Static app:Localizer.Instance}}" />
                     <TextBox x:Name="BookLabel" AutomationProperties.Name="{Binding [study.label], Source={x:Static app:Localizer.Instance}}" />
                 </DockPanel>
-                <TextBlock x:Name="Message" Style="{StaticResource Muted}" Foreground="{DynamicResource Warn}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                <TextBlock x:Name="Message" Style="{StaticResource PageNote}" Foreground="{DynamicResource PageWarn}" Margin="0,6,0,0" TextWrapping="Wrap" />
 
                 <Border x:Name="PairsCard" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="0" Visibility="Collapsed">
                     <StackPanel>

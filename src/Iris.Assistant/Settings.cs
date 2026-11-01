@@ -22,6 +22,24 @@ public enum Theme
 
     /// <summary>A calm, not too dark blue.</summary>
     Blue,
+
+    /// <summary>Warm peach and coral.</summary>
+    Peach,
+
+    /// <summary>Airy sky blue.</summary>
+    Sky,
+
+    /// <summary>Rose and lilac.</summary>
+    Rose,
+
+    /// <summary>Soft sand and cream.</summary>
+    Cream,
+
+    /// <summary>A dark forest window with light sage cards.</summary>
+    Forest,
+
+    /// <summary>A graphite window with warm light cards.</summary>
+    Graphite,
 }
 
 /// <summary>

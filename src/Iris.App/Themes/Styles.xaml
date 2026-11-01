@@ -418,6 +418,16 @@
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
 
+    <!-- texts that stand on the window itself, outside cards (in the forest and graphite looks the window is dark
+         while the cards are light) -->
+    <Style x:Key="PageNote" TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+        <Setter Property="Foreground" Value="{DynamicResource PageMuted}" />
+    </Style>
+
+    <Style x:Key="PageCaption" TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+        <Setter Property="Foreground" Value="{DynamicResource PageMuted}" />
+    </Style>
+
     <!-- a card: white, round, lifted by a soft shadow -->
     <Style x:Key="Card" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Surface}" />

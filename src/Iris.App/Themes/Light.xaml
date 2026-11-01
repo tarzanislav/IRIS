@@ -58,4 +58,12 @@
     <SolidColorBrush x:Key="DangerLine" Color="#E3899A" />
     <SolidColorBrush x:Key="DropZone" Color="#B3FFFFFF" />
     <SolidColorBrush x:Key="DropLine" Color="#B8ACF2" />
+    <!-- texts that stand on the window itself (outside cards) and the name in the menu -->
+    <SolidColorBrush x:Key="PageText" Color="#28233F" />
+    <SolidColorBrush x:Key="PageMuted" Color="#625D7D" />
+    <SolidColorBrush x:Key="PageWarn" Color="#8F5300" />
+    <LinearGradientBrush x:Key="BrandGradient" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#4433B0" Offset="0" />
+        <GradientStop Color="#9C3DA8" Offset="1" />
+    </LinearGradientBrush>
 </ResourceDictionary>

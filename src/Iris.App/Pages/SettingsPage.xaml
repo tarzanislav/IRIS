@@ -31,6 +31,12 @@
                             <ComboBoxItem Content="{Binding [settings.themeDark], Source={x:Static app:Localizer.Instance}}" />
                             <ComboBoxItem Content="{Binding [settings.themeMint], Source={x:Static app:Localizer.Instance}}" />
                             <ComboBoxItem Content="{Binding [settings.themeBlue], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themePeach], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themeSky], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themeRose], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themeCream], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themeForest], Source={x:Static app:Localizer.Instance}}" />
+                            <ComboBoxItem Content="{Binding [settings.themeGraphite], Source={x:Static app:Localizer.Instance}}" />
                         </ComboBox>
                         <DockPanel>
                             <Border DockPanel.Dock="Right" Background="{DynamicResource Background}" BorderBrush="{DynamicResource Control}"

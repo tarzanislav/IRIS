@@ -141,5 +141,11 @@
  "study.readPages": "Pages read: {0}, lines: {1}. Check the text before pairing it.",
  "study.noOcr": "The OCR model is not installed yet. Choose the file iris-ocr.iris (part of an IRIS release).",
  "settings.themeMint": "Soft green",
- "settings.themeBlue": "Blue"
+ "settings.themeBlue": "Blue",
+ "settings.themePeach": "Peach",
+ "settings.themeSky": "Sky",
+ "settings.themeRose": "Rose",
+ "settings.themeCream": "Cream",
+ "settings.themeForest": "Forest",
+ "settings.themeGraphite": "Graphite"
 }

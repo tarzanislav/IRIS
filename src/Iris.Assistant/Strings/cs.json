@@ -141,5 +141,11 @@
  "study.readPages": "Přečtené strany: {0}, řádky: {1}. Zkontrolujte text, než ho spárujete.",
  "study.noOcr": "Model OCR ještě není nainstalován. Vyberte soubor iris-ocr.iris (je součástí vydání IRIS).",
  "settings.themeMint": "Jemně zelený",
- "settings.themeBlue": "Modrý"
+ "settings.themeBlue": "Modrý",
+ "settings.themePeach": "Broskvový",
+ "settings.themeSky": "Nebeský",
+ "settings.themeRose": "Růžový",
+ "settings.themeCream": "Krémový",
+ "settings.themeForest": "Lesní",
+ "settings.themeGraphite": "Grafitový"
 }

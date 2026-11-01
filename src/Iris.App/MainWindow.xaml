@@ -17,11 +17,11 @@
             <DockPanel Margin="14,20" LastChildFill="False">
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,2,0,22">
                     <Grid Width="34" Height="34">
-                        <Ellipse Stroke="{DynamicResource AccentGradient}" StrokeThickness="3" />
-                        <Ellipse Width="13" Height="13" Fill="{DynamicResource AccentGradient}" />
+                        <Ellipse Stroke="{DynamicResource BrandGradient}" StrokeThickness="3" />
+                        <Ellipse Width="13" Height="13" Fill="{DynamicResource BrandGradient}" />
                     </Grid>
                     <TextBlock Text="IRIS" FontFamily="{StaticResource DisplayFont}" FontSize="24" FontWeight="Bold" Margin="12,0,0,0"
-                               VerticalAlignment="Center" Foreground="{DynamicResource TitleGradient}" />
+                               VerticalAlignment="Center" Foreground="{DynamicResource BrandGradient}" />
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Top" x:Name="NavItems">
                     <RadioButton x:Name="NavTranslate" Style="{StaticResource NavItem}" GroupName="nav" Tag="translate" Checked="Navigate"

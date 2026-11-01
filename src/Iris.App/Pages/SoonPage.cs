@@ -11,7 +11,7 @@ public sealed class SoonPage : UserControl
     {
         var title = new TextBlock { Style = (Style)FindResource("PageTitle") };
         title.SetBinding(TextBlock.TextProperty, new Binding($"[{titleKey}]") { Source = Localizer.Instance });
-        var note = new TextBlock { Style = (Style)FindResource("Muted"), FontSize = 15, Margin = new Thickness(0, 12, 0, 0) };
+        var note = new TextBlock { Style = (Style)FindResource("PageNote"), FontSize = 15, Margin = new Thickness(0, 12, 0, 0) };
         note.SetBinding(TextBlock.TextProperty, new Binding("[common.soon]") { Source = Localizer.Instance });
         Content = new StackPanel { Margin = new Thickness(32, 24, 32, 24), Children = { title, note } };
     }
