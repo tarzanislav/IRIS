@@ -87,6 +87,18 @@ def main():
     decoded.draft("L", decoded.size)  # libjpeg gives the brightness plane itself
     expected("photo.jpg", np.asarray(decoded.convert("L")), {"lines": len(LINES), "skew": 3.5}, manifest)
 
+    # the same photo as a progressive JPEG (as web pages and messengers send them), and one with restart markers
+    buffer = io.BytesIO()
+    Image.fromarray(photo_rgb, "RGB").save(buffer, "JPEG", quality=85, subsampling=2, progressive=True)
+    (OUT / "progressive.jpg").write_bytes(buffer.getvalue())
+    decoded = Image.open(io.BytesIO(buffer.getvalue()))
+    decoded.draft("L", decoded.size)
+    expected("progressive.jpg", np.asarray(decoded.convert("L")), {"lines": len(LINES)}, manifest)
+    buffer = io.BytesIO()
+    base.save(buffer, "JPEG", quality=80, progressive=True, restart_marker_blocks=3)
+    (OUT / "progressive-restart.jpg").write_bytes(buffer.getvalue())
+    expected("progressive-restart.jpg", np.asarray(Image.open(io.BytesIO(buffer.getvalue()))), {}, manifest)
+
     # a gray JPEG with restart markers, and a small JPEG the camera stored sideways (EXIF orientation 6)
     buffer = io.BytesIO()
     base.save(buffer, "JPEG", quality=75, restart_marker_blocks=4)

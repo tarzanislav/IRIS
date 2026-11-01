@@ -4,9 +4,10 @@ namespace Iris.Vision.Imaging;
 
 /// <summary>
 /// JPEG (ITU-T T.81) read into gray: baseline and extended sequential Huffman images (what phones and scanners write),
-/// any sampling of the colour components, restart intervals, and the orientation the camera wrote into EXIF. Only the
-/// brightness component (Y) is decoded through the inverse DCT – the gray of a JFIF image is Y itself, so the colour
-/// components are read past and never computed.
+/// progressive images (what web pages and messengers often send), any sampling of the colour components, restart
+/// intervals, and the orientation the camera wrote into EXIF. Only the brightness component (Y) is decoded through the
+/// inverse DCT – the gray of a JFIF image is Y itself, so the colour components are read past and never computed (a
+/// progressive scan of colour alone is skipped whole).
 /// </summary>
 public static class Jpeg
 {
@@ -37,6 +38,7 @@ public static class Jpeg
         var restart = 0;
         var orientation = 1;
         var adobeTransform = -1;
+        var progressive = false;
         var position = 2;
         while (position < data.Length)
         {
@@ -78,13 +80,12 @@ public static class Jpeg
                 case 0xC4:
                     ReadHuffman(body, dc, ac);
                     break;
-                case 0xC0 or 0xC1:
+                case 0xC0 or 0xC1 or 0xC2:
                     frame = Frame.Read(body);
+                    progressive = marker == 0xC2;
                     break;
-                case 0xC2 or 0xC3 or (>= 0xC5 and <= 0xC7) or (>= 0xC9 and <= 0xCB) or (>= 0xCD and <= 0xCF):
-                    throw new NotSupportedException(marker == 0xC2
-                        ? "JPEG: progressive images are not read yet – save the photo as a baseline JPEG or PNG"
-                        : "JPEG: this kind of JPEG (lossless or arithmetic coding) is not read");
+                case 0xC3 or (>= 0xC5 and <= 0xC7) or (>= 0xC9 and <= 0xCB) or (>= 0xCD and <= 0xCF):
+                    throw new NotSupportedException("JPEG: this kind of JPEG (lossless or arithmetic coding) is not read");
                 case 0xDD:
                     restart = Read16(body, 0);
                     break;
@@ -105,11 +106,32 @@ public static class Jpeg
                         throw new NotSupportedException("JPEG: CMYK and RGB-coded JPEGs are not read – save the image as PNG");
                     }
 
-                    position = Scan(data, position + length, body, frame, quant, dc, ac, restart);
+                    position = progressive
+                        ? ProgressiveScan(data, position + length, body, frame, dc, ac, restart)
+                        : Scan(data, position + length, body, frame, quant, dc, ac, restart);
                     continue;
             }
 
             position += length;
+        }
+
+        if (progressive && frame?.Components[0].Coefficients is { } coefficients)
+        {
+            // all scans read: now the brightness blocks are complete and go through the inverse DCT
+            var luma = frame.Components[0];
+            var lumaQuant = quant[luma.Quant] ?? throw new InvalidDataException("JPEG: a quantization table is missing");
+            frame.Prepare();
+            var block = new int[64];
+            for (var by = 0; by < luma.BlocksHigh; by++)
+            {
+                for (var bx = 0; bx < luma.BlocksWide; bx++)
+                {
+                    coefficients.AsSpan((by * luma.BlocksWide + bx) * 64, 64).CopyTo(block);
+                    Idct(block, lumaQuant, luma, bx, by);
+                }
+            }
+
+            frame.Finish();
         }
 
         if (frame?.Gray is not { } gray)
@@ -287,6 +309,239 @@ public static class Jpeg
         return bits.End();
     }
 
+    /// <summary>
+    /// One scan of a progressive image (T.81, annex G): the first pass or a refinement of the DC coefficients of one
+    /// or more components, or of a band of AC coefficients (Ss … Se) of one component, each value shifted by Al. The
+    /// coefficients of the brightness component are kept until the end of the image; a scan without it is skipped.
+    /// </summary>
+    private static int ProgressiveScan(byte[] data, int start, ReadOnlySpan<byte> header, Frame frame, Huffman?[] dc, Huffman?[] ac, int restart)
+    {
+        var count = header[0];
+        if (count < 1 || header.Length < 1 + 2 * count + 3)
+        {
+            throw new InvalidDataException("JPEG: a scan header is damaged");
+        }
+
+        int first = header[1 + 2 * count], last = header[2 + 2 * count];
+        int high = header[3 + 2 * count] >> 4, low = header[3 + 2 * count] & 15;
+        if (first > last || last > 63 || (first == 0 && last != 0) || (first > 0 && count != 1))
+        {
+            throw new InvalidDataException("JPEG: a progressive scan header is damaged");
+        }
+
+        var luma = frame.Components[0];
+        var components = new Component[count];
+        for (var i = 0; i < count; i++)
+        {
+            var id = header[1 + 2 * i];
+            var component = frame.Components.FirstOrDefault(c => c.Id == id) ?? throw new InvalidDataException("JPEG: a scan names an unknown component");
+            component.Dc = dc[header[2 + 2 * i] >> 4];
+            component.Ac = ac[header[2 + 2 * i] & 15];
+            component.Predictor = 0;
+            components[i] = component;
+        }
+
+        var bits = new BitReader(data, start);
+        if (!components.Contains(luma))
+        {
+            return bits.End(); // colour only: nothing of it is needed for gray
+        }
+
+        luma.Coefficients ??= new int[luma.BlocksWide * luma.BlocksHigh * 64];
+        var scratch = new int[64];
+        var single = count == 1;
+        int mcusX = frame.McusX, mcusY = frame.McusY;
+        if (single)
+        {
+            mcusX = (int)Math.Ceiling(Math.Ceiling(frame.Width * luma.H / (double)frame.MaxH) / 8);
+            mcusY = (int)Math.Ceiling(Math.Ceiling(frame.Height * luma.V / (double)frame.MaxV) / 8);
+        }
+
+        var endOfBands = 0;
+        var todo = restart > 0 ? restart : int.MaxValue;
+        for (var my = 0; my < mcusY; my++)
+        {
+            for (var mx = 0; mx < mcusX; mx++)
+            {
+                if (todo == 0)
+                {
+                    bits.Restart();
+                    foreach (var c in components)
+                    {
+                        c.Predictor = 0;
+                    }
+
+                    endOfBands = 0;
+                    todo = restart;
+                }
+
+                todo--;
+                foreach (var c in components)
+                {
+                    int bw = single ? 1 : c.H, bh = single ? 1 : c.V;
+                    for (var by = 0; by < bh; by++)
+                    {
+                        for (var bx = 0; bx < bw; bx++)
+                        {
+                            var block = scratch.AsSpan();
+                            if (ReferenceEquals(c, luma))
+                            {
+                                int blockX = single ? mx : mx * c.H + bx, blockY = single ? my : my * c.V + by;
+                                block = luma.Coefficients.AsSpan((blockY * luma.BlocksWide + blockX) * 64, 64);
+                            }
+
+                            if (first == 0)
+                            {
+                                DcPass(ref bits, c, block, high, low);
+                            }
+                            else if (high == 0)
+                            {
+                                AcFirst(ref bits, c, block, first, last, low, ref endOfBands);
+                            }
+                            else
+                            {
+                                AcRefine(ref bits, c, block, first, last, low, ref endOfBands);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return bits.End();
+    }
+
+    // DC: the first pass gives the difference to the previous block (shifted by Al), a refinement one more low bit
+    private static void DcPass(ref BitReader bits, Component c, Span<int> block, int high, int low)
+    {
+        if (high == 0)
+        {
+            var table = c.Dc ?? throw new InvalidDataException("JPEG: a Huffman table is missing");
+            var size = table.Decode(ref bits);
+            c.Predictor += size == 0 ? 0 : Extend(bits.Bits(size), size);
+            block[0] = c.Predictor * (1 << low);
+        }
+        else if (bits.Bit() == 1)
+        {
+            block[0] |= 1 << low;
+        }
+    }
+
+    // AC, first pass of a band: runs of zeros and values as in a baseline block, and runs of whole blocks that end
+    // early (end-of-band runs) – a run left over is counted down on the following blocks
+    private static void AcFirst(ref BitReader bits, Component c, Span<int> block, int first, int last, int low, ref int endOfBands)
+    {
+        if (endOfBands > 0)
+        {
+            endOfBands--;
+            return;
+        }
+
+        var table = c.Ac ?? throw new InvalidDataException("JPEG: a Huffman table is missing");
+        for (var k = first; k <= last;)
+        {
+            var symbol = table.Decode(ref bits);
+            int run = symbol >> 4, size = symbol & 15;
+            if (size == 0)
+            {
+                if (run < 15)
+                {
+                    endOfBands = (1 << run) - 1 + (run > 0 ? bits.Bits(run) : 0);
+                    return;
+                }
+
+                k += 16;
+                continue;
+            }
+
+            k += run;
+            if (k > last)
+            {
+                throw new InvalidDataException("JPEG: a band has too many coefficients");
+            }
+
+            block[ZigZag[k]] = Extend(bits.Bits(size), size) * (1 << low);
+            k++;
+        }
+    }
+
+    // AC, refinement of a band: coefficients already non-zero get one more low bit (towards their sign); a new
+    // coefficient of ±2^Al is placed after a given number of still-zero positions; end-of-band runs refine the rest
+    private static void AcRefine(ref BitReader bits, Component c, Span<int> block, int first, int last, int low, ref int endOfBands)
+    {
+        var one = 1 << low;
+        var k = first;
+        if (endOfBands == 0)
+        {
+            var table = c.Ac ?? throw new InvalidDataException("JPEG: a Huffman table is missing");
+            while (k <= last)
+            {
+                var symbol = table.Decode(ref bits);
+                int run = symbol >> 4, size = symbol & 15;
+                var value = 0;
+                if (size != 0)
+                {
+                    value = bits.Bit() == 1 ? one : -one;
+                }
+                else if (run != 15)
+                {
+                    endOfBands = (1 << run) + (run > 0 ? bits.Bits(run) : 0);
+                    break;
+                }
+
+                // walk forward: correct the non-zero coefficients met, count down the zeros to skip
+                while (k <= last)
+                {
+                    var index = ZigZag[k];
+                    if (block[index] != 0)
+                    {
+                        Correct(ref bits, ref block[index], one);
+                    }
+                    else
+                    {
+                        if (run == 0)
+                        {
+                            break;
+                        }
+
+                        run--;
+                    }
+
+                    k++;
+                }
+
+                if (value != 0 && k <= last)
+                {
+                    block[ZigZag[k]] = value;
+                }
+
+                k++;
+            }
+        }
+
+        if (endOfBands > 0)
+        {
+            for (; k <= last; k++)
+            {
+                var index = ZigZag[k];
+                if (block[index] != 0)
+                {
+                    Correct(ref bits, ref block[index], one);
+                }
+            }
+
+            endOfBands--;
+        }
+    }
+
+    private static void Correct(ref BitReader bits, ref int coefficient, int one)
+    {
+        if (bits.Bit() == 1 && (coefficient & one) == 0)
+        {
+            coefficient += coefficient >= 0 ? one : -one;
+        }
+    }
+
     private static void DecodeBlock(ref BitReader bits, Component c, Span<int> block)
     {
         block.Clear();
@@ -405,6 +660,9 @@ public static class Jpeg
         public int BlocksHigh { get; set; }
 
         public byte[]? Plane { get; set; }
+
+        /// <summary>The coefficients of every block, kept between the scans of a progressive image (brightness only).</summary>
+        public int[]? Coefficients { get; set; }
     }
 
     private sealed class Frame
