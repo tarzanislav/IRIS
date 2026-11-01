@@ -3,16 +3,21 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="clr-namespace:Iris.App"
         Title="{Binding [mini.title], Source={x:Static app:Localizer.Instance}}"
-        Width="420" SizeToContent="Height" WindowStyle="None" ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False"
-        Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Control}" BorderThickness="1"
+        Width="452" SizeToContent="Height" WindowStyle="None" ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False"
+        AllowsTransparency="True" Background="Transparent"
         FontFamily="{StaticResource UiFont}" KeyDown="KeyPressed" Deactivated="Lost">
-    <StackPanel Margin="16">
+    <!-- a rounded card with a soft shadow, floating next to the mouse (the margin leaves room for the shadow) -->
+    <Border Margin="16" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="1" CornerRadius="22"
+            Effect="{DynamicResource CardShadow}">
+    <StackPanel Margin="18">
         <DockPanel Margin="0,0,0,10">
             <Button DockPanel.Dock="Right" MinHeight="32" MinWidth="32" Padding="0" BorderThickness="0" Click="CloseClick"
                     AutomationProperties.Name="{Binding [common.close], Source={x:Static app:Localizer.Instance}}">
                 <Path Data="M4,4 L12,12 M12,4 L4,12" Stroke="{DynamicResource TextMuted}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="16" Height="16" />
             </Button>
-            <TextBlock x:Name="Direction" Style="{StaticResource Caption}" VerticalAlignment="Center" />
+            <Border Background="{DynamicResource Lavender}" CornerRadius="12" Padding="10,4" HorizontalAlignment="Left">
+                <TextBlock x:Name="Direction" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource LavenderDeep}" VerticalAlignment="Center" />
+            </Border>
         </DockPanel>
         <TextBlock x:Name="Translation" FontSize="16" TextWrapping="Wrap" LineHeight="24" MaxHeight="320" />
         <WrapPanel Margin="0,12,0,0">
@@ -24,4 +29,5 @@
                     Content="{Binding [mini.correct], Source={x:Static app:Localizer.Instance}}" />
         </WrapPanel>
     </StackPanel>
+    </Border>
 </Window>

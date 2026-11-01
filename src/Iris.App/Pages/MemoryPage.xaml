@@ -15,11 +15,14 @@
         </DockPanel>
 
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,12">
-            <Border DockPanel.Dock="Left" Background="{DynamicResource SurfaceAlt}" CornerRadius="12" Padding="4">
+            <Border DockPanel.Dock="Left" Background="{DynamicResource Mint}" CornerRadius="20" Padding="4">
                 <StackPanel Orientation="Horizontal">
-                    <RadioButton x:Name="TabCorrections" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged" />
-                    <RadioButton x:Name="TabTerms" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged" />
-                    <RadioButton x:Name="TabHistory" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" Checked="TabChanged"
+                    <RadioButton x:Name="TabCorrections" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged" />
+                    <RadioButton x:Name="TabTerms" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged" />
+                    <RadioButton x:Name="TabHistory" Style="{StaticResource NavItem}" GroupName="memoryTabs" Margin="0" MinHeight="38" Padding="6,0"
+                                 Background="{DynamicResource Surface}" BorderBrush="{DynamicResource MintDeep}" Checked="TabChanged"
                                  Content="{Binding [memory.history], Source={x:Static app:Localizer.Instance}}" />
                 </StackPanel>
             </Border>

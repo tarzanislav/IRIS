@@ -4,42 +4,107 @@
         xmlns:app="clr-namespace:Iris.App"
         Title="IRIS" Width="1240" Height="820" MinWidth="880" MinHeight="600"
         WindowStartupLocation="CenterScreen" Icon="Assets/iris.ico"
-        Background="{DynamicResource Background}" FontFamily="{StaticResource UiFont}">
+        Background="{DynamicResource WindowBackground}" FontFamily="{StaticResource UiFont}">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="240" />
+            <ColumnDefinition Width="256" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Background="{DynamicResource Surface}" BorderBrush="{DynamicResource Border}" BorderThickness="0,0,1,0">
+        <!-- the menu: a floating, slightly see-through panel over the soft gradient of the window -->
+        <Border Grid.Column="0" Margin="14,14,0,14" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Border}"
+                BorderThickness="1" CornerRadius="26" Effect="{DynamicResource CardShadow}">
             <DockPanel Margin="14,20" LastChildFill="False">
-                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="10,4,0,18">
-                    <Viewbox Width="28" Height="28">
-                        <Canvas Width="28" Height="28">
-                            <Ellipse Width="24" Height="24" Canvas.Left="2" Canvas.Top="2" Stroke="{DynamicResource Accent}" StrokeThickness="2" />
-                            <Ellipse Width="10" Height="10" Canvas.Left="9" Canvas.Top="9" Fill="{DynamicResource Accent}" />
-                        </Canvas>
-                    </Viewbox>
-                    <TextBlock Text="IRIS" FontSize="20" FontWeight="Bold" Margin="10,0,0,0" VerticalAlignment="Center" />
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,2,0,22">
+                    <Grid Width="34" Height="34">
+                        <Ellipse Stroke="{DynamicResource AccentGradient}" StrokeThickness="3" />
+                        <Ellipse Width="13" Height="13" Fill="{DynamicResource AccentGradient}" />
+                    </Grid>
+                    <TextBlock Text="IRIS" FontFamily="{StaticResource DisplayFont}" FontSize="24" FontWeight="Bold" Margin="12,0,0,0"
+                               VerticalAlignment="Center" Foreground="{DynamicResource TitleGradient}" />
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Top" x:Name="NavItems">
-                    <RadioButton x:Name="NavTranslate" Style="{StaticResource NavItem}" GroupName="nav" Tag="translate"
-                                 Content="{Binding [nav.translate], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
-                    <RadioButton x:Name="NavVoice" Style="{StaticResource NavItem}" GroupName="nav" Tag="voice"
-                                 Content="{Binding [nav.voice], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
-                    <RadioButton x:Name="NavFiles" Style="{StaticResource NavItem}" GroupName="nav" Tag="files"
-                                 Content="{Binding [nav.files], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
-                    <RadioButton x:Name="NavMemory" Style="{StaticResource NavItem}" GroupName="nav" Tag="memory"
-                                 Content="{Binding [nav.memory], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
-                    <RadioButton x:Name="NavLearning" Style="{StaticResource NavItem}" GroupName="nav" Tag="learning"
-                                 Content="{Binding [nav.learning], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
-                    <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" GroupName="nav" Tag="settings"
-                                 Content="{Binding [nav.settings], Source={x:Static app:Localizer.Instance}}" Checked="Navigate" />
+                    <RadioButton x:Name="NavTranslate" Style="{StaticResource NavItem}" GroupName="nav" Tag="translate" Checked="Navigate"
+                                 Background="{DynamicResource Lavender}" BorderBrush="{DynamicResource LavenderDeep}"
+                                 AutomationProperties.Name="{Binding [nav.translate], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Lavender}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource LavenderDeep}"
+                                      Data="M3,4 H12 V11 H7 L4,14 V11 H3 Z M10,8 H19 V15 H18 V18 L15,15 H10 Z" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.translate], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="NavVoice" Style="{StaticResource NavItem}" GroupName="nav" Tag="voice" Checked="Navigate"
+                                 Background="{DynamicResource Pink}" BorderBrush="{DynamicResource PinkDeep}"
+                                 AutomationProperties.Name="{Binding [nav.voice], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Pink}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource PinkDeep}"
+                                      Data="M10,2 A3,3 0 0 1 13,5 V10 A3,3 0 0 1 7,10 V5 A3,3 0 0 1 10,2 Z M4,10 A6,6 0 0 0 16,10 M10,16 V19" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.voice], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="NavFiles" Style="{StaticResource NavItem}" GroupName="nav" Tag="files" Checked="Navigate"
+                                 Background="{DynamicResource Peach}" BorderBrush="{DynamicResource PeachDeep}"
+                                 AutomationProperties.Name="{Binding [nav.files], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Peach}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource PeachDeep}"
+                                      Data="M5,2 H12 L16,6 V18 H5 Z M12,2 V6 H16 M8,10 H13 M8,13 H13" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.files], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="NavMemory" Style="{StaticResource NavItem}" GroupName="nav" Tag="memory" Checked="Navigate"
+                                 Background="{DynamicResource Mint}" BorderBrush="{DynamicResource MintDeep}"
+                                 AutomationProperties.Name="{Binding [nav.memory], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Mint}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource MintDeep}"
+                                      Data="M2,4 H8 A2,2 0 0 1 10,6 V18 A2,2 0 0 0 8,16 H2 Z M18,4 H12 A2,2 0 0 0 10,6 V18 A2,2 0 0 1 12,16 H18 Z" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.memory], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="NavLearning" Style="{StaticResource NavItem}" GroupName="nav" Tag="learning" Checked="Navigate"
+                                 Background="{DynamicResource Sky}" BorderBrush="{DynamicResource SkyDeep}"
+                                 AutomationProperties.Name="{Binding [nav.learning], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Sky}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource SkyDeep}"
+                                      Data="M7,16 H13 M8,19 H12 M10,1 A6,6 0 0 1 14,11.5 C13,12.5 13,13.5 13,14 H7 C7,13.5 7,12.5 6,11.5 A6,6 0 0 1 10,1 Z" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.learning], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" GroupName="nav" Tag="settings" Checked="Navigate"
+                                 Background="{DynamicResource Lilac}" BorderBrush="{DynamicResource LilacDeep}"
+                                 AutomationProperties.Name="{Binding [nav.settings], Source={x:Static app:Localizer.Instance}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{StaticResource NavIcon}" Background="{DynamicResource Lilac}">
+                                <Path Style="{StaticResource IconPath}" Stroke="{DynamicResource LilacDeep}"
+                                      Data="M2,5 H18 M2,15 H18 M7,2 V8 M13,12 V18" />
+                            </Border>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding [nav.settings], Source={x:Static app:Localizer.Instance}}"
+                                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=RadioButton}}" />
+                        </StackPanel>
+                    </RadioButton>
                 </StackPanel>
-                <Border DockPanel.Dock="Bottom" Background="{DynamicResource Background}" CornerRadius="10" Padding="12">
+                <Border DockPanel.Dock="Bottom" Background="{DynamicResource Mint}" CornerRadius="18" Padding="14,12">
                     <StackPanel>
-                        <TextBlock Text="{Binding [status.offline], Source={x:Static app:Localizer.Instance}}" FontWeight="SemiBold" FontSize="13" />
-                        <TextBlock Text="{Binding [status.private], Source={x:Static app:Localizer.Instance}}" Style="{StaticResource Muted}" />
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Fill="{DynamicResource MintDeep}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding [status.offline], Source={x:Static app:Localizer.Instance}}" FontWeight="SemiBold" FontSize="13"
+                                       Margin="8,0,0,0" Foreground="{DynamicResource MintDeep}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding [status.private], Source={x:Static app:Localizer.Instance}}" Style="{StaticResource Muted}" Margin="0,4,0,0" />
                         <TextBlock x:Name="Packs" Style="{StaticResource Muted}" Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
