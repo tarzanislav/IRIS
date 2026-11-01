@@ -1,7 +1,7 @@
 """Real sentences for the OCR lines: invented English sentences (tools/reference/sentences.py) and their Slovak and
 Czech translations by the OPUS-MT models of IRIS (greedy, in batches). Only in CI.
 
-  sentences.py OUT_DIR COUNT EN_SK_MODEL_DIR EN_CS_MODEL_DIR"""
+  sentences.py OUT_DIR COUNT EN_SK_MODEL_DIR EN_CS_MODEL_DIR [SEED]"""
 import sys
 from pathlib import Path
 
@@ -27,7 +27,8 @@ def translate(model_dir, texts, batch=32):
 def main():
     out, count, en_sk, en_cs = Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4]
     out.mkdir(parents=True, exist_ok=True)
-    english = invented.sentences(count, seed=4242)
+    seed = int(sys.argv[5]) if len(sys.argv) > 5 else 4242
+    english = invented.sentences(count, seed=seed)
     (out / "en.txt").write_text("\n".join(english) + "\n", encoding="utf-8")
     for language, model in (("sk", en_sk), ("cs", en_cs)):
         lines = [line.replace("\n", " ") for line in translate(model, english)]

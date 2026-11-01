@@ -2,7 +2,9 @@ name: OCR learning
 
 # Teaches the IRIS line reader (tools/ocr) on rendered lines – PyTorch and Pillow only here, as tools. Started by hand
 # (with the minutes to learn and, to go on, the run whose result to continue) or by a push to a branch train/ocr*.
-# The result (model file, checkpoint, CER, reference lines) is kept as the artifact "ocr-model".
+# The result (model file, checkpoint, CER, reference lines) is kept as the artifact "ocr-model". With more rounds a
+# successful run starts the next one itself, which continues its result: learning over several days, the rate
+# falling along all the rounds, every round on other sentences.
 
 on:
   workflow_dispatch:
@@ -13,12 +15,24 @@ on:
       resume_run:
         description: 'Run ID whose ocr-model to continue (empty = start anew)'
         default: ''
+      rounds:
+        description: 'Runs in a row, each continuing the previous one (1 = only this run)'
+        default: '1'
+      rate:
+        description: 'Highest learning rate of the plan (1e-3 from the start, smaller to go on)'
+        default: '1e-3'
+      new_plan:
+        description: 'Start a new plan of the rate over all the rounds (no = the next round of a plan)'
+        type: choice
+        options: ['yes', 'no']
+        default: 'yes'
   push:
     branches: ['train/ocr*']
 
 permissions:
   contents: read
-  actions: read
+  # read: the earlier result; write: to start the next round
+  actions: write
 
 concurrency:
   group: ocr-learning
@@ -39,6 +53,9 @@ jobs:
       # a branch train/ocr*-smoke only tries everything for a few minutes
       MINUTES: ${{ inputs.minutes || (endsWith(github.ref_name, '-smoke') && '6' || '320') }}
       SENTENCES: ${{ endsWith(github.ref_name, '-smoke') && '200' || '4000' }}
+      ROUNDS: ${{ inputs.rounds || '1' }}
+      RATE: ${{ inputs.rate || '1e-3' }}
+      NEW_PLAN: ${{ inputs.new_plan || 'yes' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free fonts (SIL OFL, DejaVu/Bitstream Vera, GUST) – only to draw the learning lines
@@ -52,7 +69,11 @@ jobs:
           bash tools/reference/prepare-opus.sh /tmp en-cs
           /tmp/venv/bin/pip install -q -r tools/ocr/requirements.txt
       - name: Sentences (invented English, translated by IRIS's models)
-        run: /tmp/venv/bin/python tools/ocr/sentences.py /tmp/ocr-sentences "$SENTENCES" /tmp/opus-en-sk /tmp/opus-en-cs
+        # the first round as always, the later ones each on other sentences
+        run: |
+          seed=4242
+          [ "$NEW_PLAN" = "no" ] && seed=$((4242 + GITHUB_RUN_NUMBER))
+          /tmp/venv/bin/python tools/ocr/sentences.py /tmp/ocr-sentences "$SENTENCES" /tmp/opus-en-sk /tmp/opus-en-cs "$seed"
       - name: Earlier result to continue
         if: inputs.resume_run != ''
         run: gh run download "${{ inputs.resume_run }}" -n ocr-model -D /tmp/resume
@@ -62,7 +83,9 @@ jobs:
           [ -f /tmp/resume/checkpoint.pt ] && resume="--resume /tmp/resume/checkpoint.pt"
           evaluate=600
           [ "$MINUTES" -lt 30 ] && evaluate=40
-          /tmp/venv/bin/python tools/ocr/train.py /tmp/ocr --minutes "$MINUTES" --sentences /tmp/ocr-sentences --workers 3 --eval "$evaluate" $resume
+          plan=""
+          [ "$NEW_PLAN" != "no" ] && plan="--plan $((ROUNDS * MINUTES)) --rate $RATE"
+          /tmp/venv/bin/python tools/ocr/train.py /tmp/ocr --minutes "$MINUTES" --sentences /tmp/ocr-sentences --workers 3 --eval "$evaluate" $resume $plan
       - name: .NET 10 SDK
         if: always()
         run: |
@@ -88,3 +111,9 @@ jobs:
             /tmp/ocr/check.txt
             /tmp/ocr/reference/
           retention-days: 90
+      - name: The next round
+        if: success() && env.ROUNDS > 1
+        run: |
+          gh workflow run ocr.yml --ref "$GITHUB_REF_NAME" -f minutes="$MINUTES" -f resume_run="$GITHUB_RUN_ID" \
+            -f rounds=$((ROUNDS - 1)) -f new_plan=no
+          echo "::notice title=OCR::the next round started, $((ROUNDS - 1)) to go"

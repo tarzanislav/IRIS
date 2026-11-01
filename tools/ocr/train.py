@@ -1,6 +1,6 @@
 """Teaches the IRIS line reader (model.py) on rendered lines (render.py, textgen.py) – only in CI, PyTorch as a tool.
 
-  train.py OUT_DIR --minutes M [--resume checkpoint.pt] [--sentences DIR] [--small]
+  train.py OUT_DIR --minutes M [--resume checkpoint.pt] [--plan TOTAL_MINUTES] [--sentences DIR] [--small]
 
 Learns until the time is up (the learning rate falls along the time), measures the character error rate (CER) on a
 fixed set of lines – fonts it learned on and one family it never saw – keeps a checkpoint, and at the end writes the
@@ -148,6 +148,8 @@ def main():
     parser.add_argument("out", type=Path)
     parser.add_argument("--minutes", type=float, default=300)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--plan", type=float, help="minutes of the whole learning from now on, over several runs "
+                        "(the rate falls along all of them; later runs read the plan from the checkpoint)")
     parser.add_argument("--sentences", type=Path)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--rate", type=float, default=1e-3)
@@ -164,15 +166,24 @@ def main():
           f"{ {k: len(v) for k, v in texts.items()} }", flush=True)
     model = Reader(len(CHARS) + 1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.rate, weight_decay=1e-4)
-    step, spent = 0, 0.0
+    step, spent, plan = 0, 0.0, None
     if args.resume and args.resume.exists():
         state = torch.load(args.resume, weights_only=False)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
-        step, spent = state["step"], state["minutes"]
+        step, spent, plan = state["step"], state["minutes"], state.get("plan")
         print(f"resumed at step {step} after {spent:.0f} minutes", flush=True)
 
-    total = spent + args.minutes
+    # the cosine of the rate spans the whole plan (several runs); a new plan starts from its own warm-up
+    if args.plan:
+        plan = {"start": spent, "end": spent + args.plan, "rate": args.rate}
+    elif not plan or plan["end"] <= spent + 1:
+        plan = {"start": spent, "end": spent + args.minutes, "rate": args.rate}
+    total = min(spent + args.minutes, plan["end"])
+    first = step
+    print(f"learning until {total:.0f} minutes, the rate {plan['rate']:.0e} falls from {plan['start']:.0f} "
+          f"until {plan['end']:.0f} minutes", flush=True)
+
     known = fixed_set(learn_fonts, texts, 7777, args.eval)
     unseen = fixed_set(unseen_fonts, texts, 8888, args.eval // 2) if unseen_fonts else []
     ctc = nn.CTCLoss(blank=0, zero_infinity=True)
@@ -184,8 +195,9 @@ def main():
         elapsed = spent + (time.time() - start) / 60
         if elapsed >= total:
             break
-        # warm up for the first 500 steps, then a cosine fall along the time
-        rate = args.rate * min(1.0, (step + 1) / 500) * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * elapsed / total)))
+        # warm up for the first 500 steps of each run, then a cosine fall along the time of the plan
+        phase = min(1.0, (elapsed - plan["start"]) / (plan["end"] - plan["start"]))
+        rate = plan["rate"] * min(1.0, (step - first + 1) / 500) * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * phase)))
         for group in optimizer.param_groups:
             group["lr"] = rate
         logits = model(pictures)
@@ -203,10 +215,10 @@ def main():
                             "cer_unseen": round(cer(model, unseen), 2) if unseen else None})
             print(f"CER {history[-1]}", flush=True)
             torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step,
-                        "minutes": elapsed}, args.out / "checkpoint.pt")
+                        "minutes": elapsed, "plan": plan}, args.out / "checkpoint.pt")
 
     elapsed = spent + (time.time() - start) / 60
-    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step, "minutes": elapsed},
+    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step, "minutes": elapsed, "plan": plan},
                args.out / "checkpoint.pt")
     result = {"step": step, "minutes": round(elapsed), "cer_known": round(cer(model, known), 2),
               "cer_unseen": round(cer(model, unseen), 2) if unseen else None,
