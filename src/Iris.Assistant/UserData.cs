@@ -1,7 +1,8 @@
 namespace Iris.Assistant;
 
 /// <summary>
-/// The files of the user's own data in the IRIS folder – corrections, glossaries, history, settings – as opposed to the
+/// The files of the user's own data in the IRIS folder – corrections, glossaries, history, settings, the study room and
+/// what IRIS learned from it – as opposed to the
 /// language packs. "Delete all my data" deletes exactly these.
 /// </summary>
 public static class UserData
@@ -20,7 +21,8 @@ public static class UserData
 
         static bool Own(string name) =>
             name.StartsWith("memory-", StringComparison.Ordinal) || name.StartsWith("glossary-", StringComparison.Ordinal) ||
-            name.StartsWith("history.", StringComparison.Ordinal) || name.StartsWith("settings.", StringComparison.Ordinal);
+            name.StartsWith("history.", StringComparison.Ordinal) || name.StartsWith("settings.", StringComparison.Ordinal) ||
+            name.StartsWith("study-", StringComparison.Ordinal) || name.StartsWith("learned-", StringComparison.Ordinal);
         return [.. Directory.EnumerateFiles(home).Where(f => Own(Path.GetFileName(f))).Order(StringComparer.Ordinal)];
     }
 

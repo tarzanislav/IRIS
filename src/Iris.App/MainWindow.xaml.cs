@@ -59,7 +59,7 @@ public partial class MainWindow : Window
                 "memory" => new MemoryPage(),
                 "settings" => new SettingsPage(),
                 "voice" => new SoonPage("nav.voice"),
-                _ => new SoonPage("nav.learning"),
+                _ => new StudyPage(),
             };
             _pages[name] = page;
         }
