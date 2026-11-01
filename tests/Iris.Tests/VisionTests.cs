@@ -38,7 +38,7 @@ public static class VisionTests
     [Test]
     public static void JpegPhotosAreReadLikeLibjpeg()
     {
-        foreach (var name in new[] { "photo.jpg", "restart.jpg", "sideways.jpg" })
+        foreach (var name in new[] { "photo.jpg", "restart.jpg", "sideways.jpg", "progressive.jpg", "progressive-restart.jpg" })
         {
             var image = ImageFile.Read(Data(name));
             var meta = Expected[name]!;
