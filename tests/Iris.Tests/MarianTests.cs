@@ -168,7 +168,8 @@ internal sealed class TinyModel : IDisposable
 
     public string Path { get; }
 
-    public static TinyModel Create(int d = 16, int layers = 2, int heads = 4, int ffn = 32, string activation = "swish")
+    // learnable: unit LayerNorms and larger token vectors, so the model can become sure of a token (for learning tests)
+    public static TinyModel Create(int d = 16, int layers = 2, int heads = 4, int ffn = 32, string activation = "swish", bool learnable = false)
     {
         var spmPath = System.IO.Path.Combine(AppContext.BaseDirectory, "testdata", "tokenizer", "nfkc.model");
         var spm = SentencePieceModel.Load(spmPath);
@@ -197,7 +198,20 @@ internal sealed class TinyModel : IDisposable
             tensors.Add((name, shape, values));
         }
 
-        Add("embed", 0.5f, v, d);
+        void AddNorm(string name)
+        {
+            if (learnable)
+            {
+                tensors.Add((name + ".g", [d], Enumerable.Repeat(1f, d).ToArray()));
+                tensors.Add((name + ".b", [d], new float[d]));
+                return;
+            }
+
+            Add(name + ".g", 1f, d);
+            Add(name + ".b", 0.1f, d);
+        }
+
+        Add("embed", learnable ? 2f : 0.5f, v, d);
         Add("out.bias", 1f, v);
         foreach (var (side, blocks) in new[] { ("enc", new[] { "attn" }), ("dec", new[] { "self", "cross" }) })
         {
@@ -211,16 +225,14 @@ internal sealed class TinyModel : IDisposable
                         Add($"{side}.{l}.{b}.{p}.b", 0.1f, d);
                     }
 
-                    Add($"{side}.{l}.{b}.ln.g", 1f, d);
-                    Add($"{side}.{l}.{b}.ln.b", 0.1f, d);
+                    AddNorm($"{side}.{l}.{b}.ln");
                 }
 
                 Add($"{side}.{l}.ffn.1.w", 0.3f, ffn, d);
                 Add($"{side}.{l}.ffn.1.b", 0.1f, ffn);
                 Add($"{side}.{l}.ffn.2.w", 0.3f, d, ffn);
                 Add($"{side}.{l}.ffn.2.b", 0.1f, d);
-                Add($"{side}.{l}.ffn.ln.g", 1f, d);
-                Add($"{side}.{l}.ffn.ln.b", 0.1f, d);
+                AddNorm($"{side}.{l}.ffn.ln");
             }
         }
 

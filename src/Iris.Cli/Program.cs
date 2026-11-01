@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using Iris.Cli;
 using Iris.Evaluation;
+using Iris.Learning;
 using Iris.Memory;
 using Iris.Model;
 using Iris.Tokenization;
@@ -16,13 +17,17 @@ try
     {
         ["tokenize", var model, .. var words] when words.Length > 0 => Tokenize(model, string.Join(' ', words)),
         ["info", var model] => Info(model),
-        ["translate", var model, .. var rest] => Translate(model, Options.Parse(rest, ["--greedy", "--ids", "--int8"], ["--beams", "--memory", "--glossary"])),
+        ["translate", var model, .. var rest] => Translate(model,
+            Options.Parse(rest, ["--greedy", "--ids", "--int8"], ["--beams", "--memory", "--glossary", "--adapter"])),
+        ["learn", var model, var pairs, var adapter, .. var rest] => Learn(model, pairs, adapter,
+            Options.Parse(rest, ["--int8"], ["--epochs", "--batch", "--rate", "--rank", "--smoothing", "--limit", "--layers"])),
+        ["check-learning", var model, var adapter, var reference] => CheckLearning(model, adapter, reference),
         ["verify", var model, var reference, .. var rest] => Verify(model, reference,
             Options.Parse(rest, ["--no-greedy", "--no-beam", "--int8"], ["--min-greedy", "--min-beam", "--min-tokenizer", "--limit"])),
         ["bench", var model, .. var rest] => Bench(model, Options.Parse(rest, ["--int8"], ["--runs", "--max-seconds"])),
         ["quantize", var source, var target] => Quantize(source, target),
         ["score", var model, var source, var references, .. var rest] => Score(model, source, references,
-            Options.Parse(rest, ["--greedy", "--int8"], ["--beams", "--limit", "--out"])),
+            Options.Parse(rest, ["--greedy", "--int8"], ["--beams", "--limit", "--out", "--adapter"])),
         ["chrf", var hypotheses, var references] => ChrfOfFiles(hypotheses, references),
         ["remember", var memoryPath, var source, var target] => Remember(memoryPath, source, target),
         _ => Usage(),
@@ -58,13 +63,165 @@ static int Info(string path)
     return 0;
 }
 
-static Translator Load(string modelPath, bool int8, TextWriter log)
+static Translator Load(string modelPath, bool int8, TextWriter log, string? adapterPath = null)
 {
     var watch = Stopwatch.StartNew();
     var translator = Translator.Load(modelPath, int8);
-    log.WriteLine($"model loaded in {watch.Elapsed.TotalSeconds:0.00} s{(translator.Model.IsInt8 ? " (int8)" : "")}; " +
+    var learned = "";
+    if (adapterPath is not null)
+    {
+        var adapter = Adapter.Load(adapterPath);
+        translator = translator.WithAdapter(adapter, ModelFile.Sha256(modelPath));
+        learned = $", adapter of {adapter.Parameters:N0} learned values";
+    }
+
+    log.WriteLine($"model loaded in {watch.Elapsed.TotalSeconds:0.00} s{(translator.Model.IsInt8 ? " (int8)" : "")}{learned}; " +
                   $"{Environment.ProcessorCount} processors");
     return translator;
+}
+
+// F3: learns an adapter from pairs (source TAB translation per line); the model file is not changed
+static int Learn(string modelPath, string pairsPath, string adapterPath, Options options)
+{
+    options.NoWords();
+    if (File.Exists(adapterPath) && Path.GetFullPath(adapterPath) == Path.GetFullPath(modelPath))
+    {
+        throw new UsageException("the adapter must be another file than the model");
+    }
+
+    var lines = File.ReadAllLines(pairsPath).Where(l => l.Trim().Length > 0).Take(options.Int("--limit", 1) ?? int.MaxValue).ToList();
+    var texts = lines.Select((line, i) => line.Split('\t') is [var source, var target] && source.Trim().Length > 0 && target.Trim().Length > 0
+        ? (Source: source.Trim(), Target: target.Trim())
+        : throw new UsageException($"line {i + 1} of the pairs is not 'sentence TAB translation'")).ToList();
+    var translator = Load(modelPath, options.Has("--int8"), Console.Out);
+    var pairs = texts.Select(t => new TrainingPair(translator.Tokenizer.Encode(t.Source), translator.Tokenizer.EncodeTarget(t.Target))).ToList();
+    var layers = options.Value("--layers")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var adapter = Adapter.Create(translator.Model, ModelFile.Sha256(modelPath), options.Int("--rank", 1) ?? 8,
+        targets: layers);
+    var settings = new LearningSettings
+    {
+        Epochs = options.Int("--epochs", 1) ?? 3,
+        BatchSize = options.Int("--batch", 1) ?? 8,
+        LearningRate = (float)(options.Number("--rate") ?? 5e-4),
+        LabelSmoothing = (float)(options.Number("--smoothing") ?? 0.1),
+    };
+    var trainer = new MarianTrainer(translator.Model, adapter);
+    var usable = pairs.Where(trainer.Fits).ToList();
+    var tokens = usable.Sum(p => p.Source.Length + p.Target.Length);
+    Console.WriteLine($"{usable.Count} pairs ({pairs.Count - usable.Count} too long), {tokens:N0} tokens; adapter: rank {adapter.Rank}, " +
+                      $"{adapter.Layers.Count} layers, {adapter.Parameters:N0} learned values; {settings.Epochs} epochs, batch {settings.BatchSize}, " +
+                      $"rate {settings.LearningRate.ToString(CultureInfo.InvariantCulture)}");
+    var start = trainer.Loss(usable);
+    var watch = Stopwatch.StartNew();
+    var last = TimeSpan.Zero;
+    var end = trainer.Train(usable, settings, new Progress<LearningProgress>(p =>
+    {
+        if (watch.Elapsed - last >= TimeSpan.FromSeconds(10) || p.Step == p.Steps)
+        {
+            last = watch.Elapsed;
+            Console.WriteLine($"  step {p.Step}/{p.Steps}: loss {p.Loss:0.000} ({watch.Elapsed.TotalSeconds:0} s)");
+        }
+    }));
+    var seconds = watch.Elapsed.TotalSeconds;
+    var after = trainer.Loss(usable);
+    var perPair = seconds / (usable.Count * (double)settings.Epochs);
+    adapter.With(new System.Text.Json.Nodes.JsonObject
+    {
+        // what was learned is described by counts and checksums only – never by the texts or names of files
+        ["learned"] = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        ["pairs"] = usable.Count,
+        ["pairs_sha256"] = ModelFile.Sha256(pairsPath),
+        ["epochs"] = settings.Epochs,
+        ["batch"] = settings.BatchSize,
+        ["rate"] = settings.LearningRate,
+        ["label_smoothing"] = settings.LabelSmoothing,
+        ["loss_before"] = Math.Round(start, 4),
+        ["loss_after"] = Math.Round(after, 4),
+        ["int8"] = translator.Model.IsInt8,
+    }).Save(adapterPath);
+    Console.WriteLine($"loss per token {start:0.000} → {after:0.000} (smoothing 0; last epoch with smoothing {end:0.000}); " +
+                      $"{seconds:0} s, {perPair:0.00} s per pair and epoch; adapter written ({new FileInfo(adapterPath).Length / 1e6:0.0} MB)");
+    return 0;
+}
+
+// F3 against the reference: loss and gradient of an adapter on pairs, as PyTorch computed them (marian_reference.py learning)
+static int CheckLearning(string modelPath, string adapterPath, string referencePath)
+{
+    var translator = Load(modelPath, false, Console.Out);
+    var adapter = Adapter.Load(adapterPath);
+    var reference = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(referencePath))!.AsObject();
+    var smoothing = reference["label_smoothing"]!.GetValue<float>();
+    var trainer = new MarianTrainer(translator.Model, adapter);
+    var failures = new List<string>();
+    var pairs = reference["pairs"]!.AsArray();
+    var training = new List<TrainingPair>();
+    foreach (var item in pairs)
+    {
+        var source = item!["source_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray();
+        var target = item["target_ids"]!.AsArray().Select(n => n!.GetValue<int>()).ToArray();
+        if (!translator.Tokenizer.Encode(item["source"]!.GetValue<string>()).SequenceEqual(source) ||
+            !translator.Tokenizer.EncodeTarget(item["target"]!.GetValue<string>()).SequenceEqual(target))
+        {
+            failures.Add($"token ids differ: {item["source"]}");
+        }
+
+        training.Add(new TrainingPair(source, target));
+    }
+
+    var gradient = trainer.Gradient(training, smoothing);
+    double worstLoss = 0;
+    for (var i = 0; i < pairs.Count; i++)
+    {
+        var item = pairs[i]!;
+        var loss = gradient.Losses[i];
+        var expected = item["loss"]!.GetValue<double>();
+        var error = Math.Abs(loss - expected) / Math.Max(1, Math.Abs(expected));
+        worstLoss = Math.Max(worstLoss, error);
+        if (error > 1e-4)
+        {
+            failures.Add($"loss {loss:0.0000} instead of {expected:0.0000}: {item["source"]}");
+        }
+    }
+
+    double worstNorm = 0, worstValue = 0;
+    var compared = 0;
+    foreach (var (name, node) in reference["gradients"]!.AsObject())
+    {
+        foreach (var key in new[] { "a", "b" })
+        {
+            var own = key == "a" ? gradient.A[name] : gradient.B[name];
+            var norm = Math.Sqrt(own.Sum(v => (double)v * v));
+            var expectedNorm = node![key + "_norm"]!.GetValue<double>();
+            var normError = Math.Abs(norm - expectedNorm) / Math.Max(expectedNorm, 1e-6);
+            worstNorm = Math.Max(worstNorm, normError);
+            if (normError > 1e-3)
+            {
+                failures.Add($"{name}.{key}: gradient norm {norm:g6} instead of {expectedNorm:g6}");
+            }
+
+            foreach (var pick in node[key + "_values"]!.AsArray())
+            {
+                var index = pick![0]!.GetValue<int>();
+                var value = pick[1]!.GetValue<double>();
+                var valueError = Math.Abs(own[index] - value) / (Math.Abs(value) + expectedNorm * 1e-3 + 1e-9);
+                worstValue = Math.Max(worstValue, valueError);
+                compared++;
+                if (valueError > 1e-2)
+                {
+                    failures.Add($"{name}.{key}[{index}]: {own[index]:g6} instead of {value:g6}");
+                }
+            }
+        }
+    }
+
+    Console.WriteLine($"{pairs.Count} pairs, {adapter.Layers.Count} layers, {compared} gradient values: worst loss difference " +
+                      $"{worstLoss:e1}, gradient norm {worstNorm:e1}, values {worstValue:e1}");
+    foreach (var failure in failures.Take(20))
+    {
+        Console.WriteLine($"  FAIL {failure}");
+    }
+
+    return failures.Count == 0 ? 0 : 1;
 }
 
 // the text of the words, or every line of the input when there are none
@@ -79,7 +236,7 @@ static int Translate(string modelPath, Options options)
         throw new UsageException("--ids shows the bare model and cannot be used with --memory or --glossary");
     }
 
-    var translator = Load(modelPath, options.Has("--int8"), Console.Error);
+    var translator = Load(modelPath, options.Has("--int8"), Console.Error, options.Value("--adapter"));
     void One(string text)
     {
         if (showIds)
@@ -247,7 +404,7 @@ static int Score(string modelPath, string sourcePath, string referencesPath, Opt
         throw new UsageException($"{sources.Count} source lines, {references.Count} references");
     }
 
-    var translator = Load(modelPath, options.Has("--int8"), Console.Out);
+    var translator = Load(modelPath, options.Has("--int8"), Console.Out, options.Value("--adapter"));
     var watch = Stopwatch.StartNew();
     var translations = new List<string>();
     foreach (var line in sources)
@@ -288,11 +445,18 @@ static int Usage()
             --memory <file>                            translation memory (corrected sentences, JSON lines)
             --glossary <file>                          names and titles: "term" or "term TAB translation" per line
             --ids                                      the bare model, with token ids (not with --memory, --glossary)
+            --adapter <file>                           what IRIS learned (iris learn) for this model file
+        iris learn <model.iris> <pairs.tsv> <adapter.iris> [options]
+                                                       learns from pairs "sentence TAB translation" (F3); the model stays
+            --epochs N (3), --batch N (8), --rate R (0.0005), --rank N (8), --smoothing R (0.1), --limit N
+            --layers q,v                               which layers learn (q k v o of attention, 1 2 of feed-forward)
+        iris check-learning <model.iris> <adapter.iris> <reference.json>
+                                                       compares loss and gradients with the reference (tools/reference)
         iris remember <memory.jsonl> <sentence> <translation>
                                                        remembers a corrected translation of a sentence
         iris bench <model.iris> [--runs N] [--max-seconds S] [--int8]
                                                        time of the title and introduction of an article
-        iris score <model.iris> <source.txt> <references.txt> [--beams N | --greedy] [--int8] [--limit N] [--out file]
+        iris score <model.iris> <source.txt> <references.txt> [--beams N | --greedy] [--int8] [--limit N] [--out file] [--adapter file]
                                                        translates a test set line by line, chrF against the references
         iris chrf <translations.txt> <references.txt>  chrF (character 6-grams, β = 2, as sacreBLEU)
         iris quantize <model.iris> <model-int8.iris>   an int8 copy of a model file (about a quarter of the size)
