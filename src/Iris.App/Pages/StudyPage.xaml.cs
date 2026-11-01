@@ -115,6 +115,57 @@ public partial class StudyPage : UserControl
         }
     }
 
+    // the text of photos or scans of pages (several at once, in the order chosen), read by the OCR of IRIS
+    private async void FromPicture(object sender, RoutedEventArgs e)
+    {
+        var box = (string)((FrameworkElement)sender).Tag == "Original" ? Original : Verified;
+        if (!File.Exists(IrisPaths.Ocr))
+        {
+            Message.Text = Localizer.Instance["study.noOcr"];
+            var model = new Microsoft.Win32.OpenFileDialog { Filter = "IRIS OCR|*.iris" };
+            if (model.ShowDialog(Window.GetWindow(this)!) != true)
+            {
+                return;
+            }
+
+            try
+            {
+                Iris.Vision.Ocr.LineReader.Load(model.FileName);
+                Directory.CreateDirectory(IrisPaths.Models);
+                File.Copy(model.FileName, IrisPaths.Ocr, overwrite: true);
+            }
+            catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException)
+            {
+                Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
+                return;
+            }
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog { Filter = Localizer.Instance["study.pictures"] + "|*.jpg;*.jpeg;*.png", Multiselect = true };
+        if (dialog.ShowDialog(Window.GetWindow(this)!) != true)
+        {
+            return;
+        }
+
+        var files = dialog.FileNames;
+        Message.Text = Localizer.Instance["study.reading"];
+        try
+        {
+            var pages = await Task.Run(() =>
+            {
+                var reader = Iris.Vision.Ocr.LineReader.Load(IrisPaths.Ocr);
+                return files.Select(f => Iris.Vision.Ocr.PageOcr.Read(Iris.Vision.Imaging.ImageFile.Read(f), reader)).ToList();
+            });
+            var text = string.Join("\n\n", pages.Select(p => p.Text));
+            box.Text = box.Text.Trim().Length == 0 ? text : box.Text.TrimEnd() + "\n\n" + text;
+            Message.Text = Localizer.Instance.Format("study.readPages", pages.Count, pages.Sum(p => p.Lines.Count));
+        }
+        catch (Exception ex) when (ex is IOException or FormatException or InvalidDataException or NotSupportedException)
+        {
+            Message.Text = Localizer.Instance.Format("common.failed", ex.Message);
+        }
+    }
+
     private async void PairSentences(object sender, RoutedEventArgs e)
     {
         var (original, verified, pair) = (Original.Text, Verified.Text, Pair);

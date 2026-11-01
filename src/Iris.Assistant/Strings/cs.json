@@ -134,5 +134,10 @@
  "study.tooFew": "Je potřeba aspoň {0} párů (ověřené páry a opravy celkem).",
  "study.learning": "Učím se… Může to trvat několik minut, aplikaci mezitím můžete používat.",
  "study.step": "Učím se: krok {0} z {1}",
- "study.stopped": "Učení zastaveno; dříve naučené zůstává."
+ "study.stopped": "Učení zastaveno; dříve naučené zůstává.",
+ "study.fromPicture": "Z obrázku…",
+ "study.pictures": "Fotky a skeny stran",
+ "study.reading": "Čtu text z obrázků…",
+ "study.readPages": "Přečtené strany: {0}, řádky: {1}. Zkontrolujte text, než ho spárujete.",
+ "study.noOcr": "Model OCR ještě není nainstalován. Vyberte soubor iris-ocr.iris (je součástí vydání IRIS)."
 }

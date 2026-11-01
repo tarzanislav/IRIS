@@ -82,6 +82,15 @@ public static class VisionTests
     }
 
     [Test]
+    public static void LinesOfABookPageBecomeRunningText()
+    {
+        var text = Iris.Vision.Ocr.PageOcr.Join(["Svetlo sa láme na rozhra-", "ní dvoch prostredí. Pozri", "obr. 3 a tab. X-", "Ray."]);
+        Assert.Equal("Svetlo sa láme na rozhraní dvoch prostredí. Pozri obr. 3 a tab. X- Ray.", text,
+            "a word cut at the end of a line is joined; a hyphen before a capital stays");
+        Assert.Equal("", Iris.Vision.Ocr.PageOcr.Join([]), "nothing read");
+    }
+
+    [Test]
     public static void APhotoOfAPageIsStraightenedAndItsLinesFound()
     {
         var clean = PageReader.Prepare(ImageFile.Read(Data("page.png")));

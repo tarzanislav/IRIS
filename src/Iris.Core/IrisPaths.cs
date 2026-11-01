@@ -17,6 +17,9 @@ public static class IrisPaths
     /// <summary>Model files (.iris).</summary>
     public static string Models => Path.Combine(Home, "models");
 
+    /// <summary>The OCR model (reads text from photos and scans of pages).</summary>
+    public static string Ocr => Path.Combine(Models, "iris-ocr.iris");
+
     /// <summary>The translation memory of a language pair, e.g. "en-sk".</summary>
     public static string Memory(string pair) => Path.Combine(Home, $"memory-{Pair(pair)}.jsonl");
 

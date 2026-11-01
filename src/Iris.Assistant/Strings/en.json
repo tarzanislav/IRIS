@@ -134,5 +134,10 @@
  "study.tooFew": "At least {0} pairs are needed (verified pairs and corrections together).",
  "study.learning": "Learning… This can take a few minutes; you can keep using the application.",
  "study.step": "Learning: step {0} of {1}",
- "study.stopped": "Learning stopped; what was learned before stays."
+ "study.stopped": "Learning stopped; what was learned before stays.",
+ "study.fromPicture": "From a picture…",
+ "study.pictures": "Photos and scans of pages",
+ "study.reading": "Reading the text of the pictures…",
+ "study.readPages": "Pages read: {0}, lines: {1}. Check the text before pairing it.",
+ "study.noOcr": "The OCR model is not installed yet. Choose the file iris-ocr.iris (part of an IRIS release)."
 }

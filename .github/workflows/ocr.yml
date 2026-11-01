@@ -1,0 +1,90 @@
+name: OCR learning
+
+# Teaches the IRIS line reader (tools/ocr) on rendered lines – PyTorch and Pillow only here, as tools. Started by hand
+# (with the minutes to learn and, to go on, the run whose result to continue) or by a push to a branch train/ocr*.
+# The result (model file, checkpoint, CER, reference lines) is kept as the artifact "ocr-model".
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Minutes of learning (at most about 320 per run)'
+        default: '320'
+      resume_run:
+        description: 'Run ID whose ocr-model to continue (empty = start anew)'
+        default: ''
+  push:
+    branches: ['train/ocr*']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ocr-learning
+  cancel-in-progress: false
+
+env:
+  HF_HUB_DISABLE_TELEMETRY: '1'
+  DO_NOT_TRACK: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  learn:
+    name: Learn the line reader
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # a branch train/ocr*-smoke only tries everything for a few minutes
+      MINUTES: ${{ inputs.minutes || (endsWith(github.ref_name, '-smoke') && '6' || '320') }}
+      SENTENCES: ${{ endsWith(github.ref_name, '-smoke') && '200' || '4000' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free fonts (SIL OFL, DejaVu/Bitstream Vera, GUST) – only to draw the learning lines
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core fonts-dejavu-extra fonts-liberation2 \
+            fonts-noto-core fonts-texgyre fonts-crosextra-carlito fonts-crosextra-caladea fonts-linuxlibertine
+      - name: Python tools (PyTorch, transformers, Pillow) and the OPUS-MT models en-sk, en-cs
+        run: |
+          bash tools/reference/prepare-opus.sh /tmp en-sk
+          bash tools/reference/prepare-opus.sh /tmp en-cs
+          /tmp/venv/bin/pip install -q -r tools/ocr/requirements.txt
+      - name: Sentences (invented English, translated by IRIS's models)
+        run: /tmp/venv/bin/python tools/ocr/sentences.py /tmp/ocr-sentences "$SENTENCES" /tmp/opus-en-sk /tmp/opus-en-cs
+      - name: Earlier result to continue
+        if: inputs.resume_run != ''
+        run: gh run download "${{ inputs.resume_run }}" -n ocr-model -D /tmp/resume
+      - name: Learn
+        run: |
+          resume=""
+          [ -f /tmp/resume/checkpoint.pt ] && resume="--resume /tmp/resume/checkpoint.pt"
+          evaluate=600
+          [ "$MINUTES" -lt 30 ] && evaluate=40
+          /tmp/venv/bin/python tools/ocr/train.py /tmp/ocr --minutes "$MINUTES" --sentences /tmp/ocr-sentences --workers 3 --eval "$evaluate" $resume
+      - name: .NET 10 SDK
+        if: always()
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get install -y -q dotnet-sdk-10.0; fi
+      - name: The C# reader against PyTorch (reference lines)
+        run: |
+          dotnet build src/Iris.Cli -c Release
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr /tmp/ocr/iris-ocr.iris /tmp/ocr/reference | tee /tmp/ocr/check.txt
+          echo "::notice title=OCR in C#::$(tail -1 /tmp/ocr/check.txt)"
+      - name: Result
+        if: always()
+        run: |
+          [ -f /tmp/ocr/result.json ] || exit 0
+          python3 -c "import json; r = json.load(open('/tmp/ocr/result.json')); print(f'::notice title=OCR::step {r[\"step\"]}, {r[\"minutes\"]} min, CER {r[\"cer_known\"]} % (learned fonts), {r[\"cer_unseen\"]} % (unseen font), {r[\"parameters\"]:,} parameters')"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ocr-model
+          path: |
+            /tmp/ocr/iris-ocr.iris
+            /tmp/ocr/checkpoint.pt
+            /tmp/ocr/result.json
+            /tmp/ocr/check.txt
+            /tmp/ocr/reference/
+          retention-days: 90
