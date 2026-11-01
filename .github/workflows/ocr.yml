@@ -63,6 +63,15 @@ jobs:
           evaluate=600
           [ "$MINUTES" -lt 30 ] && evaluate=40
           /tmp/venv/bin/python tools/ocr/train.py /tmp/ocr --minutes "$MINUTES" --sentences /tmp/ocr-sentences --workers 3 --eval "$evaluate" $resume
+      - name: .NET 10 SDK
+        if: always()
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get install -y -q dotnet-sdk-10.0; fi
+      - name: The C# reader against PyTorch (reference lines)
+        run: |
+          dotnet build src/Iris.Cli -c Release
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr /tmp/ocr/iris-ocr.iris /tmp/ocr/reference | tee /tmp/ocr/check.txt
+          echo "::notice title=OCR in C#::$(tail -1 /tmp/ocr/check.txt)"
       - name: Result
         if: always()
         run: |
@@ -76,5 +85,6 @@ jobs:
             /tmp/ocr/iris-ocr.iris
             /tmp/ocr/checkpoint.pt
             /tmp/ocr/result.json
+            /tmp/ocr/check.txt
             /tmp/ocr/reference/
           retention-days: 90
