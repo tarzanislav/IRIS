@@ -22,6 +22,7 @@ try
         ["learn", var model, var pairs, var adapter, .. var rest] => Learn(model, pairs, adapter,
             Options.Parse(rest, ["--int8"], ["--epochs", "--batch", "--rate", "--rank", "--smoothing", "--limit", "--layers"])),
         ["check-learning", var model, var adapter, var reference] => CheckLearning(model, adapter, reference),
+        ["lines", var picture, .. var rest] => Lines(picture, Options.Parse(rest, [], ["--out"])),
         ["verify", var model, var reference, .. var rest] => Verify(model, reference,
             Options.Parse(rest, ["--no-greedy", "--no-beam", "--int8"], ["--min-greedy", "--min-beam", "--min-tokenizer", "--limit"])),
         ["bench", var model, .. var rest] => Bench(model, Options.Parse(rest, ["--int8"], ["--runs", "--max-seconds"])),
@@ -436,6 +437,34 @@ static int Remember(string memoryPath, string source, string target)
     return 0;
 }
 
+// OCR step O1: a picture of a page → straightened, its lines found (with --out: the page and each line as PNG)
+static int Lines(string picturePath, Options options)
+{
+    options.NoWords();
+    var watch = Stopwatch.StartNew();
+    var picture = Iris.Vision.Imaging.ImageFile.Read(picturePath);
+    var read = watch.Elapsed.TotalSeconds;
+    var page = Iris.Vision.Layout.PageReader.Prepare(picture);
+    Console.WriteLine($"{picture.Width} × {picture.Height}, read in {read:0.00} s; slant {page.Skew.ToString("0.00", CultureInfo.InvariantCulture)}°, " +
+                      $"{page.Lines.Count} lines ({watch.Elapsed.TotalSeconds:0.00} s)");
+    foreach (var (line, i) in page.Lines.Select((l, i) => (l, i)))
+    {
+        Console.WriteLine($"  line {i + 1}: x {line.X}, y {line.Y}, {line.Width} × {line.Height}");
+    }
+
+    if (options.Value("--out") is { } folder)
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, "page.png"), Iris.Vision.Imaging.Png.Write(page.Image));
+        foreach (var (line, i) in page.Lines.Select((l, i) => (l, i)))
+        {
+            File.WriteAllBytes(Path.Combine(folder, $"line-{i + 1:000}.png"), Iris.Vision.Imaging.Png.Write(line.Image));
+        }
+    }
+
+    return 0;
+}
+
 static int Usage()
 {
     Console.Error.WriteLine("""
@@ -464,6 +493,7 @@ static int Usage()
                                                        compares the core with reference data (tools/reference)
             --min-greedy R, --min-beam R, --min-tokenizer R   matches needed (0.99, 0.95, 1)
             --limit N, --no-greedy, --no-beam, --int8
+        iris lines <picture.png|jpg> [--out folder]     OCR: straightens a page photo or scan and finds its lines
         iris info <model.iris>                         what a model file holds
         iris tokenize <model.spm> <text>               pieces and ids of a SentencePiece model
         """);

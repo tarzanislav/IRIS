@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- IRIS vision: reading images (own PNG and JPEG decoders), cleaning a photo or scan of a page, finding its lines
+       of text and – later – reading them (own OCR). Pure .NET, no packages; runs on every platform. -->
+  <PropertyGroup>
+    <RootNamespace>Iris.Vision</RootNamespace>
+    <Description>IRIS vision: own image decoders, page cleaning, text lines and OCR.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Core\Iris.Core.csproj" />
+    <InternalsVisibleTo Include="Iris.Tests" />
+  </ItemGroup>
+</Project>

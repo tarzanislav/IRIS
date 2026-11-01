@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Iris.Core\Iris.Core.csproj" />
     <ProjectReference Include="..\..\src\Iris.Assistant\Iris.Assistant.csproj" />
+    <ProjectReference Include="..\..\src\Iris.Vision\Iris.Vision.csproj" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,42 @@
+{
+ "gray16.png": {
+  "height": 470,
+  "width": 980
+ },
+ "la.png": {
+  "height": 470,
+  "width": 980
+ },
+ "page.png": {
+  "height": 470,
+  "lines": 6,
+  "width": 980
+ },
+ "palette.png": {
+  "height": 470,
+  "width": 980
+ },
+ "photo.jpg": {
+  "height": 470,
+  "lines": 6,
+  "skew": 3.5,
+  "width": 980
+ },
+ "restart.jpg": {
+  "height": 470,
+  "width": 980
+ },
+ "rgb.png": {
+  "height": 470,
+  "width": 980
+ },
+ "rgba.png": {
+  "height": 470,
+  "width": 980
+ },
+ "sideways.jpg": {
+  "height": 118,
+  "orientation": 6,
+  "width": 245
+ }
+}
