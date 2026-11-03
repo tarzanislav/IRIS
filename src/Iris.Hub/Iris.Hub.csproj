@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>iris-hub</AssemblyName>
+    <RootNamespace>Iris.Hub</RootNamespace>
+    <Description>iris-hub – the hub of the IRIS learning in a classroom (runs on a server that is always on).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Lab\Iris.Lab.csproj" />
+  </ItemGroup>
+</Project>

@@ -9,6 +9,7 @@
     <ProjectReference Include="..\..\src\Iris.Core\Iris.Core.csproj" />
     <ProjectReference Include="..\..\src\Iris.Assistant\Iris.Assistant.csproj" />
     <ProjectReference Include="..\..\src\Iris.Vision\Iris.Vision.csproj" />
+    <ProjectReference Include="..\..\src\Iris.Lab\Iris.Lab.csproj" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
