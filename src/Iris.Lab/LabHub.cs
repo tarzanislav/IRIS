@@ -42,6 +42,14 @@ public sealed record LabHubOptions
     /// <summary>Sentences for the lines (sk.txt, cs.txt, en.txt), sent to every computer; may be null.</summary>
     public string? Sentences { get; init; }
 
+    /// <summary>Folders with fonts on the hub: with them it measures how well the model reads every few rounds (CER).</summary>
+    public IReadOnlyList<string>? Fonts { get; init; }
+
+    /// <summary>Every how many rounds the hub tests the model, and on how many lines.</summary>
+    public int TestEvery { get; init; } = 6;
+
+    public int TestLines { get; init; } = 300;
+
     /// <summary>The clock (tests set their own).</summary>
     public Func<DateTime> Now { get; init; } = () => DateTime.Now;
 }
@@ -62,6 +70,9 @@ public sealed class LabHub
     private readonly Lock _gate = new();
     private readonly List<JsonObject> _rounds = [];
     private readonly Dictionary<string, string[]> _sentences;
+    private readonly LabHistory _history;
+    private readonly List<JsonObject> _tests = [];
+    private readonly Lazy<(OcrNetwork Network, List<TrainingLine> Known, List<TrainingLine> Unseen)?> _tester;
     private OcrWeights _weights;
     private OcrLearningState _state;
     private Round? _round;
@@ -76,6 +87,14 @@ public sealed class LabHub
         _weights = weights;
         _state = state;
         _sentences = LineTexts.ReadSentences(options.Sentences);
+        _history = new LabHistory(Path.Combine(options.Folder, "history"));
+        _tester = new(MakeTester);
+        var tests = Path.Combine(options.Folder, "tests.jsonl");
+        if (File.Exists(tests))
+        {
+            _tests.AddRange(File.ReadLines(tests).TakeLast(200).Select(l => JsonNode.Parse(l) as JsonObject).OfType<JsonObject>());
+        }
+
         var log = Path.Combine(options.Folder, "rounds.jsonl");
         if (File.Exists(log))
         {
@@ -160,7 +179,8 @@ public sealed class LabHub
                     ["done"] = _round.Done.Count,
                 },
                 ["agents"] = agents,
-                ["rounds"] = new JsonArray([.. _rounds.TakeLast(50).Select(r => (JsonNode?)r.DeepClone())]),
+                ["rounds"] = new JsonArray([.. _rounds.TakeLast(200).Select(r => (JsonNode?)r.DeepClone())]),
+                ["tests"] = new JsonArray([.. _tests.TakeLast(200).Select(r => (JsonNode?)r.DeepClone())]),
             };
         }
     }
@@ -264,6 +284,12 @@ public sealed class LabHub
         {
             _state = _state with { Step = _state.Step + 1, Minutes = _state.Minutes + _options.RoundMinutes };
             Save();
+            if (_options.Fonts is { Count: > 0 } && _state.Step % Math.Max(1, _options.TestEvery) == 0)
+            {
+                var copy = _weights.Copy();
+                var version = _state.Step;
+                _ = Task.Run(() => Test(copy, version));
+            }
         }
 
         var entry = new JsonObject
@@ -372,6 +398,7 @@ public sealed class LabHub
                                 agent.Status = message.Header;
                             }
 
+                            _history.Record(agent.Name, message.Header, _options.Now());
                             break;
                         case MessageKind.Delta:
                             Receive(agent, message);
@@ -443,6 +470,13 @@ public sealed class LabHub
                     case MessageKind.Snapshot:
                         await channel.SendAsync(new LabMessage(MessageKind.Snapshot, Snapshot()), cancel);
                         break;
+                    case MessageKind.History:
+                        var now = _options.Now();
+                        var from = message.Header["from"]?.GetValue<DateTime>() ?? now.AddHours(-12);
+                        var to = message.Header["to"]?.GetValue<DateTime>() ?? now;
+                        var history = _history.Query(from, to, message.Header["agent"]?.GetValue<string>(), message.Header["bucket"]?.GetValue<int>() ?? 5);
+                        await channel.SendAsync(new LabMessage(MessageKind.History, history), cancel);
+                        break;
                     case MessageKind.Command:
                         var target = message.Header["target"]?.GetValue<string>() ?? "";
                         var command = message.Header["command"]?.GetValue<string>() ?? "";
@@ -464,6 +498,79 @@ public sealed class LabHub
             }
         }
         catch (Exception e) when (e is IOException or LabProtocolException or OperationCanceledException or JsonException or SocketException)
+        {
+        }
+    }
+
+    // the test sets of the hub, drawn once (fonts it learns from, and Caladea when the server has it, never learned)
+    private (OcrNetwork Network, List<TrainingLine> Known, List<TrainingLine> Unseen)? MakeTester()
+    {
+        var faces = LineArtist.FindFonts(_options.Fonts ?? [], _weights.Shape.Charset, ["Math", "Display", "Unifont", "Symbol"]);
+        if (faces.Count == 0)
+        {
+            return null;
+        }
+
+        var unseenFaces = faces.Where(f => f.Name.Contains("Caladea", StringComparison.OrdinalIgnoreCase)).ToList();
+        var knownFaces = faces.Except(unseenFaces).ToList();
+        List<TrainingLine> Draw(List<Iris.Vision.Fonts.FontFace> list, int seed, int count)
+        {
+            var lines = new List<TrainingLine>();
+            if (list.Count == 0)
+            {
+                return lines;
+            }
+
+            var artist = new LineArtist(list);
+            var texts = new LineTexts(_weights.Shape, _sentences, seed);
+            var random = new Random(seed);
+            while (lines.Count < count)
+            {
+                if (artist.Line(texts.Next(), _weights.Shape, random) is { } line)
+                {
+                    lines.Add(line);
+                }
+            }
+
+            return lines;
+        }
+
+        return (new OcrNetwork(new OcrWeights(_weights.Shape)) { Threads = Math.Max(1, Environment.ProcessorCount / 2) },
+            Draw(knownFaces.Count > 0 ? knownFaces : faces, 7777, _options.TestLines), Draw(unseenFaces, 8888, _options.TestLines / 2));
+    }
+
+    private void Test(OcrWeights weights, int version)
+    {
+        try
+        {
+            if (_tester.Value is not { } tester)
+            {
+                return;
+            }
+
+            lock (tester.Network)
+            {
+                foreach (var (target, source) in TensorPack.Tensors(tester.Network.Weights).Zip(TensorPack.Tensors(weights)))
+                {
+                    source.Values.CopyTo(target.Values, 0);
+                }
+
+                var entry = new JsonObject
+                {
+                    ["version"] = version,
+                    ["time"] = _options.Now().ToString("o", CultureInfo.InvariantCulture),
+                    ["cer"] = Math.Round(OcrTrainer.Cer(tester.Network, tester.Known), 2),
+                    ["cer_unseen"] = tester.Unseen.Count > 0 ? Math.Round(OcrTrainer.Cer(tester.Network, tester.Unseen), 2) : null,
+                };
+                lock (_gate)
+                {
+                    _tests.Add(entry);
+                }
+
+                File.AppendAllText(Path.Combine(_options.Folder, "tests.jsonl"), entry.ToJsonString() + "\n");
+            }
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or ArgumentException)
         {
         }
     }

@@ -38,6 +38,9 @@ public enum MessageKind : byte
 
     /// <summary>Hub → agent: no model now (outside the time of learning or waiting for the round), with the seconds to wait.</summary>
     Wait = 8,
+
+    /// <summary>Console → hub: the history of a span (from, to, computer, bucket minutes); hub → console: the series (JSON).</summary>
+    History = 9,
 }
 
 /// <summary>A message: its kind, a small JSON header and binary data (tensors), possibly empty.</summary>
