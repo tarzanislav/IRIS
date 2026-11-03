@@ -562,6 +562,8 @@ public sealed class NetworkPage : ConsolePage
         _root.Children.Add(Ui.Text(auto
             ? $"Automatické budenie je zapnuté: o {schedule?["from"]} server zobudí vypnuté počítače učebne a o {schedule?["until"]} ich zasa vypne (tie, ktoré boli zapnuté, nechá tak)."
             : "Automatické budenie je vypnuté (iris-hub --wake no).", 13, brush: "TextMuted"));
+        ((TextBlock)_root.Children[^1]).MaxWidth = 900;
+        ((TextBlock)_root.Children[^1]).Margin = new Thickness(8, 0, 8, 6);
         if (_note is not null)
         {
             _root.Children.Add(Ui.Text(_note, 13, bold: true, brush: "Accent"));
