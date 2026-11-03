@@ -110,9 +110,17 @@ internal static class Ui
     }
 
     public static string Number(JsonNode? node, string format = "0", string unit = "") =>
-        node is JsonValue v && v.TryGetValue(out double d) ? d.ToString(format, CultureInfo.InvariantCulture) + unit : "–";
+        Value(node) is var d && double.IsFinite(d) ? d.ToString(format, CultureInfo.InvariantCulture) + unit : "–";
 
-    public static double Value(JsonNode? node) => node is JsonValue v && v.TryGetValue(out double d) ? d : double.NaN;
+    /// <summary>A number of a JSON value, whatever it was made from (a parsed number, an int, a long, a double); NaN when none.</summary>
+    public static double Value(JsonNode? node) => node switch
+    {
+        JsonValue v when v.TryGetValue(out double d) => d,
+        JsonValue v when v.TryGetValue(out int i) => i,
+        JsonValue v when v.TryGetValue(out long l) => l,
+        JsonValue v when v.TryGetValue(out float f) => f,
+        _ => double.NaN,
+    };
 
     /// <summary>The state of a computer in words, with its colors.</summary>
     public static (string Text, string Background, string Foreground) State(JsonObject agent)

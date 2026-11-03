@@ -83,7 +83,7 @@ public sealed class OverviewPage : ConsolePage
         var numbers = new UniformGrid { Columns = 5 };
         numbers.Children.Add(Number("Počítače", $"{connected} / {agents.Count}", "pripojené"));
         numbers.Children.Add(Number("Učia sa", learning.ToString(CultureInfo.InvariantCulture), open ? "čas učenia" : $"učenie od {schedule?["from"]}"));
-        numbers.Children.Add(Number("Riadky za sekundu", speed.ToString("0.0", CultureInfo.InvariantCulture), "celá učebňa"));
+        numbers.Children.Add(Number("Riadky/s", speed.ToString("0.0", CultureInfo.InvariantCulture), "celá učebňa"));
         numbers.Children.Add(Number("Model", $"v{snapshot?["version"] ?? 0}", test is null ? "chybovosť zatiaľ nezmeraná" : $"chybovosť {Ui.Number(test["cer"], "0.00", " %")}"));
         numbers.Children.Add(Number("Kolo", round is null ? "–" : $"{round["number"]}", round is null ? (open ? "čaká na počítače" : "mimo času učenia") : Left(round["deadline"])));
         _root.Children.Add(numbers);
@@ -201,7 +201,12 @@ public sealed class ComputersPage : ConsolePage
 {
     private readonly StackPanel _root = new() { Margin = new Thickness(4) };
 
-    public ComputersPage() => Content = Scroll(_root);
+    public ComputersPage()
+    {
+        var scroll = Scroll(_root);
+        scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+        Content = scroll;
+    }
 
     public override void Show(ConsoleData data)
     {
@@ -276,6 +281,7 @@ public sealed class ComputersPage : ConsolePage
 public sealed class ChartsPage : ConsolePage
 {
     private readonly StackPanel _root = new() { Margin = new Thickness(4) };
+    private bool _each;
 
     public ChartsPage() => Content = Scroll(_root);
 
@@ -294,18 +300,40 @@ public sealed class ChartsPage : ConsolePage
             spans.Children.Add(toggle);
         }
 
+        var each = new CheckBox { Content = "každý počítač zvlášť", IsChecked = _each, Margin = new Thickness(24, 0, 0, 8) };
+        each.Checked += (_, _) => { _each = true; Show(data); };
+        each.Unchecked += (_, _) => { _each = false; Show(data); };
+        spans.Children.Add(each);
         _root.Children.Add(spans);
         var series = data.History?["series"] as JsonObject ?? [];
         var names = series.Select(p => p.Key).ToList();
         List<ChartSeries> Lines(string key) => [.. names.Select((name, i) => new ChartSeries(name, Palette.For(i),
             [.. series[name]!.AsArray().OfType<JsonObject>().Select(p => (Time(p), Ui.Value(p[key]))).Where(p => double.IsFinite(p.Item2))]))];
+        var violet = (Color)ColorConverter.ConvertFromString("#7C6CF2");
 
-        _root.Children.Add(Ui.Card(new LineChart { Title = "Vyťaženie procesora (celý počítač)", Unit = " %", Minimum = 0, Maximum = 100, Series = Lines("cpu"), Height = 250 }));
-        _root.Children.Add(Ui.Card(new LineChart { Title = "Učenie (jeho podiel na procesore)", Unit = " %", Minimum = 0, Maximum = 100, Series = Lines("own"), Height = 250 }));
+        // the classroom as one line (the mean) in the band of all computers, or every computer on its own
+        LineChart Chart(string title, string key, string unit, double? min, double? max)
+        {
+            var lines = Lines(key);
+            var chart = new LineChart { Title = title, Unit = unit, Minimum = min, Maximum = max, Height = 260 };
+            if (_each)
+            {
+                chart.Series = lines;
+                return chart;
+            }
+
+            var byTime = lines.SelectMany(l => l.Points).GroupBy(p => p.Time).OrderBy(g => g.Key).ToList();
+            chart.Series = [new ChartSeries("priemer učebne", violet, [.. byTime.Select(g => (g.Key, g.Average(p => p.Value)))])];
+            chart.Band = [.. byTime.Select(g => (g.Key, g.Min(p => p.Value), g.Max(p => p.Value)))];
+            return chart;
+        }
+
+        _root.Children.Add(Ui.Card(Chart("Vyťaženie procesora (celý počítač)", "cpu", " %", 0, 100)));
+        _root.Children.Add(Ui.Card(Chart("Učenie (jeho podiel na procesore)", "own", " %", 0, 100)));
         var temperatures = Lines("temperature");
         if (temperatures.Any(s => s.Points.Count > 0))
         {
-            _root.Children.Add(Ui.Card(new LineChart { Title = "Teplota", Unit = " °C", Minimum = 20, Series = temperatures, Height = 250 }));
+            _root.Children.Add(Ui.Card(Chart("Teplota", "temperature", " °C", 20, null)));
         }
 
         // the speed of the whole classroom: the sum over computers in each bucket
@@ -314,7 +342,7 @@ public sealed class ChartsPage : ConsolePage
         _root.Children.Add(Ui.Card(new LineChart
         {
             Title = "Riadky za sekundu – celá učebňa",
-            Series = [new ChartSeries("spolu", (Color)ColorConverter.ConvertFromString("#7C6CF2"), total)],
+            Series = [new ChartSeries("spolu", violet, total)],
             Height = 230,
         }));
 

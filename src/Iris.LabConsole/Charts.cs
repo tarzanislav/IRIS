@@ -15,7 +15,7 @@ public sealed class LineChart : FrameworkElement
 {
     private const double Left = 46;
     private const double Bottom = 26;
-    private const double Top = 34;
+    private const double Top = 54;
     private const double Right = 12;
 
     public string Title { get; set; } = "";
@@ -32,6 +32,11 @@ public sealed class LineChart : FrameworkElement
     public IReadOnlyList<ChartSeries> Series { get; set; } = [];
 
     public IReadOnlyList<(string Name, Color Color, IReadOnlyList<(double X, double Value)> Points)> NumberSeries { get; set; } = [];
+
+    /// <summary>A shaded band (lowest – highest of all computers at each time), drawn under the lines.</summary>
+    public IReadOnlyList<(DateTime Time, double Low, double High)> Band { get; set; } = [];
+
+    public Color BandColor { get; set; } = Color.FromArgb(60, 124, 108, 242);
 
     public void Refresh() => InvalidateVisual();
 
@@ -51,7 +56,8 @@ public sealed class LineChart : FrameworkElement
         var lines = ByNumber
             ? NumberSeries.Select(s => (s.Name, s.Color, Points: s.Points.Select(p => (p.X, p.Value)).ToList())).ToList()
             : Series.Select(s => (s.Name, s.Color, Points: s.Points.Select(p => ((double)p.Time.Ticks, p.Value)).ToList())).ToList();
-        var all = lines.SelectMany(l => l.Points).Where(p => double.IsFinite(p.Item2)).ToList();
+        var all = lines.SelectMany(l => l.Points).Where(p => double.IsFinite(p.Item2))
+            .Concat(Band.SelectMany(b => new[] { ((double)b.Time.Ticks, b.Low), ((double)b.Time.Ticks, b.High) })).ToList();
         var plot = new Rect(Left, Top, Math.Max(10, width - Left - Right), Math.Max(10, height - Top - Bottom));
         if (all.Count == 0)
         {
@@ -79,7 +85,8 @@ public sealed class LineChart : FrameworkElement
             var value = yMin + (yMax - yMin) * i / 4;
             var y = Y(value);
             dc.DrawLine(grid, new Point(plot.Left, y), new Point(plot.Right, y));
-            var label = Format(value.ToString(value >= 10 || value == 0 ? "0" : "0.0", CultureInfo.InvariantCulture) + Unit, 11, muted);
+            var digits = yMax - yMin >= 20 ? "0" : yMax - yMin >= 2 ? "0.0" : yMax - yMin >= 0.2 ? "0.00" : "0.000";
+            var label = Format(value.ToString(digits, CultureInfo.InvariantCulture) + Unit, 11, muted);
             dc.DrawText(label, new Point(plot.Left - label.Width - 6, y - label.Height / 2));
         }
 
@@ -92,6 +99,20 @@ public sealed class LineChart : FrameworkElement
                 : Format(new DateTime((long)x).ToString(xMax - xMin > TimeSpan.FromDays(1.5).Ticks ? "d.M. HH:mm" : "HH:mm", CultureInfo.InvariantCulture), 11, muted);
             var px = Math.Clamp(X(x) - label.Width / 2, plot.Left - 20, plot.Right - label.Width);
             dc.DrawText(label, new Point(px, plot.Bottom + 6));
+        }
+
+        if (Band.Count > 1)
+        {
+            var band = Band.OrderBy(b => b.Time).ToList();
+            var area = new StreamGeometry();
+            using (var g = area.Open())
+            {
+                g.BeginFigure(new Point(X(band[0].Time.Ticks), Y(band[0].High)), true, true);
+                g.PolyLineTo([.. band.Skip(1).Select(b => new Point(X(b.Time.Ticks), Y(b.High))), .. Enumerable.Reverse(band).Select(b => new Point(X(b.Time.Ticks), Y(b.Low)))], true, true);
+            }
+
+            area.Freeze();
+            dc.DrawGeometry(new SolidColorBrush(BandColor), null, area);
         }
 
         foreach (var (_, color, points) in lines)
@@ -118,8 +139,8 @@ public sealed class LineChart : FrameworkElement
             }
         }
 
-        // the legend along the top, as long as it fits
-        var lx = Math.Max(plot.Left + 140, width / 3);
+        // the legend in a line under the title, as long as it fits
+        var lx = 6.0;
         foreach (var (name, color, _) in lines.Take(24))
         {
             var label = Format(name, 11, text);
@@ -128,9 +149,15 @@ public sealed class LineChart : FrameworkElement
                 break;
             }
 
-            dc.DrawRoundedRectangle(new SolidColorBrush(color), null, new Rect(lx, 9, 10, 10), 3, 3);
-            dc.DrawText(label, new Point(lx + 14, 6));
+            dc.DrawRoundedRectangle(new SolidColorBrush(color), null, new Rect(lx, 31, 10, 10), 3, 3);
+            dc.DrawText(label, new Point(lx + 14, 28));
             lx += label.Width + 26;
+        }
+
+        if (Band.Count > 1 && lx + 160 < width)
+        {
+            dc.DrawRoundedRectangle(new SolidColorBrush(BandColor), null, new Rect(lx, 31, 10, 10), 3, 3);
+            dc.DrawText(Format("rozpätie počítačov", 11, text), new Point(lx + 14, 28));
         }
     }
 
