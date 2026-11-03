@@ -136,14 +136,11 @@ public sealed class ChartsPage : ConsolePage
     {
         _root.Children.Clear();
         var spans = new WrapPanel { Margin = new Thickness(8, 0, 8, 4) };
-        foreach (var (hours, text) in new[] { (6, "6 hodín"), (12, "12 hodín"), (24, "24 hodín"), (72, "3 dni"), (168, "týždeň") })
-        {
-            var toggle = new RadioButton { Content = text, GroupName = "span", IsChecked = data.HistoryHours == hours, Margin = new Thickness(0, 0, 14, 8) };
-            toggle.Checked += (_, _) => Span?.Invoke(hours);
-            spans.Children.Add(toggle);
-        }
-
-        var each = new CheckBox { Content = "každý počítač zvlášť", IsChecked = _each, Margin = new Thickness(24, 0, 0, 8) };
+        var choice = Ui.Segments("charts-span", [("6", "6 hodín"), ("12", "12 hodín"), ("24", "24 hodín"), ("72", "3 dni"), ("168", "týždeň")],
+            data.HistoryHours.ToString(CultureInfo.InvariantCulture), key => Span?.Invoke(int.Parse(key, CultureInfo.InvariantCulture)));
+        choice.Margin = new Thickness(0, 0, 24, 8);
+        spans.Children.Add(choice);
+        var each = Ui.Switch("každý počítač zvlášť", _each);
         each.Checked += (_, _) => { _each = true; Show(data); };
         each.Unchecked += (_, _) => { _each = false; Show(data); };
         spans.Children.Add(each);
