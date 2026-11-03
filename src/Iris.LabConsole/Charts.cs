@@ -291,3 +291,44 @@ public static class Palette
         return Color.FromRgb((byte)((r + m) * 255), (byte)((g + m) * 255), (byte)((b + m) * 255));
     }
 }
+
+/// <summary>A small line of values without axes: a trend at a glance (the last value marked).</summary>
+public sealed class Sparkline : FrameworkElement
+{
+    public IReadOnlyList<double> Values { get; set; } = [];
+
+    protected override Size MeasureOverride(Size availableSize) =>
+        new(double.IsInfinity(availableSize.Width) ? 120 : availableSize.Width, double.IsInfinity(availableSize.Height) ? 24 : Math.Min(availableSize.Height, 60));
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        var points = Values.Select((v, i) => (Index: i, Value: v)).Where(p => double.IsFinite(p.Value)).ToList();
+        if (points.Count < 2 || ActualWidth < 4 || ActualHeight < 4)
+        {
+            return;
+        }
+
+        var low = points.Min(p => p.Value);
+        var high = points.Max(p => p.Value);
+        if (high - low < 1e-9)
+        {
+            (low, high) = (low - 1, high + 1);
+        }
+
+        var last = Values.Count - 1;
+        Point At((int Index, double Value) p) => new(
+            2 + ((ActualWidth - 6) * p.Index / Math.Max(1, last)),
+            2 + ((ActualHeight - 4) * (1 - ((p.Value - low) / (high - low)))));
+        var geometry = new StreamGeometry();
+        using (var context = geometry.Open())
+        {
+            context.BeginFigure(At(points[0]), isFilled: false, isClosed: false);
+            context.PolyLineTo([.. points.Skip(1).Select(At)], isStroked: true, isSmoothJoin: true);
+        }
+
+        geometry.Freeze();
+        var brush = TryFindResource("Accent") as Brush ?? Brushes.SlateBlue;
+        dc.DrawGeometry(null, new Pen(brush, 2) { LineJoin = PenLineJoin.Round, StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, geometry);
+        dc.DrawEllipse(brush, null, At(points[^1]), 3, 3);
+    }
+}

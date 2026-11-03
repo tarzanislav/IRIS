@@ -19,6 +19,7 @@ public partial class App : Application
             return;
         }
 
+        Iris.Lab.LabUpdates.RemoveOld(Environment.ProcessPath); // what an update of the console left behind
         new MainWindow(ConsoleSettings.Load()).Show();
     }
 
@@ -52,18 +53,17 @@ public partial class App : Application
             foreach (var page in window.PageNames.ToList())
             {
                 window.Navigate(page);
-                window.UpdateLayout();
-                window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                Ui.SizeBars(window);
-                window.UpdateLayout();
-                var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(window);
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                using var file = File.Create(Path.Combine(folder, $"console-{page}.png"));
-                encoder.Save(file);
+                Picture(window, folder, page);
             }
 
+            // a computer opened beside the list, and the dark look
+            window.Open("PC-03");
+            Picture(window, folder, "computers-detail");
+            window.SetTheme("dark");
+            window.Navigate("overview");
+            Picture(window, folder, "overview-dark");
+            window.Open("PC-03");
+            Picture(window, folder, "computers-dark");
             window.Close();
             return 0;
         }
@@ -74,7 +74,21 @@ public partial class App : Application
         }
     }
 
-    // a made-up classroom: names PC-01 … PC-18, nothing real
+    private static void Picture(Window window, string folder, string name)
+    {
+        window.UpdateLayout();
+        window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        Ui.SizeBars(window);
+        window.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var file = File.Create(Path.Combine(folder, $"console-{name}.png"));
+        encoder.Save(file);
+    }
+
+    // a made-up classroom: names PC-01 … PC-18, two invented models, nothing real
     private static void Fill(ConsoleData data)
     {
         var random = new Random(3);
@@ -86,9 +100,16 @@ public partial class App : Application
             var name = $"PC-{i:00}";
             var state = i switch { 4 => "paused", 9 => "gone", 13 => "waiting", _ => "learning" };
             var cpu = 38 + random.NextDouble() * 20;
+            var model = i <= 12 ? "Example Desk 3000" : "Example Desk 5000";
             agents.Add((JsonNode)new JsonObject
             {
                 ["name"] = name,
+                ["alias"] = i == 3 ? "Miesto pri okne" : null,
+                ["group"] = model,
+                ["model"] = model,
+                ["version"] = i == 7 ? "0.3.9" : "0.4.0",
+                ["settings"] = new JsonObject { ["duty"] = 0.5, ["cores"] = i <= 12 ? 0.5 : 0.25, ["eco"] = true, ["hot"] = 90.0, ["learn"] = true, ["wake"] = true, ["update"] = true },
+                ["inventory"] = Inventory(i, model),
                 ["address"] = $"10.0.0.{100 + i}",
                 ["mac"] = $"00-11-22-33-44-{i:X2}",
                 ["woken"] = i % 3 == 0,
@@ -100,7 +121,10 @@ public partial class App : Application
                 ["status"] = new JsonObject
                 {
                     ["state"] = state,
-                    ["machine"] = new JsonObject { ["cpu"] = Math.Round(cpu), ["cpu_own"] = Math.Round(cpu - 4), ["memory"] = 41, ["temperature"] = 46 + i % 7 * 3, ["cores"] = 20 },
+                    ["eco"] = true,
+                    ["threads"] = i <= 12 ? 10 : 6,
+                    ["too_hot"] = i == 16,
+                    ["machine"] = new JsonObject { ["cpu"] = Math.Round(cpu), ["cpu_own"] = Math.Round(cpu - 4), ["memory"] = 41, ["temperature"] = i == 16 ? 91 : 46 + i % 7 * 3, ["cores"] = 20 },
                     ["last"] = new JsonObject { ["lines_per_second"] = Math.Round(11 + random.NextDouble() * 4, 1) },
                 },
             });
@@ -152,7 +176,49 @@ public partial class App : Application
             ["agents"] = agents,
             ["rounds"] = rounds,
             ["tests"] = tests,
+            ["minutes"] = 6600,
+            ["hub_version"] = "0.4.0",
+            ["update"] = new JsonObject { ["version"] = "0.4.1", ["auto"] = true, ["agent"] = true, ["console"] = true },
+            ["config"] = new JsonObject
+            {
+                ["aliases"] = new JsonObject { ["PC-03"] = "Miesto pri okne" },
+                ["groups"] = new JsonObject(),
+                ["settings"] = new JsonObject
+                {
+                    ["all"] = new JsonObject { ["duty"] = 0.5 },
+                    ["groups"] = new JsonObject { ["Example Desk 5000"] = new JsonObject { ["cores"] = 0.25 } },
+                    ["computers"] = new JsonObject { ["PC-03"] = new JsonObject { ["hot"] = 85.0 } },
+                },
+                ["defaults"] = new JsonObject { ["duty"] = 0.5, ["cores"] = 0.5, ["eco"] = true, ["hot"] = 90.0, ["learn"] = true, ["wake"] = true, ["update"] = true },
+            },
         };
         data.History = new JsonObject { ["series"] = series, ["bucket"] = 5 };
     }
+
+    // what an invented computer is (the shape the agents send)
+    private static JsonObject Inventory(int i, string model) => new()
+    {
+        ["maker"] = "Example Corp",
+        ["model"] = model,
+        ["serial"] = $"EXAMPLE{i:00}",
+        ["chassis"] = new JsonObject { ["type"] = "mini tower" },
+        ["bios"] = new JsonObject { ["version"] = "1.20.0", ["date"] = "05/06/2026" },
+        ["cpu"] = new JsonObject
+        {
+            ["name"] = i <= 12 ? "Example Core 5 500 (14 cores)" : "Example Core 3 300",
+            ["cores"] = i <= 12 ? 14 : 6,
+            ["performance_cores"] = i <= 12 ? 6 : null,
+            ["efficient_cores"] = i <= 12 ? 8 : null,
+            ["logical"] = i <= 12 ? 20 : 12,
+            ["avx2"] = true,
+        },
+        ["memory_gb"] = 16,
+        ["memory_modules"] = new JsonArray(
+            new JsonObject { ["size_gb"] = 8, ["type"] = "DDR5", ["speed"] = 4800 },
+            new JsonObject { ["size_gb"] = 8, ["type"] = "DDR5", ["speed"] = 4800 }),
+        ["disks"] = new JsonArray(new JsonObject { ["model"] = "Example NVMe 512", ["bus"] = "NVMe", ["size_gb"] = 512 }),
+        ["gpu"] = new JsonArray("Example Graphics 770"),
+        ["os"] = new JsonObject { ["name"] = "Windows 11 Education", ["version"] = "24H2", ["build"] = "26100.2314" },
+        ["network"] = new JsonArray(new JsonObject { ["name"] = "Example Ethernet Connection", ["mbps"] = 1000, ["mac"] = $"00-11-22-33-44-{i:X2}" }),
+    };
 }

@@ -1,16 +1,18 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Iris.Lab;
 
 namespace Iris.LabConsole;
 
-/// <summary>Where the console connects (kept in the user's application data).</summary>
+/// <summary>Where the console connects and how it looks (kept in the user's application data).</summary>
 public sealed class ConsoleSettings
 {
     public string Hub { get; set; } = "";
@@ -18,6 +20,9 @@ public sealed class ConsoleSettings
     public int Port { get; set; } = 47620;
 
     public string KeyFile { get; set; } = "";
+
+    /// <summary>light or dark.</summary>
+    public string Theme { get; set; } = "light";
 
     public static string Path => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "IRIS Lab", "console.json");
 
@@ -32,6 +37,7 @@ public sealed class ConsoleSettings
                     Hub = json["hub"]?.GetValue<string>() ?? "",
                     Port = json["port"]?.GetValue<int>() ?? 47620,
                     KeyFile = json["key"]?.GetValue<string>() ?? "",
+                    Theme = json["theme"]?.GetValue<string>() == "dark" ? "dark" : "light",
                 };
             }
         }
@@ -45,38 +51,42 @@ public sealed class ConsoleSettings
     public void Save()
     {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-        File.WriteAllText(Path, new JsonObject { ["hub"] = Hub, ["port"] = Port, ["key"] = KeyFile }.ToJsonString());
+        File.WriteAllText(Path, new JsonObject { ["hub"] = Hub, ["port"] = Port, ["key"] = KeyFile, ["theme"] = Theme }.ToJsonString());
     }
 }
 
 /// <summary>
-/// The console window: the menu on the left (the look of the IRIS application), the page on the right, and a
-/// connection to the hub that asks for news every five seconds and for the history every minute.
+/// The console window: the menu on the left (the look of the IRIS application), a header with the page's title and
+/// the state of the classroom, the page, and a connection to the hub that asks for news every five seconds and for
+/// the history every minute.
 /// </summary>
-public sealed class MainWindow : Window
+public sealed class MainWindow : Window, IConsoleActions
 {
     private readonly ConsoleSettings _settings;
     private readonly ConsoleData _data = new();
-    private readonly ContentControl _page = new() { Margin = new Thickness(14, 18, 14, 14) };
+    private readonly ContentControl _page = new() { Margin = new Thickness(6, 0, 14, 14) };
+    private readonly TextBlock _heading = new();
+    private readonly WrapPanel _chips = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _connection = new() { FontSize = 12.5, Margin = new Thickness(10, 0, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly Dictionary<string, ConsolePage> _pages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RadioButton> _menu = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(5) };
     private LabConsoleClient? _client;
     private DateTime _historyAt = DateTime.MinValue;
     private bool _busy;
+    private bool _syncing;
     private string _current = "overview";
 
     public MainWindow(ConsoleSettings settings, bool offline = false)
     {
         _settings = settings;
         Title = "IRIS – učebňa";
-        Width = 1320;
-        Height = 860;
-        MinWidth = 960;
-        MinHeight = 620;
+        Width = 1360;
+        Height = 880;
+        MinWidth = 1080;
+        MinHeight = 640;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        SetResourceReference(BackgroundProperty, "WindowBackground");
-        FontFamily = (FontFamily)FindResource("UiFont");
+        ApplyTheme(settings.Theme);
 
         _pages["overview"] = new OverviewPage();
         _pages["computers"] = new ComputersPage();
@@ -99,20 +109,19 @@ public sealed class MainWindow : Window
             _historyAt = DateTime.MinValue;
             _ = Refresh();
         };
+        settingsPage.Theme = theme =>
+        {
+            _settings.Theme = theme;
+            _settings.Save();
+            SetTheme(theme);
+        };
         _pages["settings"] = settingsPage;
         foreach (var page in _pages.Values)
         {
-            page.Command = SendCommand;
+            page.Actions = this;
         }
 
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(250) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.Children.Add(Menu());
-        Grid.SetColumn(_page, 1);
-        grid.Children.Add(_page);
-        Content = grid;
-        Navigate("overview");
+        Build();
         if (!offline)
         {
             _timer.Tick += async (_, _) => await Refresh();
@@ -131,11 +140,87 @@ public sealed class MainWindow : Window
 
     public IEnumerable<string> PageNames => _pages.Keys;
 
+    /// <summary>The network page (the self-test gives it a scan to show).</summary>
+    public NetworkPage Network => (NetworkPage)_pages["network"];
+
     public void Navigate(string name)
     {
         _current = name;
+        if (_menu.TryGetValue(name, out var item) && item.IsChecked != true)
+        {
+            _syncing = true; // the menu shows the page without opening it again
+            item.IsChecked = true;
+            _syncing = false;
+        }
+
         _page.Content = _pages[name];
+        _heading.Text = _pages[name].Heading;
         _pages[name].Show(_data);
+        Header();
+    }
+
+    /// <summary>The window in the light or the dark look.</summary>
+    public void SetTheme(string theme)
+    {
+        ApplyTheme(theme);
+        Build();
+    }
+
+    /// <summary>The light or the dark colors of IRIS (the styles stay).</summary>
+    public static void ApplyTheme(string theme)
+    {
+        var dictionaries = Application.Current.Resources.MergedDictionaries;
+        if (dictionaries.Count > 0)
+        {
+            dictionaries[0] = new ResourceDictionary { Source = new Uri(theme == "dark" ? "Themes/Dark.xaml" : "Themes/Light.xaml", UriKind.Relative) };
+        }
+    }
+
+    // the window anew (after a change of the look: everything built in code takes the new colors)
+    private void Build()
+    {
+        SetResourceReference(BackgroundProperty, "WindowBackground");
+        FontFamily = (FontFamily)FindResource("UiFont");
+        _menu.Clear();
+        _heading.Style = (Style)FindResource("PageTitle");
+        _heading.Margin = new Thickness(0);
+        _connection.Foreground = (Brush)FindResource("TextMuted");
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(250) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        if (_connection.Parent is Panel old)
+        {
+            old.Children.Remove(_connection);
+        }
+
+        grid.Children.Add(Menu());
+        var header = new DockPanel { Margin = new Thickness(14, 22, 14, 10) };
+        if (_chips.Parent is Panel oldChips)
+        {
+            oldChips.Children.Remove(_chips);
+        }
+
+        if (_heading.Parent is Panel oldHeading)
+        {
+            oldHeading.Children.Remove(_heading);
+        }
+
+        DockPanel.SetDock(_chips, Dock.Right);
+        header.Children.Add(_chips);
+        header.Children.Add(_heading);
+        var right = new DockPanel();
+        DockPanel.SetDock(header, Dock.Top);
+        right.Children.Add(header);
+        if (_page.Parent is Panel oldPage)
+        {
+            oldPage.Children.Remove(_page);
+        }
+
+        right.Children.Add(_page);
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(right);
+        Content = grid;
+        Navigate(_current);
     }
 
     private Border Menu()
@@ -160,9 +245,9 @@ public sealed class MainWindow : Window
         foreach (var (name, text, tint, deep, icon) in new[]
                  {
                      ("overview", "Prehľad", "Lavender", "LavenderDeep", "M3,3 H9 V9 H3 Z M11,3 H17 V9 H11 Z M3,11 H9 V17 H3 Z M11,11 H17 V17 H11 Z"),
-                     ("computers", "Počítače", "Sky", "SkyDeep", "M2,4 H18 V13 H2 Z M7,17 H13 M10,13 V17"),
+                     ("computers", "Počítače", "Sky", "SkyDeep", Ui.Icons.Computers),
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
-                     ("rounds", "Kolá a učenie", "Peach", "PeachDeep", "M10,3 A7,7 0 1 1 3,10 M3,4 V10 H9"),
+                     ("rounds", "Kolá a učenie", "Peach", "PeachDeep", Ui.Icons.Round),
                      ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
                      ("settings", "Nastavenia", "Lilac", "LilacDeep", "M10,6 A4,4 0 1 1 10,14 A4,4 0 1 1 10,6 Z M10,1 V4 M10,16 V19 M1,10 H4 M16,10 H19"),
                  })
@@ -184,14 +269,20 @@ public sealed class MainWindow : Window
             });
             content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center });
             button.Content = content;
-            button.Checked += (_, _) => Navigate(name);
+            button.Checked += (_, _) =>
+            {
+                if (!_syncing)
+                {
+                    Navigate(name);
+                }
+            };
+            _menu[name] = button;
             items.Children.Add(button);
         }
 
         var dock = new DockPanel { Margin = new Thickness(14, 20, 14, 20), LastChildFill = false };
         DockPanel.SetDock(items, Dock.Top);
         dock.Children.Add(items);
-        _connection.Foreground = (Brush)FindResource("TextMuted");
         DockPanel.SetDock(_connection, Dock.Bottom);
         dock.Children.Add(_connection);
         return new Border
@@ -204,6 +295,36 @@ public sealed class MainWindow : Window
             Effect = (System.Windows.Media.Effects.Effect)FindResource("CardShadow"),
             Child = dock,
         };
+    }
+
+    // the chips of the header: the connection, the time of learning, the round, a newer version
+    private void Header()
+    {
+        _chips.Children.Clear();
+        var snapshot = _data.Snapshot;
+        if (snapshot is null || _data.Error is not null)
+        {
+            _chips.Children.Add(Ui.Chip("nepripojené", "Danger", _data.Error));
+            return;
+        }
+
+        _chips.Children.Add(Ui.Chip(_settings.Hub.Length > 0 ? $"pripojené · {_settings.Hub}" : "pripojené", "Good"));
+        var schedule = snapshot["schedule"];
+        _chips.Children.Add(snapshot["open"]?.GetValue<bool>() == true
+            ? Ui.Chip($"čas učenia do {schedule?["until"]}", "Accent")
+            : Ui.Chip($"učenie od {schedule?["from"]}", "SkyDeep"));
+        if (snapshot["round"] is JsonObject round)
+        {
+            _chips.Children.Add(Ui.Chip($"kolo {round["number"]} · {round["done"]}/{round["taking_part"]}", "PeachDeep"));
+        }
+
+        if (_data.Available is { } available && LabUpdates.IsNewer(available, LabUpdates.Version))
+        {
+            var chip = Ui.Chip($"nová verzia {available}", "LilacDeep", "Aktualizácie sú v Nastaveniach");
+            chip.Cursor = Cursors.Hand;
+            chip.MouseLeftButtonUp += (_, _) => Navigate("settings");
+            _chips.Children.Add(chip);
+        }
     }
 
     private async Task Refresh()
@@ -259,9 +380,11 @@ public sealed class MainWindow : Window
         ShowData();
     }
 
-    private void ShowData()
+    // the page anew with the news; the settings only when asked (their editors must not move under the hand)
+    private void ShowData(bool settingsToo = false)
     {
-        if (_current != "settings")
+        Header();
+        if (_current != "settings" || settingsToo)
         {
             _pages[_current].Show(_data);
         }
@@ -286,10 +409,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    /// <summary>The network page (the self-test gives it a scan to show).</summary>
-    public NetworkPage Network => (NetworkPage)_pages["network"];
-
-    private async Task SendCommand(string target, string command)
+    public async Task Command(string target, string command)
     {
         if (_client is null)
         {
@@ -300,7 +420,7 @@ public sealed class MainWindow : Window
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var sent = await _client.CommandAsync(target, command, timeout.Token);
+            var sent = command == "wake" ? await _client.WakeAsync(target, timeout.Token) : await _client.CommandAsync(target, command, timeout.Token);
             _connection.Text = $"príkaz „{command}“ poslaný na {sent} {(sent == 1 ? "počítač" : "počítačov")}";
         }
         catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
@@ -308,6 +428,107 @@ public sealed class MainWindow : Window
             Disconnect();
             MessageBox.Show($"Príkaz sa nepodarilo poslať: {e.Message}", Title, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    public async Task<bool> Configure(JsonObject change)
+    {
+        if (_client is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await _client.ConfigureAsync(change, timeout.Token);
+            _data.Snapshot = await _client.SnapshotAsync(timeout.Token);
+            ShowData(settingsToo: true);
+            return true;
+        }
+        catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
+        {
+            Disconnect();
+            return false;
+        }
+    }
+
+    public async Task UpdateComputers(string target)
+    {
+        if (_client is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var marked = await _client.UpdateComputersAsync(target, timeout.Token);
+            _connection.Text = _data.Available is null
+                ? "server nemá novší program pre počítače"
+                : $"{marked} {(marked == 1 ? "počítač dostane" : "počítačov dostane")} verziu {_data.Available} medzi kolami";
+        }
+        catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
+        {
+            Disconnect();
+        }
+    }
+
+    public async Task UpdateServer()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var asked = await _client.UpdateServerAsync(timeout.Token);
+            MessageBox.Show(asked
+                ? "Server sa teraz pozrie na novú verziu IRIS; ak ju nájde a jej podpis sedí, nainštaluje ju a na chvíľu sa reštartuje."
+                : "Server žiadosť neprijal (jeho priečinok nie je zapisovateľný).", Title, MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
+        {
+            Disconnect();
+        }
+    }
+
+    // the console's own new program: from the server, checked (signature and SHA-256), put in place, started anew
+    public async Task UpdateConsole()
+    {
+        if (_client is null || Environment.ProcessPath is not { } path)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            if (await _client.ConsoleProgramAsync(timeout.Token) is not { } program || !LabUpdates.IsNewer(program.Manifest.Version, LabUpdates.Version))
+            {
+                MessageBox.Show("Server nemá novšiu konzolu.", Title, MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            LabUpdates.ReplaceProgram(path, program.Data);
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = false });
+            Application.Current.Shutdown();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show($"Konzolu sa nepodarilo nahradiť ({e.Message}). Je v priečinku, kam sa nedá zapisovať? Presuňte ju napr. na Plochu.", Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception e) when (e is SocketException or LabProtocolException or OperationCanceledException)
+        {
+            Disconnect();
+        }
+    }
+
+    public void Open(string computer)
+    {
+        ((ComputersPage)_pages["computers"]).Select(computer);
+        Navigate("computers");
     }
 
     private void Disconnect()
