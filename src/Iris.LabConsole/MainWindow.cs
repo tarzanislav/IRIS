@@ -218,7 +218,7 @@ public sealed class MainWindow : Window
                 {
                     _data.Error = "Konzola ešte nevie, kde je server: v Nastaveniach zadajte server a kľúč konzoly (console.key).";
                     _connection.Text = "nepripojené";
-                    Show();
+                    ShowData();
                     return;
                 }
 
@@ -252,10 +252,10 @@ public sealed class MainWindow : Window
             _busy = false;
         }
 
-        Show();
+        ShowData();
     }
 
-    private void Show()
+    private void ShowData()
     {
         if (_current != "settings")
         {

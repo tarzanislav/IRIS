@@ -320,8 +320,8 @@ public sealed class ChartsPage : ConsolePage
 
         // a map of hours: temperature where there is one, else the load
         var key = temperatures.Any(s => s.Points.Count > 0) ? "temperature" : "cpu";
-        var hours = series.SelectMany(p => p.Value!.AsArray().OfType<JsonObject>()).Select(p => Hour(Time(p))).Distinct().Order().TakeLast(48).ToList();
-        var rows = names.Select(name => (name, hours.Select(h =>
+        var hourList = series.SelectMany(p => p.Value!.AsArray().OfType<JsonObject>()).Select(p => Hour(Time(p))).Distinct().Order().TakeLast(48).ToList();
+        var rows = names.Select(name => (name, hourList.Select(h =>
         {
             var values = series[name]!.AsArray().OfType<JsonObject>().Where(p => Hour(Time(p)) == h).Select(p => Ui.Value(p[key])).Where(double.IsFinite).ToList();
             return values.Count > 0 ? values.Average() : double.NaN;
@@ -333,7 +333,7 @@ public sealed class ChartsPage : ConsolePage
             Low = key == "temperature" ? 35 : 0,
             High = key == "temperature" ? 85 : 100,
             Rows = rows,
-            Columns = [.. hours.Select(h => h.ToString("HH", CultureInfo.InvariantCulture))],
+            Columns = [.. hourList.Select(h => h.ToString("HH", CultureInfo.InvariantCulture))],
         }));
     }
 
