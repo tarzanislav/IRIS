@@ -11,6 +11,10 @@ try
     {
         ["run", .. var rest] => await Run(LabArguments.Parse(rest)),
         ["keys", .. var rest] => Keys(LabArguments.Parse(rest)),
+        ["update", "--check", .. var rest] => await Update(LabArguments.Parse(rest), check: true),
+        ["update", .. var rest] => await Update(LabArguments.Parse(rest), check: false),
+        ["signing-key", .. var rest] => SigningKey(LabArguments.Parse(rest)),
+        ["version"] => Version(),
         _ => Usage(),
     };
 }
@@ -19,7 +23,7 @@ catch (ArgumentException ex)
     Console.Error.WriteLine($"iris-hub: {ex.Message}");
     return 2;
 }
-catch (Exception ex) when (ex is IOException or FormatException or UnauthorizedAccessException)
+catch (Exception ex) when (ex is IOException or FormatException or UnauthorizedAccessException or HttpRequestException or TaskCanceledException)
 {
     Console.Error.WriteLine($"iris-hub: {ex.Message}");
     return 1;
@@ -71,6 +75,7 @@ static async Task<int> Run(LabArguments a)
         Schedule = schedule,
         Sentences = a.Value("--sentences"),
         AutoWake = (a.Value("--wake") ?? "yes") != "no",
+        AutoUpdate = (a.Value("--auto-update") ?? "yes") != "no",
         Fonts = a.Value("--fonts")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? ["/usr/share/fonts", "/usr/local/share/fonts"],
     };
     var hub = new LabHub(options, weights, state);
@@ -84,6 +89,123 @@ static async Task<int> Run(LabArguments a)
     Console.WriteLine($"IRIS hub on port {options.Port}, model version {state.Step}, rounds of {options.RoundMinutes} min, " +
                       $"learning {schedule.From:HH\\:mm}–{schedule.Until:HH\\:mm}{(schedule.Weekends ? ", weekends all day" : "")}; keys in {folder}");
     await hub.RunAsync(cancel.Token);
+    return 0;
+}
+
+// the updater (run by systemd as root once a day, or when the console asks): the newest release on GitHub, when it
+// brings newer signed classroom programs – the server's own program goes in place and the service starts again, the
+// programs of the computers and the console wait in the folder of the hub for them
+static async Task<int> Update(LabArguments a, bool check)
+{
+    var folder = a.Value("--folder") ?? "/var/lib/iris-hub";
+    var install = a.Value("--install") ?? Path.GetDirectoryName(Environment.ProcessPath) ?? "/opt/iris-hub";
+    var service = a.Value("--service") ?? "iris-hub";
+    var request = Path.Combine(folder, "update-request");
+    if (File.Exists(request))
+    {
+        File.Delete(request);
+    }
+
+    if (!LabUpdates.CanVerify)
+    {
+        Console.WriteLine("this build has no key of the IRIS releases: it never updates itself");
+        return 0;
+    }
+
+    using var http = LabUpdates.Http();
+    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+    var latest = await LabUpdates.LatestAsync(http, timeout.Token);
+    if (latest is not { } found)
+    {
+        Console.WriteLine($"{LabUpdates.Version}: the newest release has no signed classroom programs");
+        return 0;
+    }
+
+    var version = found.Manifest.Version;
+    if (!LabUpdates.IsNewer(version, LabUpdates.Version))
+    {
+        Console.WriteLine($"{LabUpdates.Version}: up to date");
+        return 0;
+    }
+
+    if (check)
+    {
+        Console.WriteLine($"{LabUpdates.Version}: version {version} is ready (iris-hub update installs it)");
+        return 0;
+    }
+
+    // every file checked against the signed manifest before anything is put in place
+    var target = Path.Combine(folder, "updates", version);
+    Directory.CreateDirectory(target);
+    foreach (var name in new[] { UpdateManifest.Hub, UpdateManifest.Agent, UpdateManifest.Console })
+    {
+        if (found.Manifest.File(name) is not { } file || !found.Files.TryGetValue(name, out var uri))
+        {
+            continue;
+        }
+
+        var data = await http.GetByteArrayAsync(uri, timeout.Token);
+        if (!LabUpdates.Matches(file, data))
+        {
+            throw new IOException($"{name} of {version} does not match its signed manifest – nothing installed");
+        }
+
+        await File.WriteAllBytesAsync(Path.Combine(target, name), data, timeout.Token);
+    }
+
+    await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.ManifestName), found.Json, timeout.Token);
+    await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.SignatureName), found.Signature, timeout.Token);
+    foreach (var old in Directory.EnumerateDirectories(Path.Combine(folder, "updates"))
+        .Where(d => LabUpdates.ParseVersion(Path.GetFileName(d)) is not null)
+        .OrderByDescending(d => LabUpdates.ParseVersion(Path.GetFileName(d))).Skip(2))
+    {
+        Directory.Delete(old, recursive: true); // the two newest sets stay
+    }
+
+    var hub = Path.Combine(target, UpdateManifest.Hub);
+    if (File.Exists(hub))
+    {
+        LabUpdates.ReplaceProgram(Path.Combine(install, "iris-hub"), await File.ReadAllBytesAsync(hub, timeout.Token));
+        File.Delete(hub);
+        Console.WriteLine($"{LabUpdates.Version} → {version}: the server's program is in {install}");
+        if (OperatingSystem.IsLinux() && Environment.UserName == "root")
+        {
+            using var restart = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("systemctl", $"restart {service}") { UseShellExecute = false });
+            await restart!.WaitForExitAsync(timeout.Token);
+        }
+    }
+
+    Console.WriteLine($"the programs of the computers and the console of {version} wait in {target}");
+    return 0;
+}
+
+// a new key for signing the releases: the private part to a file (it goes into the secret IRIS_UPDATE_KEY of the
+// repository and nowhere else), the public part printed (it goes into tools/lab/update-key.pub)
+static int SigningKey(LabArguments a)
+{
+    var path = a.Value("--out") ?? "iris-update-key.pem";
+    if (File.Exists(path))
+    {
+        throw new IOException($"{path} exists – a key is never overwritten");
+    }
+
+    using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+    File.WriteAllText(path, key.ExportPkcs8PrivateKeyPem() + "\n");
+    if (!OperatingSystem.IsWindows())
+    {
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    Console.WriteLine($"the private key is in {path}: put its whole text into the secret IRIS_UPDATE_KEY of the repository");
+    Console.WriteLine("(GitHub → Settings → Secrets and variables → Actions → New repository secret), then delete the file.");
+    Console.WriteLine("The public key, for tools/lab/update-key.pub:");
+    Console.WriteLine(key.ExportSubjectPublicKeyInfoPem());
+    return 0;
+}
+
+static int Version()
+{
+    Console.WriteLine($"iris-hub {LabUpdates.Version}{(LabUpdates.CanVerify ? "" : " (no key of the releases: no updates)")}");
     return 0;
 }
 
@@ -113,7 +235,14 @@ static int Usage()
             --wake yes|no (yes)                 wakes the computers that are off when learning begins, and shuts them
                                                 down again when it ends (Wake-on-LAN must be on in their BIOS/UEFI)
             --fonts <dir:dir>                   fonts of the server for measuring the model (/usr/share/fonts)
+            --auto-update yes|no (yes)          gives the computers a newer signed program by itself (between rounds)
         iris-hub keys --folder <dir>            creates the keys (agent.key, console.key) and shows where they are
+        iris-hub update [--check] [--folder <dir>] [--install <dir>] [--service <name>]
+                                                the newest signed classroom programs from the IRIS releases on GitHub
+                                                (as root, by the systemd timer once a day): the server's program is
+                                                put in place and the service restarted; --check only tells
+        iris-hub signing-key [--out <file>]     a new key for signing the releases (for the owner of the repository)
+        iris-hub version
         """);
     return 2;
 }

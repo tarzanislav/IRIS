@@ -8,6 +8,7 @@ using Iris.Vision.Training;
 
 // iris-agent – a computer of the classroom that learns the IRIS OCR. Exit codes: 0 done, 1 error, 2 wrong use.
 Console.OutputEncoding = Encoding.UTF8;
+LabUpdates.RemoveOld(Environment.ProcessPath); // what an update left behind
 try
 {
     return args switch
@@ -42,6 +43,12 @@ static async Task<int> RunConsole(LabArguments a)
         Name = a.Value("--name") ?? Environment.MachineName,
         Fonts = Fonts(a.Value("--fonts")),
         Log = line => Console.WriteLine($"{DateTime.Now:HH:mm:ss} {line}"),
+        Program = Environment.ProcessPath,
+        Restart = () =>
+        {
+            Console.WriteLine("the program was updated – start it again");
+            Environment.Exit(0);
+        },
     };
     using var cancel = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -73,6 +80,7 @@ static int Service()
         Key = LabKeys.Read(Path.Combine(data, "agent.key")),
         Fonts = Fonts(null),
         Log = line => Log(log, line),
+        Program = Environment.ProcessPath,
     };
     Lower();
     var started = WindowsService.Run(Installer.ServiceName, token => new LabAgent(options).RunAsync(token));

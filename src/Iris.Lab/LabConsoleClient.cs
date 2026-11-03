@@ -56,6 +56,31 @@ public sealed class LabConsoleClient : IDisposable
         return answer["sent"]?.GetValue<int>() ?? 0;
     }
 
+    /// <summary>
+    /// Asks the hub to give a newer program to the computers ("*" = all, or one by name) between rounds; returns how
+    /// many it marked.
+    /// </summary>
+    public async Task<int> UpdateComputersAsync(string target, CancellationToken cancel) =>
+        (await Ask(new LabMessage(MessageKind.Update, new JsonObject { ["what"] = "agents", ["target"] = target }), cancel))["marked"]?.GetValue<int>() ?? 0;
+
+    /// <summary>Asks the server to update itself now (its updater looks at GitHub); returns whether the request was left.</summary>
+    public async Task<bool> UpdateServerAsync(CancellationToken cancel) =>
+        (await Ask(new LabMessage(MessageKind.Update, new JsonObject { ["what"] = "hub" }), cancel))["requested"]?.GetValue<bool>() ?? false;
+
+    /// <summary>The newer program of the console from the hub, with its signed manifest – checked here; null when there is none.</summary>
+    public async Task<(UpdateManifest Manifest, byte[] Data)?> ConsoleProgramAsync(CancellationToken cancel)
+    {
+        var answer = await AskMessage(new LabMessage(MessageKind.Update, new JsonObject { ["what"] = "console" }), cancel);
+        if (answer.Kind != MessageKind.Update)
+        {
+            return null;
+        }
+
+        var manifest = LabUpdates.Open(Convert.FromBase64String(answer.Header["manifest"]?.GetValue<string>() ?? ""),
+            Convert.FromBase64String(answer.Header["signature"]?.GetValue<string>() ?? ""));
+        return manifest?.File(UpdateManifest.Console) is { } file && LabUpdates.Matches(file, answer.Data) ? (manifest, answer.Data) : null;
+    }
+
     public void Dispose()
     {
         _channel.Dispose();
@@ -63,13 +88,15 @@ public sealed class LabConsoleClient : IDisposable
         _gate.Dispose();
     }
 
-    private async Task<JsonObject> Ask(LabMessage message, CancellationToken cancel)
+    private async Task<JsonObject> Ask(LabMessage message, CancellationToken cancel) => (await AskMessage(message, cancel)).Header;
+
+    private async Task<LabMessage> AskMessage(LabMessage message, CancellationToken cancel)
     {
         await _gate.WaitAsync(cancel);
         try
         {
             await _channel.SendAsync(message, cancel);
-            return (await _channel.ReceiveAsync(cancel)).Header;
+            return await _channel.ReceiveAsync(cancel);
         }
         finally
         {

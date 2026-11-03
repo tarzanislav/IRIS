@@ -1,0 +1,11 @@
+# The console's button "update the server": the hub (not root) writes /var/lib/iris-hub/update-request, and this
+# starts the updater at once; the updater removes the file.
+[Unit]
+Description=IRIS hub – update asked by the console
+
+[Path]
+PathExists=/var/lib/iris-hub/update-request
+Unit=iris-hub-update.service
+
+[Install]
+WantedBy=multi-user.target

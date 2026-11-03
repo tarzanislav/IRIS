@@ -4,6 +4,8 @@
     <AssemblyName>iris-hub</AssemblyName>
     <RootNamespace>Iris.Hub</RootNamespace>
     <Description>iris-hub – the hub of the IRIS learning in a classroom (runs on a server that is always on).</Description>
+    <!-- no ICU: a server without a desktop needs no language data, and the hub writes everything invariantly -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Iris.Lab\Iris.Lab.csproj" />

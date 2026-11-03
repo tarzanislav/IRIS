@@ -59,6 +59,12 @@ public sealed record LabHubOptions
     /// </summary>
     public bool AutoWake { get; init; } = true;
 
+    /// <summary>
+    /// Gives the computers a newer signed program by itself (between rounds) as soon as the server has one; without
+    /// it only when the console asks.
+    /// </summary>
+    public bool AutoUpdate { get; init; } = true;
+
     /// <summary>How a computer is woken (tests replace it; by default the magic packet).</summary>
     public Func<string, CancellationToken, Task> Wake { get; init; } = (mac, cancel) => NetworkScanner.WakeAsync(mac, cancel);
 
@@ -93,6 +99,8 @@ public sealed class LabHub
     private bool? _wasOpen;
     private DateTime _openedAt;
     private DateTime _lastWake;
+    private DateTime _lastUpdateLook = DateTime.MinValue;
+    private AvailableUpdate? _update;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -179,6 +187,7 @@ public sealed class LabHub
                     ["seen"] = a.Seen.ToString("o", CultureInfo.InvariantCulture),
                     ["rounds"] = a.Rounds,
                     ["lines"] = a.Lines,
+                    ["version"] = a.Version,
                     ["status"] = a.Status?.DeepClone(),
                 });
             }
@@ -190,6 +199,14 @@ public sealed class LabHub
                 ["open"] = _options.Schedule.IsOpen(now),
                 ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
+                ["hub_version"] = LabUpdates.Version,
+                ["update"] = _update is { } u ? new JsonObject
+                {
+                    ["version"] = u.Manifest.Version,
+                    ["auto"] = _options.AutoUpdate,
+                    ["agent"] = u.Manifest.File(UpdateManifest.Agent) is not null,
+                    ["console"] = u.Manifest.File(UpdateManifest.Console) is not null,
+                } : null,
                 ["round"] = _round is null ? null : new JsonObject
                 {
                     ["number"] = _round.Number,
@@ -230,8 +247,28 @@ public sealed class LabHub
         List<AgentEntry> toWait = [];
         List<string> toWake = [];
         List<AgentEntry> toReturn = [];
+        List<AgentEntry> toUpdate = [];
         lock (_gate)
         {
+            if (now - _lastUpdateLook > TimeSpan.FromMinutes(5))
+            {
+                _lastUpdateLook = now;
+                FindUpdate();
+            }
+
+            // a newer program for computers that are not in a round: a few at a time, each at most every 15 minutes
+            if (_update is { } update && update.Manifest.File(UpdateManifest.Agent) is not null)
+            {
+                foreach (var a in _agents.Values.Where(a => a.Channel is not null && a.Version is { } v && LabUpdates.IsNewer(update.Manifest.Version, v) &&
+                    (_options.AutoUpdate || a.UpdateWanted) && a.State is "idle" or "waiting" && now - a.UpdateSent > TimeSpan.FromMinutes(15)).Take(3))
+                {
+                    a.UpdateSent = now;
+                    a.UpdateWanted = false;
+                    a.State = "updating";
+                    toUpdate.Add(a);
+                }
+            }
+
             var open = _options.Schedule.IsOpen(now);
             if (_options.AutoWake)
             {
@@ -300,6 +337,11 @@ public sealed class LabHub
         foreach (var mac in toWake)
         {
             await WakeQuietly(mac, cancel);
+        }
+
+        foreach (var a in toUpdate)
+        {
+            await SendUpdate(a, cancel);
         }
 
         foreach (var a in toReturn)
@@ -459,6 +501,11 @@ public sealed class LabHub
                             lock (_gate)
                             {
                                 agent.Status = message.Header;
+                                agent.Version = message.Header["version"]?.GetValue<string>();
+                                if (agent.State == "updating" && _options.Now() - agent.UpdateSent > TimeSpan.FromMinutes(2))
+                                {
+                                    agent.State = "idle"; // it did not take the program (it says why in its log)
+                                }
                                 if (message.Header["mac"]?.GetValue<string>() is { } mac && mac != agent.Mac)
                                 {
                                     agent.Mac = mac;
@@ -583,6 +630,9 @@ public sealed class LabHub
 
                         await channel.SendAsync(new LabMessage(MessageKind.Note, new JsonObject { ["sent"] = sent, ["command"] = command }), cancel);
                         break;
+                    case MessageKind.Update:
+                        await channel.SendAsync(UpdateRequest(message.Header), cancel);
+                        break;
                     default:
                         break;
                 }
@@ -590,6 +640,128 @@ public sealed class LabHub
         }
         catch (Exception e) when (e is IOException or LabProtocolException or OperationCanceledException or JsonException or SocketException)
         {
+        }
+    }
+
+    // the newest set of programs in the folder of updates whose signature is right (the server's updater puts them there)
+    private void FindUpdate()
+    {
+        try
+        {
+            var root = Path.Combine(_options.Folder, "updates");
+            _update = null;
+            if (!Directory.Exists(root))
+            {
+                return;
+            }
+
+            foreach (var folder in Directory.EnumerateDirectories(root).Where(f => LabUpdates.ParseVersion(Path.GetFileName(f)) is not null)
+                .OrderByDescending(f => LabUpdates.ParseVersion(Path.GetFileName(f))))
+            {
+                var json = Path.Combine(folder, UpdateManifest.ManifestName);
+                var signature = Path.Combine(folder, UpdateManifest.SignatureName);
+                if (File.Exists(json) && File.Exists(signature) && LabUpdates.Open(File.ReadAllBytes(json), File.ReadAllBytes(signature)) is { } manifest &&
+                    manifest.Version == Path.GetFileName(folder))
+                {
+                    _update = new AvailableUpdate(manifest, File.ReadAllBytes(json), File.ReadAllBytes(signature), folder);
+                    return;
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    // a program of the set, read and checked against the signed manifest (null when missing or changed)
+    private static LabMessage? Program(AvailableUpdate update, string name)
+    {
+        try
+        {
+            var path = Path.Combine(update.Folder, name);
+            if (update.Manifest.File(name) is not { } file || !File.Exists(path))
+            {
+                return null;
+            }
+
+            var data = File.ReadAllBytes(path);
+            if (!LabUpdates.Matches(file, data))
+            {
+                return null;
+            }
+
+            return new LabMessage(MessageKind.Update, new JsonObject
+            {
+                ["version"] = update.Manifest.Version,
+                ["file"] = name,
+                ["manifest"] = Convert.ToBase64String(update.Json),
+                ["signature"] = Convert.ToBase64String(update.Signature),
+            }, data);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private async Task SendUpdate(AgentEntry agent, CancellationToken cancel)
+    {
+        AvailableUpdate? update;
+        lock (_gate)
+        {
+            update = _update;
+        }
+
+        if (update is not null && Program(update, UpdateManifest.Agent) is { } message)
+        {
+            await Send(agent, message, cancel);
+        }
+    }
+
+    // what the console asks: the computers updated, the server updated (by its updater), or the console's program
+    private LabMessage UpdateRequest(JsonObject header)
+    {
+        var what = header["what"]?.GetValue<string>() ?? "";
+        var target = header["target"]?.GetValue<string>() ?? "*";
+        AvailableUpdate? update;
+        lock (_gate)
+        {
+            update = _update;
+        }
+
+        switch (what)
+        {
+            case "agents":
+                var marked = 0;
+                lock (_gate)
+                {
+                    foreach (var a in _agents.Values.Where(a => target == "*" || string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        a.UpdateWanted = true;
+                        a.UpdateSent = DateTime.MinValue;
+                        marked++;
+                    }
+                }
+
+                return new LabMessage(MessageKind.Note, new JsonObject { ["marked"] = marked, ["version"] = update?.Manifest.Version });
+            case "hub":
+                try
+                {
+                    // the updater of the server (systemd, as root) watches for this file, checks GitHub and installs
+                    File.WriteAllText(Path.Combine(_options.Folder, "update-request"), _options.Now().ToString("o", CultureInfo.InvariantCulture));
+                    return new LabMessage(MessageKind.Note, new JsonObject { ["requested"] = true });
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    return new LabMessage(MessageKind.Note, new JsonObject { ["requested"] = false, ["error"] = e.Message });
+                }
+
+            case "console":
+                return update is not null && Program(update, UpdateManifest.Console) is { } program
+                    ? program
+                    : new LabMessage(MessageKind.Note, new JsonObject { ["error"] = "the server has no newer console" });
+            default:
+                return new LabMessage(MessageKind.Note, new JsonObject { ["error"] = $"unknown request '{what}'" });
         }
     }
 
@@ -760,7 +932,16 @@ public sealed class LabHub
         public int Rounds { get; set; }
 
         public long Lines { get; set; }
+
+        /// <summary>The version of its program (null: an agent too old to be updated by the hub).</summary>
+        public string? Version { get; set; }
+
+        public DateTime UpdateSent { get; set; } = DateTime.MinValue;
+
+        public bool UpdateWanted { get; set; }
     }
+
+    private sealed record AvailableUpdate(UpdateManifest Manifest, byte[] Json, byte[] Signature, string Folder);
 
     private sealed class Round(int number, DateTime deadline, double rate, (JsonArray Layout, byte[] Data) pack, RoundAverage average)
     {

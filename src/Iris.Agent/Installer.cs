@@ -51,7 +51,7 @@ internal static class Installer
         Run("sc.exe", $"delete {ServiceName}", allowFailure: true);
         Run("sc.exe", $"create {ServiceName} binPath= \"\\\"{exe}\\\" service\" start= delayed-auto DisplayName= \"IRIS – učenie v noci\"");
         Run("sc.exe", $"description {ServiceName} \"IRIS: učenie čítania textu (OCR) mimo vyučovania, pri polovičnom výkone. Ovláda ho správca učebne.\"");
-        Run("sc.exe", $"failure {ServiceName} reset= 86400 actions= restart/60000/restart/60000/restart/300000");
+        Run("sc.exe", $"failure {ServiceName} reset= 86400 actions= restart/10000/restart/60000/restart/300000");
         Run("sc.exe", $"start {ServiceName}");
         Console.WriteLine($"installed: {exe} as the service {ServiceName}, settings and key in {DataFolder} (system and administrators only)");
         return 0;

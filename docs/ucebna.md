@@ -35,18 +35,80 @@ iris-agent.exe test --minutes 10
 
 Iné nastavenie: `--duty 0.3` (tichšie), `--cores 0.25`, `--eco no`. Počas skúšky si vypočujte ventilátory.
 
-## Server
-```
-iris-hub keys --folder <priečinok servera>      # vytvorí agent.key a console.key
-iris-hub run --folder <priečinok servera> --start <iris-ocr-train.iris> --backup <zdieľaný priečinok>
-```
-- Predvolené nastavenia:
+## Server (Debian alebo Ubuntu, bez grafiky)
+Server je jeden program (`iris-hub`) a jedna služba systemd. Učí ho vlastný používateľ `iris-hub` bez prihlásenia,
+nie root. Zo systému nemení nič iné: **Samba, jej nastavenia a zdieľané priečinky ostanú nedotknuté**, nič sa
+neinštaluje z internetu (okrem písiem, len ak o ne požiadate). Firewall upraví len vtedy, keď beží `ufw`: pridá jedno
+pravidlo pre port 47620.
+
+### Inštalácia
+1. Na svojom PC stiahnite **`iris-ucebna-linux`** (GitHub → Actions → posledný beh CI → Artifacts) a rozbaľte ho do
+   zdieľaného priečinka servera. Po vydaní IRIS je to súbor `iris-hub-<verzia>-linux.tar.gz` medzi súbormi vydania.
+2. Na serveri (cez SSH) v tom priečinku:
+   ```
+   sudo bash install.sh --backup <cesta k zdieľanému priečinku na serveri>
+   ```
+   Ďalšie voľby:
+   - `--start <iris-ocr-train.iris>` – model, z ktorého sa začne;
+   - `--fonts` – doinštaluje voľné písma Debianu, s ktorými server meria, ako model číta;
+   - `--port N` – iný port;
+   - `--options "…"` – ostatné nastavenia, napr. `"--round 10 --from 15:00 --until 06:00"`.
+3. Skript nainštaluje:
+   - program do `/opt/iris-hub`;
+   - dáta do `/var/lib/iris-hub` (model, kľúče, história – číta ich len server);
+   - nastavenia do `/etc/default/iris-hub`.
+
+   Potom server spustí a vypíše, či beží. Opätovné spustenie skriptu aktualizuje program a dáta ponechá.
+4. **Kľúče** si odneste a hneď ich zo zdieľaného priečinka zmažte:
+   ```
+   sudo cp /var/lib/iris-hub/agent.key /var/lib/iris-hub/console.key <zdieľaný priečinok>/
+   ```
+   - `agent.key` patrí na počítače učebne;
+   - `console.key` len do konzoly.
+- **Zdieľaný priečinok:** ak ho skript vytvára, patrí serveru. Ak už existuje, server dostane len právo doň zapisovať
+  (ACL, balík `acl`). Vlastník ani ostatné práva sa nemenia. Súbory, ktoré server zapíše, sú čitateľné pre všetkých
+  (aj cez Sambu).
+- **Denník:** `journalctl -u iris-hub -f`.
+- **Zmena nastavení:** upravte `/etc/default/iris-hub` a spustite `sudo systemctl restart iris-hub`.
+- **Predvolené nastavenia:**
   - kolo trvá 10 minút;
   - učí sa 15:00–6:00, cez víkendy celý deň;
   - počítače pracujú polovicu času na polovici jadier, v úspornom režime Windows (`--eco no` ho vypne);
   - port je 47620.
-- Ako služba systemd: `tools/lab/iris-hub.service`.
-- Model v `lab-model.iris`, čítačka pre IRIS v `iris-ocr.iris`, kolá v `rounds.jsonl`.
+- **Súbory:** model v `lab-model.iris`, čítačka pre IRIS v `iris-ocr.iris`, kolá v `rounds.jsonl`.
+
+### Aktualizácie (podpísané)
+- **Server sa raz denne okolo poludnia pozrie na GitHub**, či vyšla nová verzia IRIS (`iris-hub-update.timer`).
+- **Inštaluje len programy podpísané kľúčom vydaní IRIS.** Súkromná časť kľúča je len tajomstvom vo vydávacom procese
+  na GitHube. Každý súbor má v podpísanom zozname svoj SHA‑256. Inak nenainštaluje nič.
+- **Po stiahnutí:**
+  - nový program servera dá na miesto a reštartuje službu;
+  - programy pre počítače a konzolu uloží k sebe.
+- **Počítače učebne** dostanú nový program od servera, nikdy nie z internetu. Server im ho dáva sám medzi kolami
+  (`--auto-update no` to vypne). Konzola to vie aj hneď a hromadne. Počítač podpis overí znova, vymení svoj program
+  a Windows službu znova spustí.
+- **Konzola** ukáže, že je nová verzia, a jedným tlačidlom sa aktualizuje.
+- **Hneď (nečakať do poludnia):**
+  - `sudo systemctl start iris-hub-update`;
+  - alebo tlačidlo „Aktualizovať server“ v konzole.
+- **Kontrola bez inštalácie:** `sudo /opt/iris-hub/iris-hub update --check`.
+- Nová verzia vzniká len vydaním, ktoré schvaľuje vlastník (GitHub → Actions → Release → Review deployments).
+
+**Kľúč vydaní – raz, robí ho vlastník (súkromná časť nikdy neopustí jeho stroj a GitHub):**
+1. Na serveri: `/opt/iris-hub/iris-hub signing-key --out ~/iris-update-key.pem`.
+2. Celý text súboru vložte na GitHube do tajomstva **`IRIS_UPDATE_KEY`**: Settings → Secrets and variables → Actions →
+   New repository secret.
+3. Súbor zmažte, alebo ho uložte offline ako zálohu.
+4. Verejnú časť, ktorú príkaz vypíše, treba v repozitári uložiť ako `tools/lab/update-key.pub`. Vstavia ju programy
+   z nasledujúcich verzií.
+5. Kým kľúč nie je nastavený, vydanie programy učebne neobsahuje a nič sa samo neaktualizuje.
+
+### Odinštalovanie
+```
+sudo bash /opt/iris-hub/uninstall.sh            # služby, program, nastavenia; dáta zostanú
+sudo bash /opt/iris-hub/uninstall.sh --purge    # aj dáta (model, kľúče, história) a používateľ iris-hub
+```
+Zdieľaný priečinok so zálohou modelu ani nič iné v systéme sa pri odinštalovaní nemení.
 
 ## Konzola
 - `iris-console.exe` na vašom PC. V *Nastaveniach* zadajte server a kľúč `console.key`. Konzola má tieto stránky:

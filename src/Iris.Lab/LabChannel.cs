@@ -44,6 +44,18 @@ public enum MessageKind : byte
 
     /// <summary>Console → hub: look through the network (and the computers of the classroom); hub → console: what it found.</summary>
     Scan = 10,
+
+    /// <summary>
+    /// Hub → agent: a new signed program (manifest and signature in the header, the file as data); console → hub: update
+    /// the computers, the server or give the console its program; hub → console: the console's program or a note.
+    /// </summary>
+    Update = 11,
+
+    /// <summary>Agent → hub: what the computer is (maker, model, processor, memory, disks – from the firmware's tables).</summary>
+    Inventory = 12,
+
+    /// <summary>Console → hub: names, groups and settings of the computers; hub → console: the configuration as it is now.</summary>
+    Configure = 13,
 }
 
 /// <summary>A message: its kind, a small JSON header and binary data (tensors), possibly empty.</summary>
