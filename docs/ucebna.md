@@ -45,6 +45,24 @@ iris-hub run --folder <priečinok servera> --start <iris-ocr-train.iris> --backu
 - Ako služba systemd: `tools/lab/iris-hub.service`.
 - Model v `lab-model.iris`, čítačka pre IRIS v `iris-ocr.iris`, kolá v `rounds.jsonl`.
 
+## Konzola
+- `iris-console.exe` na vašom PC. V *Nastaveniach* zadajte server a kľúč `console.key`. Konzola má tieto stránky:
+  - **Prehľad** – dlaždice počítačov podľa stavu, vyťaženia alebo teploty; pravým tlačidlom príkazy.
+  - **Počítače** – tabuľka všetkých meraní.
+  - **Grafy** – história za 6 h až týždeň.
+  - **Kolá a učenie** – loss a chybovosť (CER).
+  - **Sieť** – prehľadanie siete a budenie.
+
+## Budenie a vypínanie
+- **Server o 15:00 zobudí počítače učebne, ktoré sú vypnuté** (Wake-on-LAN) a **o 6:00 ich zasa vypne**. Tie, ktoré
+  boli zapnuté, nechá tak.
+- **Na každom PC treba v BIOS/UEFI povoliť Wake-on-LAN** (napr. „Power On by PCI-E/LAN“) a vo Windows na sieťovej karte
+  „Umožniť tomuto zariadeniu prebudiť počítač“. Rýchle spustenie Windows môže budenie z vypnutého stavu brániť.
+- Kartu (MAC) každého PC si server zapamätá, keď sa PC prvýkrát pripojí.
+- Vypnúť automatické budenie: `iris-hub run … --wake no`.
+- **Prehľadanie siete** (stránka Sieť) robí server, len vo vlastnej sieti. Zisťuje odozvu (ping), názov NetBIOS
+  (odpovedá naň aj Windows, ktorý neodpovedá na ping), kartu z tabuľky ARP a názov v DNS. Porty neskúša.
+
 ## Počítač v učebni (ako správca)
 ```
 iris-agent.exe install --hub <adresa servera> --key agent.key

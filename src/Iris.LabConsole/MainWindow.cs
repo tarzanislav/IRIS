@@ -89,6 +89,9 @@ public sealed class MainWindow : Window
         };
         _pages["charts"] = charts;
         _pages["rounds"] = new RoundsPage();
+        var network = new NetworkPage();
+        network.Scan = ScanNetwork;
+        _pages["network"] = network;
         var settingsPage = new SettingsPage(settings);
         settingsPage.Saved = () =>
         {
@@ -160,6 +163,7 @@ public sealed class MainWindow : Window
                      ("computers", "Počítače", "Sky", "SkyDeep", "M2,4 H18 V13 H2 Z M7,17 H13 M10,13 V17"),
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
                      ("rounds", "Kolá a učenie", "Peach", "PeachDeep", "M10,3 A7,7 0 1 1 3,10 M3,4 V10 H9"),
+                     ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
                      ("settings", "Nastavenia", "Lilac", "LilacDeep", "M10,6 A4,4 0 1 1 10,14 A4,4 0 1 1 10,6 Z M10,1 V4 M10,16 V19 M1,10 H4 M16,10 H19"),
                  })
         {
@@ -262,6 +266,28 @@ public sealed class MainWindow : Window
             _pages[_current].Show(_data);
         }
     }
+
+    private async Task<JsonObject?> ScanNetwork()
+    {
+        if (_client is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            return await _client.ScanAsync(timeout.Token);
+        }
+        catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
+        {
+            Disconnect();
+            return null;
+        }
+    }
+
+    /// <summary>The network page (the self-test gives it a scan to show).</summary>
+    public NetworkPage Network => (NetworkPage)_pages["network"];
 
     private async Task SendCommand(string target, string command)
     {

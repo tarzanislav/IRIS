@@ -41,6 +41,9 @@ public enum MessageKind : byte
 
     /// <summary>Console → hub: the history of a span (from, to, computer, bucket minutes); hub → console: the series (JSON).</summary>
     History = 9,
+
+    /// <summary>Console → hub: look through the network (and the computers of the classroom); hub → console: what it found.</summary>
+    Scan = 10,
 }
 
 /// <summary>A message: its kind, a small JSON header and binary data (tensors), possibly empty.</summary>

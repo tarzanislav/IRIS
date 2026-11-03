@@ -43,6 +43,12 @@ public sealed class LabConsoleClient : IDisposable
             ["bucket"] = bucketMinutes,
         }), cancel);
 
+    /// <summary>What the hub finds in the network (it takes some seconds).</summary>
+    public async Task<JsonObject> ScanAsync(CancellationToken cancel) => await Ask(new LabMessage(MessageKind.Scan, []), cancel);
+
+    /// <summary>Wakes a computer of the classroom ("*" = all that are off) or any card ("mac:AA-BB-…"); returns how many.</summary>
+    public Task<int> WakeAsync(string target, CancellationToken cancel) => CommandAsync(target, "wake", cancel);
+
     /// <summary>Sends one of <see cref="LabCommands"/> to a computer ("*" = all); returns to how many it went.</summary>
     public async Task<int> CommandAsync(string target, string command, CancellationToken cancel)
     {

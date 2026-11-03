@@ -504,3 +504,165 @@ public sealed class SettingsPage : ConsolePage
         }
     }
 }
+
+/// <summary>
+/// The network: the computers of the classroom with their cards (wake one, or all that are off), and a look through
+/// the network by the hub – addresses, cards, names – with waking for any card that allows it.
+/// </summary>
+public sealed class NetworkPage : ConsolePage
+{
+    private readonly StackPanel _root = new() { Margin = new Thickness(4) };
+    private JsonObject? _scan;
+    private string? _note;
+    private ConsoleData? _last;
+
+    public NetworkPage()
+    {
+        var scroll = Scroll(_root);
+        scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+        Content = scroll;
+    }
+
+    /// <summary>Asks the hub to look through the network; set by the window.</summary>
+    public Func<Task<JsonObject?>>? Scan { get; set; }
+
+    /// <summary>The result of a scan (the self-test sets one).</summary>
+    public JsonObject? Found
+    {
+        get => _scan;
+        set => _scan = value;
+    }
+
+    public override void Show(ConsoleData data)
+    {
+        _last = data;
+        _root.Children.Clear();
+        _root.Children.Add(Ui.Title("Sieť"));
+        var tools = new WrapPanel { Margin = new Thickness(8, 0, 8, 4) };
+        tools.Children.Add(Ui.Button("Prehľadať sieť", async () =>
+        {
+            if (Scan is null)
+            {
+                return;
+            }
+
+            _note = "Server prehľadáva sieť, chvíľu to trvá…";
+            Show(data);
+            _scan = await Scan();
+            _note = _scan is null ? "Prehľadanie sa nepodarilo." : null;
+            if (_last is not null)
+            {
+                Show(_last);
+            }
+        }, primary: true));
+        tools.Children.Add(Ui.Button("Zobudiť všetky vypnuté", () => Ask("*", "wake")));
+        _root.Children.Add(tools);
+        var auto = data.Snapshot?["auto_wake"]?.GetValue<bool>() == true;
+        var schedule = data.Snapshot?["schedule"];
+        _root.Children.Add(Ui.Text(auto
+            ? $"Automatické budenie je zapnuté: o {schedule?["from"]} server zobudí vypnuté počítače učebne a o {schedule?["until"]} ich zasa vypne (tie, ktoré boli zapnuté, nechá tak)."
+            : "Automatické budenie je vypnuté (iris-hub --wake no).", 13, brush: "TextMuted"));
+        if (_note is not null)
+        {
+            _root.Children.Add(Ui.Text(_note, 13, bold: true, brush: "Accent"));
+        }
+
+        // the computers of the classroom
+        var known = new Grid();
+        Columns(known, "Počítač", "Karta (MAC)", "Adresa", "Stav", "");
+        var row = 1;
+        foreach (var agent in data.Agents)
+        {
+            known.RowDefinitions.Add(new RowDefinition());
+            var name = agent["name"]?.GetValue<string>() ?? "?";
+            var mac = agent["mac"]?.GetValue<string>();
+            var (state, back, fore) = Ui.State(agent);
+            Place(known, Ui.Text(name, 14, bold: true), row, 0);
+            Place(known, Ui.Text(mac ?? "zatiaľ neznáma", 13, brush: mac is null ? "TextMuted" : "Text"), row, 1);
+            Place(known, Ui.Text(agent["address"]?.GetValue<string>() ?? "", 13, brush: "TextMuted"), row, 2);
+            Place(known, Ui.Badge(agent["woken"]?.GetValue<bool>() == true ? state + " · zobudený serverom" : state, back, fore), row, 3);
+            if (mac is not null && agent["connected"]?.GetValue<bool>() != true)
+            {
+                Place(known, Small("Zobudiť", () => Ask(name, "wake")), row, 4);
+            }
+
+            row++;
+        }
+
+        _root.Children.Add(Ui.Card(Section("Počítače učebne", known)));
+
+        // what the scan found
+        if (_scan?["devices"] is JsonArray devices)
+        {
+            var grid = new Grid();
+            Columns(grid, "Adresa", "Karta (MAC)", "Názov (DNS)", "Názov (NetBIOS)", "Pracovná skupina", "Odozva", "Počítač IRIS", "");
+            row = 1;
+            foreach (var device in devices.OfType<JsonObject>())
+            {
+                grid.RowDefinitions.Add(new RowDefinition());
+                var mac = device["mac"]?.GetValue<string>();
+                Place(grid, Ui.Text(device["address"]?.GetValue<string>() ?? "", 13, bold: true), row, 0);
+                Place(grid, Ui.Text(mac is null ? "–" : mac + (device["local_mac"]?.GetValue<bool>() == true ? " (súkromná)" : ""), 13), row, 1);
+                Place(grid, Ui.Text(device["dns"]?.GetValue<string>() ?? "–", 13), row, 2);
+                Place(grid, Ui.Text(device["netbios"]?.GetValue<string>() ?? "–", 13), row, 3);
+                Place(grid, Ui.Text(device["workgroup"]?.GetValue<string>() ?? "–", 13, brush: "TextMuted"), row, 4);
+                Place(grid, Ui.Text(Ui.Number(device["ping"], "0", " ms"), 13), row, 5);
+                Place(grid, Ui.Text(device["computer"]?.GetValue<string>() ?? "", 13, bold: true, brush: "Good"), row, 6);
+                if (mac is not null)
+                {
+                    Place(grid, Small("Zobudiť", () => Ask("mac:" + mac, "wake")), row, 7);
+                }
+
+                row++;
+            }
+
+            _root.Children.Add(Ui.Card(Section($"Nájdené v sieti ({devices.Count}) – {Ui.Ago(_scan["time"])}", grid)));
+        }
+        else
+        {
+            _root.Children.Add(Ui.Card(Ui.Text("Server prehľadá len vlastnú sieť: odozvu (ping), názov NetBIOS, kartu (MAC) a názov v DNS. Porty neskúša.", 13, brush: "TextMuted")));
+        }
+    }
+
+    private static StackPanel Section(string title, UIElement content)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Text(title, 16, bold: true));
+        panel.Children.Add(new Border { Height = 8 });
+        panel.Children.Add(content);
+        return panel;
+    }
+
+    private static void Columns(Grid grid, params string[] headers)
+    {
+        foreach (var _ in headers)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        }
+
+        grid.RowDefinitions.Add(new RowDefinition());
+        for (var c = 0; c < headers.Length; c++)
+        {
+            Place(grid, Ui.Caption(headers[c]), 0, c);
+        }
+    }
+
+    private static Button Small(string text, Action click)
+    {
+        var button = Ui.Button(text, click);
+        button.MinHeight = 30;
+        button.Padding = new Thickness(12, 0, 12, 0);
+        button.FontSize = 12.5;
+        button.Margin = new Thickness(0);
+        return button;
+    }
+
+    private static void Place(Grid grid, FrameworkElement element, int row, int column)
+    {
+        element.Margin = new Thickness(0, 5, 22, 5);
+        element.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetRow(element, row);
+        Grid.SetColumn(element, column);
+        grid.Children.Add(element);
+    }
+}

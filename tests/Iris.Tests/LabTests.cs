@@ -190,6 +190,73 @@ public static class LabTests
         }
     }
 
+    [Test]
+    public static async Task HubWakesTheComputersThatAreOffAndReturnsThem()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-wake-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            File.WriteAllText(Path.Combine(folder, "computers.json"), """
+                {"computers":[{"name":"PC-01","mac":"00-11-22-33-44-01","address":"10.0.0.101"},{"name":"PC-02","mac":"00-11-22-33-44-02","address":"10.0.0.102"},{"name":"PC-03","address":"10.0.0.103"}],"woken":[]}
+                """);
+            var clock = new DateTime(2026, 11, 2, 14, 50, 0); // a Monday, before the time of learning
+            var woken = new List<string>();
+            var hub = new LabHub(new LabHubOptions
+            {
+                Folder = folder,
+                Now = () => clock,
+                Wake = (mac, _) =>
+                {
+                    woken.Add(mac);
+                    return Task.CompletedTask;
+                },
+            }, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState());
+            await hub.Step(default);
+            Assert.Equal(0, woken.Count, "nothing is woken during lessons");
+            clock = clock.AddMinutes(11); // 15:01
+            await hub.Step(default);
+            Assert.Sequence(["00-11-22-33-44-01", "00-11-22-33-44-02"], woken.Order(), "both computers with a known card are woken");
+            Assert.True(hub.Snapshot()["agents"]!.AsArray().Count(a => a!["woken"]!.GetValue<bool>()) == 2, "the hub remembers which it woke");
+            clock = clock.AddMinutes(6);
+            await hub.Step(default);
+            Assert.Equal(4, woken.Count, "once more after five minutes for those still off");
+            clock = new DateTime(2026, 11, 3, 6, 1, 0);
+            await hub.Step(default);
+            Assert.True(hub.Snapshot()["agents"]!.AsArray().All(a => !a!["woken"]!.GetValue<bool>()), "at the end of the time it forgets them");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Test]
+    public static void NetworkNamesAndCardsAreRead()
+    {
+        Assert.Sequence(new byte[] { 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E }, NetworkScanner.ParseMac("00-1a-2b-3c-4d-5e")!, "a MAC with dashes");
+        Assert.Sequence(new byte[] { 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E }, NetworkScanner.ParseMac("00:1A:2B:3C:4D:5E")!, "a MAC with colons");
+        Assert.True(NetworkScanner.ParseMac("00-1a-2b") is null, "too short");
+        Assert.True(new NetworkDevice("10.0.0.5", "DA-A1-19-00-00-01", null, null, null, null).LocalMac, "a private (software) MAC");
+        Assert.True(!new NetworkDevice("10.0.0.5", "00-1A-2B-3C-4D-5E", null, null, null, null).LocalMac, "a maker's MAC");
+
+        // a NetBIOS node status answer with the computer name and the workgroup
+        var answer = new byte[12 + 34 + 10 + 1 + 3 * 18 + 6];
+        answer[56] = 3;
+        void Name(int i, string text, byte type, bool group)
+        {
+            var at = 57 + 18 * i;
+            System.Text.Encoding.ASCII.GetBytes(text.PadRight(15)).CopyTo(answer, at);
+            answer[at + 15] = type;
+            answer[at + 16] = group ? (byte)0x80 : (byte)0;
+        }
+
+        Name(0, "UCEBNA-PC07", 0x00, false);
+        Name(1, "SKOLA", 0x00, true);
+        Name(2, "UCEBNA-PC07", 0x20, false);
+        Assert.Equal(("UCEBNA-PC07", (string?)"SKOLA"), NetworkScanner.ParseNodeStatus(answer)!.Value, "name and workgroup");
+    }
+
     private static async Task<(LabChannel Server, LabChannel Client)> Pair(byte[] serverAgentKey, byte[] clientKey, byte[] serverConsoleKey)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
