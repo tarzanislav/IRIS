@@ -15,7 +15,8 @@ public sealed class ComputersPage : ConsolePage
     private readonly Grid _root = new();
     private readonly StackPanel _list = new();
     private readonly ContentControl _detail = new();
-    private readonly TextBox _search = new() { MinWidth = 220, Margin = new Thickness(0, 0, 12, 0) };
+    private readonly ScrollViewer _detailHost;
+    private readonly TextBox _search = new() { Width = 280, Margin = new Thickness(0, 0, 12, 0), HorizontalAlignment = HorizontalAlignment.Left };
     private StackPanel? _live;
     private string? _selected;
     private string? _detailFor;
@@ -42,10 +43,11 @@ public sealed class ComputersPage : ConsolePage
         left.Children.Add(tools);
         left.Children.Add(Scroll(_list));
         _root.Children.Add(left);
-        var detail = Scroll(_detail);
-        detail.Width = 470;
-        Grid.SetColumn(detail, 1);
-        _root.Children.Add(detail);
+        _detailHost = Scroll(_detail);
+        _detailHost.Width = 460;
+        _detailHost.Visibility = Visibility.Collapsed;
+        Grid.SetColumn(_detailHost, 1);
+        _root.Children.Add(_detailHost);
         Content = _root;
     }
 
@@ -75,7 +77,8 @@ public sealed class ComputersPage : ConsolePage
 
         var query = _search.Text.Trim();
         var table = new StackPanel();
-        table.Children.Add(Row(null, ["Počítač", "Skupina", "Stav", "Procesor", "Teplota", "Riadky/s", "Verzia"], header: true));
+        var compact = _selected is not null && data.Agent(_selected) is not null; // beside an open computer: name, state, temperature
+        table.Children.Add(Row(null, ["Počítač", "Skupina", "Stav", "Procesor", "Teplota", "Riadky/s", "Verzia"], header: true, compact));
         foreach (var agent in data.Agents.OrderBy(a => Ui.String(a["group"]) ?? "", StringComparer.OrdinalIgnoreCase).ThenBy(Ui.Name, StringComparer.OrdinalIgnoreCase))
         {
             var name = Ui.String(agent["name"]) ?? "?";
@@ -98,11 +101,16 @@ public sealed class ComputersPage : ConsolePage
                 Ui.Number(machine?["temperature"], "0", " °C"),
                 Ui.Number(agent["status"]?["last"]?["lines_per_second"], "0.0"),
                 version is null ? "–" : old ? version + " ↑" : version
-            ], header: false, badge: Ui.Badge(state, back, fore));
+            ], header: false, compact, badge: Ui.Badge(state, back, fore));
             radio.Checked += (_, _) =>
             {
+                var wasCompact = _selected is not null;
                 _selected = name;
                 Detail(data);
+                if (!wasCompact)
+                {
+                    Dispatcher.BeginInvoke(() => List(data)); // the list narrows beside the computer
+                }
             };
             table.Children.Add(radio);
         }
@@ -111,16 +119,22 @@ public sealed class ComputersPage : ConsolePage
     }
 
     // one line of the list: the name (and the computer's own name under it), the group, the state, the numbers
-    private static Grid Row(JsonObject? agent, string?[] cells, bool header, Border? badge = null)
+    private static Grid Row(JsonObject? agent, string?[] cells, bool header, bool compact, Border? badge = null)
     {
         var grid = new Grid { Margin = header ? new Thickness(10, 0, 10, 6) : new Thickness(0) };
-        foreach (var width in new[] { 2.2, 1.6, 1.5, 0.9, 0.9, 0.9, 0.9 })
+        double[] widths = compact ? [2.4, 0, 1.7, 0, 0.9, 0, 0] : [2.2, 1.6, 1.5, 0.9, 0.9, 0.9, 0.9];
+        foreach (var width in widths)
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width, GridUnitType.Star) });
         }
 
         for (var c = 0; c < cells.Length; c++)
         {
+            if (widths[c] == 0)
+            {
+                continue;
+            }
+
             FrameworkElement element;
             if (header)
             {
@@ -162,11 +176,12 @@ public sealed class ComputersPage : ConsolePage
     {
         if (_selected is null || data.Agent(_selected) is not { } agent)
         {
-            _detail.Content = Ui.Card(Ui.Text("Vyberte počítač v zozname: ukáže sa, ako sa mu darí, jeho príkazy, vlastné nastavenia a čo je zač.", 13.5, brush: "TextMuted"));
+            _detailHost.Visibility = Visibility.Collapsed;
             _detailFor = null;
             return;
         }
 
+        _detailHost.Visibility = Visibility.Visible;
         // the editors are built once per computer (a refresh must not throw away what is being typed); the measurements every time
         if (_detailFor != _selected)
         {
@@ -185,7 +200,18 @@ public sealed class ComputersPage : ConsolePage
 
         // who it is: the name in the console, the group
         var head = new StackPanel();
-        head.Children.Add(new TextBlock { Text = Ui.Name(agent), FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Ui.Resource<Brush>("TitleGradient"), FontFamily = Ui.Resource<FontFamily>("DisplayFont") });
+        var title = new DockPanel();
+        var close = Ui.Small("Zavrieť", () =>
+        {
+            _selected = null;
+            _detailFor = null;
+            Show(data);
+        });
+        close.Margin = new Thickness(8, 0, 0, 0);
+        DockPanel.SetDock(close, Dock.Right);
+        title.Children.Add(close);
+        title.Children.Add(new TextBlock { Text = Ui.Name(agent), FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Ui.Resource<Brush>("TitleGradient"), FontFamily = Ui.Resource<FontFamily>("DisplayFont"), TextTrimming = TextTrimming.CharacterEllipsis });
+        head.Children.Add(title);
         head.Children.Add(Ui.Text($"{name} · {agent["address"]} · {Ui.String(agent["mac"]) ?? "karta neznáma"}", 12.5, brush: "TextMuted"));
         head.Children.Add(new Border { Height = 12 });
         var alias = new TextBox { Text = Ui.String(agent["alias"]) ?? "", MinWidth = 200 };

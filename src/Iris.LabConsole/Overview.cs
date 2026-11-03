@@ -45,7 +45,7 @@ public sealed class OverviewPage : ConsolePage
         numbers.Children.Add(Number(Ui.Icons.Computers, "Sky", "SkyDeep", "Počítače", $"{connected} / {agents.Count}", "pripojené"));
         numbers.Children.Add(Number(Ui.Icons.Learning, "Mint", "MintDeep", "Učia sa", learning.Count.ToString(CultureInfo.InvariantCulture),
             open ? $"čas učenia do {schedule?["until"]}" : $"učenie od {schedule?["from"]}"));
-        numbers.Children.Add(Number(Ui.Icons.Speed, "Peach", "PeachDeep", "Riadky za sekundu", speed.ToString("0.0", CultureInfo.InvariantCulture), "celá učebňa"));
+        numbers.Children.Add(Number(Ui.Icons.Speed, "Peach", "PeachDeep", "Riadky/s", speed.ToString("0.0", CultureInfo.InvariantCulture), "celá učebňa"));
         numbers.Children.Add(Number(Ui.Icons.Model, "Lavender", "LavenderDeep", "Model", $"v{snapshot?["version"] ?? 0}",
             tests.LastOrDefault() is { } test ? $"chybovosť {Ui.Number(test["cer"], "0.00", " %")}" : "chybovosť zatiaľ nezmeraná",
             Sparkline([.. tests.Select(t => Ui.Value(t["cer"]))])));
@@ -75,7 +75,7 @@ public sealed class OverviewPage : ConsolePage
         // the tiles by group on the left, attention and learning on the right
         var body = new Grid();
         body.ColumnDefinitions.Add(new ColumnDefinition());
-        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(300) });
         var groups = new StackPanel();
         foreach (var (group, computers) in data.Groups)
         {
@@ -219,6 +219,7 @@ public sealed class OverviewPage : ConsolePage
         var panel = new StackPanel();
         panel.Children.Add(Ui.Heading("Pozornosť"));
         var notes = new List<(string Text, string Tint, string Deep, string? Computer)>();
+        var older = 0;
         foreach (var agent in data.Agents)
         {
             var name = Ui.String(agent["name"]) ?? "?";
@@ -247,8 +248,14 @@ public sealed class OverviewPage : ConsolePage
 
             if (data.Available is { } available && Ui.String(agent["version"]) is { } version && Iris.Lab.LabUpdates.IsNewer(available, version))
             {
-                notes.Add(($"{shown}: program {version}, server má {available}", "Lilac", "LilacDeep", name));
+                older++;
             }
+        }
+
+        if (older > 0)
+        {
+            // one line for all of them: the update goes between rounds by itself, or at once from Settings
+            notes.Add(($"{older} {Computers(older)} so starším programom – server má {data.Available}", "Lilac", "LilacDeep", null));
         }
 
         if (notes.Count == 0)

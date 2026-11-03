@@ -74,14 +74,29 @@ public partial class App : Application
         }
     }
 
+    // a picture of the window's content at the size of a usual screen (the runner's screen is smaller than the window)
     private static void Picture(Window window, string folder, string name)
     {
+        const int Width = 1360, Height = 880;
         window.UpdateLayout();
         window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-        Ui.SizeBars(window);
-        window.UpdateLayout();
-        var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(window);
+        var root = (FrameworkElement)window.Content;
+        for (var pass = 0; pass < 2; pass++)
+        {
+            root.Measure(new Size(Width, Height));
+            root.Arrange(new Rect(0, 0, Width, Height));
+            Ui.SizeBars(root);
+        }
+
+        var bitmap = new RenderTargetBitmap(Width, Height, 96, 96, PixelFormats.Pbgra32);
+        var background = new DrawingVisual();
+        using (var dc = background.RenderOpen())
+        {
+            dc.DrawRectangle(window.Background, null, new Rect(0, 0, Width, Height));
+        }
+
+        bitmap.Render(background);
+        bitmap.Render(root);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var file = File.Create(Path.Combine(folder, $"console-{name}.png"));
