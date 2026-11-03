@@ -1,4 +1,5 @@
 using Iris.Numerics;
+using Iris.Vision.Fonts;
 using Iris.Vision.Ocr;
 using Iris.Vision.Training;
 
@@ -274,6 +275,104 @@ public static unsafe class OcrTrainingTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    public static void RasterizerCoversExactAreas()
+    {
+        // a square at a fractional place: every pixel gets its covered share, the sum is the area
+        var square = new Rasterizer(20, 20);
+        square.MoveTo(3.25f, 4.5f);
+        square.LineTo(13.25f, 4.5f);
+        square.LineTo(13.25f, 14.5f);
+        square.LineTo(3.25f, 14.5f);
+        square.Close();
+        var coverage = square.Coverage();
+        Assert.Near(100, coverage.Sum(), 1e-3, "area of a 10 × 10 square");
+        Assert.Near(0.75 * 0.5, coverage[4 * 20 + 3], 1e-5, "a corner pixel");
+        Assert.Near(1, coverage[8 * 20 + 8], 1e-6, "an inner pixel");
+
+        // a triangle, drawn the other way round (the winding does not matter), and a circle of cubic curves
+        var triangle = new Rasterizer(30, 30);
+        triangle.MoveTo(2, 2);
+        triangle.LineTo(2.5f, 27);
+        triangle.LineTo(26, 13.3f);
+        triangle.Close();
+        Assert.Near(0.5 * Math.Abs((0.5 * 11.3) - (24 * 25)), triangle.Coverage().Sum(), 1e-2, "area of a triangle");
+
+        var circle = new Rasterizer(40, 40);
+        const float K = 0.5523f * 15, C = 20;
+        circle.MoveTo(C + 15, C);
+        circle.CubicTo(C + 15, C + K, C + K, C + 15, C, C + 15);
+        circle.CubicTo(C - K, C + 15, C - 15, C + K, C - 15, C);
+        circle.CubicTo(C - 15, C - K, C - K, C - 15, C, C - 15);
+        circle.CubicTo(C + K, C - 15, C + 15, C - K, C + 15, C);
+        circle.Close();
+        Assert.Near(Math.PI * 225, circle.Coverage().Sum(), 4, "area of a circle");
+    }
+
+    [Test]
+    public static void FontsAreReadAndDrawn()
+    {
+        var file = new[] { "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", @"C:\Windows\Fonts\arial.ttf" }.FirstOrDefault(File.Exists)
+            ?? throw new SkipException("no DejaVu Sans or Arial on this computer");
+        var face = FontFace.Load(file)[0];
+        Assert.True(face.Covers(OcrShape.DefaultCharset), $"{face.Name} has every character of the OCR");
+        Assert.True(face.Kerning(face.GlyphOf('A'), face.GlyphOf('V')) < 0, "A and V are kerned closer");
+        var line = LineArtist.Typeset("Žluťoučký kůň", face, 32, 255, 0);
+        var ink = line.Values.Count(v => v < 128);
+        Assert.True(line.Height > 32 && line.Width > 200 && ink > 500, $"the line is drawn ({line.Width} × {line.Height}, {ink} dark pixels)");
+
+        var artist = new LineArtist([face]);
+        var random = new Random(1);
+        var texts = new LineTexts(OcrShape.Default, new Dictionary<string, string[]>(), 1);
+        var drawn = Enumerable.Range(0, 20).Select(_ => artist.Line(texts.Next(), OcrShape.Default, random)).Where(l => l is not null).ToList();
+        Assert.True(drawn.Count >= 15, "most lines fit");
+        Assert.True(drawn.All(l => l!.Ink.Length == 32 * l.Width && l.Ink.All(v => v >= 0 && v <= 1)), "lines are 32 rows of ink values");
+    }
+
+    [Test]
+    public static void SmallReaderLearns()
+    {
+        var shape = Tiny(8, 8);
+        var weights = OcrWeights.Create(shape, seed: 3);
+        var adam = new AdamW();
+        // two "letters": a dark stroke and a light gap repeated in different rhythms
+        var random = new Random(4);
+        TrainingLine Line(string text)
+        {
+            var width = 8 * text.Length + 8;
+            var ink = new float[shape.Height * width];
+            for (var i = 0; i < text.Length; i++)
+            {
+                var stripes = text[i] == 'a' ? 1 : text[i] == 'b' ? 2 : 3;
+                for (var y = 0; y < shape.Height; y++)
+                {
+                    for (var x = 0; x < 8; x++)
+                    {
+                        ink[y * width + 4 + 8 * i + x] = x % (8 / stripes) < 2 ? 0.9f : 0.05f + 0.05f * (float)random.NextDouble();
+                    }
+                }
+            }
+
+            return new TrainingLine(ink, width, text, shape.Encode(text));
+        }
+
+        var batch = new LineBatch(new[] { "abc", "cab", "bca", "aab", "cc", "bac" }.Select(Line));
+        using var network = new OcrNetwork(weights) { Threads = 2 };
+        var gradients = new OcrWeights(shape);
+        double first = 0, last = 0;
+        for (var step = 0; step < 300; step++)
+        {
+            gradients.Clear();
+            last = network.Learn(batch, gradients);
+            first = step == 0 ? last : first;
+            AdamW.Clip(gradients, 5);
+            adam.Step(weights, gradients, 1e-2f);
+        }
+
+        Assert.True(last < first * 0.3, $"the loss falls ({first:F3} → {last:F3})");
+        Assert.Equal(0.0, OcrTrainer.Cer(network, batch.Lines), "it reads the lines it learned");
     }
 
     internal static float[] Values(Random random, int count)

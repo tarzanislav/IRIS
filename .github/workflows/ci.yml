@@ -201,6 +201,63 @@ jobs:
         run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris
 
   # F3: learning – loss and gradient as PyTorch computes them, learning from corrections, no harm on FLORES-200 devtest
+  # the own OCR learning in C#: exactly what PyTorch computes (loss, every gradient, one AdamW step) on the same lines,
+  # the speed of both on the same computer, and a short learning that goes on from the last model of "OCR learning"
+  ocr-learning:
+    name: OCR learning in C#
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: Free fonts (SIL OFL, DejaVu/Bitstream Vera, GUST) – only to draw the test lines
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core fonts-dejavu-extra fonts-liberation2 \
+            fonts-noto-core fonts-texgyre fonts-crosextra-carlito fonts-crosextra-caladea fonts-linuxlibertine
+      - name: Python tools (PyTorch, Pillow) – only for the reference
+        run: |
+          bash tools/reference/prepare-opus.sh
+          /tmp/venv/bin/pip install -q -r tools/ocr/requirements.txt
+      - name: Build
+        run: dotnet build src/Iris.Cli -c Release
+      - name: Reference – one batch of lines through PyTorch (packed like C#)
+        run: /tmp/venv/bin/python tools/ocr/reference_training.py /tmp/ocr-reference --threads "$(nproc)"
+      - name: The C# learning against PyTorch – loss, gradients, AdamW; speed of both
+        run: |
+          set -o pipefail
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr-training /tmp/ocr-reference --threads "$(nproc)" | tee /tmp/ocr-check.txt
+          echo "::notice title=OCR learning in C#::$(grep '^speed' /tmp/ocr-check.txt)"
+      - name: Going on from the last model of "OCR learning" – 20 minutes in C#
+        run: |
+          run=$(gh run list --workflow ocr.yml --status success --limit 20 --json databaseId,headBranch \
+            --jq '[.[] | select(.headBranch | endswith("-smoke") | not)][0].databaseId')
+          if [ -z "$run" ]; then echo "::notice title=OCR learning in C#::no model of OCR learning yet"; exit 0; fi
+          gh run download "$run" -n ocr-model -D /tmp/ocr-model
+          /tmp/venv/bin/python tools/ocr/to_training_file.py /tmp/ocr-model/checkpoint.pt /tmp/ocr-start.iris
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll train-ocr /tmp/ocr-cs --start /tmp/ocr-start.iris --minutes 20 --plan 20 \
+            --rate 2e-4 --families DejaVu,Liberation,NotoSans-,NotoSerif-,texgyre,Carlito,Caladea,LinLibertine,LinBiolinum \
+            --fonts /usr/share/fonts:/usr/share/texmf/fonts/opentype/public/tex-gyre \
+            --threads "$(nproc)" --test-lines 300 --test-every 10 | tee /tmp/ocr-cs.txt
+          echo "::notice title=OCR learning in C# (from run $run)::$(grep -m1 'CER' /tmp/ocr-cs.txt) → $(tail -1 /tmp/ocr-cs.txt)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ocr-learning-cs
+          path: |
+            /tmp/ocr-check.txt
+            /tmp/ocr-cs/
+          retention-days: 14
+
   learning:
     name: Learning (F3)
     runs-on: ubuntu-24.04

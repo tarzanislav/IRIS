@@ -25,6 +25,10 @@ try
         ["lines", var picture, .. var rest] => Lines(picture, Options.Parse(rest, [], ["--out"])),
         ["ocr", var model, var picture] => Ocr(model, picture),
         ["check-ocr", var model, var folder, .. var rest] => CheckOcr(model, folder, Options.Parse(rest, [], ["--min-text"])),
+        ["train-ocr", var folder, .. var rest] => TrainOcr(folder, Options.Parse(rest, [],
+            ["--start", "--minutes", "--plan", "--rate", "--fonts", "--families", "--exclude", "--unseen", "--sentences", "--threads",
+             "--drawing-threads", "--duty", "--batch", "--test-lines", "--test-every", "--seed"])),
+        ["check-ocr-training", var folder, .. var rest] => CheckOcrTraining(folder, Options.Parse(rest, [], ["--threads"])),
         ["verify", var model, var reference, .. var rest] => Verify(model, reference,
             Options.Parse(rest, ["--no-greedy", "--no-beam", "--int8"], ["--min-greedy", "--min-beam", "--min-tokenizer", "--limit"])),
         ["bench", var model, .. var rest] => Bench(model, Options.Parse(rest, ["--int8"], ["--runs", "--max-seconds"])),
@@ -541,6 +545,203 @@ static int CheckOcr(string modelPath, string folder, Options options)
     }
 }
 
+// OCR learning in C#: from a learning file (or from scratch) on lines drawn with own font code, for the given minutes
+static int TrainOcr(string folder, Options options)
+{
+    options.NoWords();
+    var shape = Iris.Vision.Training.OcrShape.Default;
+    Iris.Vision.Training.OcrWeights weights;
+    Iris.Vision.Training.AdamW adam;
+    Iris.Vision.Training.OcrLearningState state;
+    if (options.Value("--start") is { } start)
+    {
+        (weights, adam, state) = Iris.Vision.Training.OcrFiles.LoadTraining(start);
+        shape = weights.Shape;
+    }
+    else
+    {
+        weights = Iris.Vision.Training.OcrWeights.Create(shape, options.Int("--seed", 0) ?? 1);
+        adam = new Iris.Vision.Training.AdamW();
+        state = new Iris.Vision.Training.OcrLearningState();
+    }
+
+    var folders = options.Value("--fonts")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? DefaultFontFolders();
+    var families = options.Value("--families")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var exclude = options.Value("--exclude")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? ["Math", "Display", "Unifont"];
+    var unseenName = options.Value("--unseen") ?? "Caladea";
+    var faces = Iris.Vision.Training.LineArtist.FindFonts(folders, shape.Charset, exclude)
+        .Where(f => families is null || families.Any(n => f.Name.Contains(n, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(f.File).Contains(n, StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+    var unseen = faces.Where(f => unseenName.Length > 0 && f.Name.Contains(unseenName, StringComparison.OrdinalIgnoreCase)).ToList();
+    var learn = faces.Except(unseen).ToList();
+    if (learn.Count == 0)
+    {
+        throw new UsageException("no font with all the characters was found (--fonts folders)");
+    }
+
+    Console.WriteLine($"{learn.Count} fonts to learn from, {unseen.Count} unseen ({unseenName}); {weights.Learnable().Sum(t => t.Values.Length):N0} parameters, step {state.Step}");
+    var training = new Iris.Vision.Training.OcrTrainingOptions
+    {
+        Minutes = options.Number("--minutes") ?? 60,
+        Plan = options.Number("--plan"),
+        Rate = options.Number("--rate") ?? 1e-3,
+        Threads = options.Int("--threads", 1) ?? Environment.ProcessorCount,
+        DrawingThreads = options.Int("--drawing-threads", 1) ?? 1,
+        Duty = Math.Clamp(options.Number("--duty") ?? 1, 0.05, 1),
+        BatchSize = options.Int("--batch", 1) ?? 32,
+        TestLines = options.Int("--test-lines", 1) ?? 600,
+        TestEveryMinutes = options.Number("--test-every") ?? 20,
+        Seed = options.Int("--seed", 0) ?? 1,
+    };
+    var sentences = Iris.Vision.Training.LineTexts.ReadSentences(options.Value("--sentences"));
+    var trainer = new Iris.Vision.Training.OcrTrainer(weights, adam, state, new Iris.Vision.Training.LineArtist(learn),
+        unseen.Count > 0 ? new Iris.Vision.Training.LineArtist(unseen) : null, sentences, training);
+    using var cancel = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cancel.Cancel();
+    };
+    var last = trainer.Run(folder, new SyncProgress<Iris.Vision.Training.OcrProgress>(p => Console.WriteLine(
+        p.CerKnown is { } k
+            ? $"step {p.Step}, {p.Minutes:F0} min: CER {k:F2} % (learned fonts), {p.CerUnseen?.ToString("F2", CultureInfo.InvariantCulture) ?? "–"} % (unseen font)"
+            : $"step {p.Step}, {p.Minutes:F0} min, loss {p.Loss:F3}, rate {p.Rate:E2}, {p.LinesPerSecond:F1} lines/s")), cancel.Token);
+
+    var result = new System.Text.Json.Nodes.JsonObject
+    {
+        ["step"] = last.Step,
+        ["minutes"] = Math.Round(last.Minutes),
+        ["cer_known"] = last.CerKnown,
+        ["cer_unseen"] = last.CerUnseen,
+        ["lines_per_second"] = Math.Round(last.LinesPerSecond, 2),
+        ["parameters"] = weights.Learnable().Sum(t => t.Values.Length),
+        ["fonts"] = new System.Text.Json.Nodes.JsonArray([.. learn.Select(f => (System.Text.Json.Nodes.JsonNode?)f.Name)]),
+        ["unseen_fonts"] = new System.Text.Json.Nodes.JsonArray([.. unseen.Select(f => (System.Text.Json.Nodes.JsonNode?)f.Name)]),
+        ["history"] = new System.Text.Json.Nodes.JsonArray([.. trainer.History.Select(h => (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject
+        {
+            ["step"] = h.Step,
+            ["minutes"] = Math.Round(h.Minutes),
+            ["cer_known"] = h.CerKnown,
+            ["cer_unseen"] = h.CerUnseen,
+        })]),
+    };
+    File.WriteAllText(Path.Combine(folder, "result.json"), result.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"done: step {last.Step}, {last.Minutes:F0} min, CER {last.CerKnown:F2} % (learned fonts), {last.CerUnseen?.ToString("F2", CultureInfo.InvariantCulture) ?? "–"} % (unseen font), {last.LinesPerSecond:F1} lines/s");
+    return 0;
+
+    static string[] DefaultFontFolders() => OperatingSystem.IsWindows()
+        ? [Environment.GetFolderPath(Environment.SpecialFolder.Fonts),
+           Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "Windows", "Fonts")]
+        : ["/usr/share/fonts", "/usr/local/share/fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".fonts")];
+}
+
+// the C# OCR learning against PyTorch (tools/ocr/reference_training.py): loss, every gradient, one AdamW step, running
+// statistics – and the time of a learning step of both on the same batch
+static int CheckOcrTraining(string folder, Options options)
+{
+    options.NoWords();
+    var (weights, adam, _) = Iris.Vision.Training.OcrFiles.LoadTraining(Path.Combine(folder, "start.iris"));
+    using var batchFile = ModelFile.Load(Path.Combine(folder, "batch.iris"));
+    using var expected = ModelFile.Load(Path.Combine(folder, "expected.iris"));
+    var shape = weights.Shape;
+    if (shape.Charset != Iris.Vision.Training.OcrShape.DefaultCharset)
+    {
+        Console.WriteLine("FAIL the charset of C# (OcrShape.DefaultCharset) differs from tools/ocr/charset.py");
+        return 1;
+    }
+
+    var texts = batchFile.Config["texts"]!.AsArray().Select(t => t!.GetValue<string>()).ToArray();
+    var lines = texts.Select((text, i) =>
+    {
+        var info = batchFile.Tensors.First(t => t.Name == $"line.{i}");
+        var ink = batchFile.Floats($"line.{i}");
+        return new Iris.Vision.Training.TrainingLine(ink, info.Shape[1], text, shape.Encode(text));
+    }).ToList();
+    var batch = new Iris.Vision.Training.LineBatch(lines);
+    var threads = options.Int("--threads", 1) ?? Environment.ProcessorCount;
+    var start = weights.Copy();
+    using var network = new Iris.Vision.Training.OcrNetwork(weights) { Threads = threads };
+    var gradients = new Iris.Vision.Training.OcrWeights(shape);
+    gradients.Clear();
+    var loss = network.Learn(batch, gradients);
+    var expectedLoss = expected.Config["loss"]!.GetValue<double>();
+    var failures = 0;
+    void Check(string what, bool ok, string detail)
+    {
+        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {what}: {detail}");
+        failures += ok ? 0 : 1;
+    }
+
+    Check("loss", Math.Abs(loss - expectedLoss) <= 1e-4 * Math.Abs(expectedLoss) + 1e-5, $"C# {loss:G7}, PyTorch {expectedLoss:G7}");
+    double worstGradient = 0, worstAfter = 0, worstStatistic = 0;
+    // a gradient that is nearly zero everywhere (a shift that the next normalization takes away) is compared with the
+    // largest gradient of the model instead of with itself
+    var largest = gradients.Learnable().Max(t => expected.Floats("grad." + t.Name).Max(MathF.Abs));
+    foreach (var t in gradients.Learnable())
+    {
+        var mine = t.ForFile();
+        var theirs = expected.Floats("grad." + t.Name);
+        var scale = Math.Max(theirs.Max(MathF.Abs), 1e-4f * largest) + 1e-12f;
+        var difference = mine.Zip(theirs, (a, b) => Math.Abs(a - b)).Max() / scale;
+        worstGradient = Math.Max(worstGradient, difference);
+        if (difference > 2e-3)
+        {
+            Check($"gradient of {t.Name}", false, $"largest difference {difference:E1} of its largest value");
+        }
+    }
+
+    Check("gradients", worstGradient <= 2e-3, $"largest difference {worstGradient:E1} of the tensor's largest value");
+    foreach (var t in weights.Statistics())
+    {
+        var theirs = expected.Floats("stat." + t.Name);
+        worstStatistic = Math.Max(worstStatistic, t.Values.Zip(theirs, (a, b) => Math.Abs(a - b) / (1 + Math.Abs(b))).Max());
+    }
+
+    Check("running statistics", worstStatistic <= 1e-4, $"largest difference {worstStatistic:E1}");
+    // the optimizer on its own: PyTorch's gradients, clipped and stepped by C#, must give PyTorch's weights
+    var pytorchGradients = new Iris.Vision.Training.OcrWeights(shape);
+    foreach (var t in pytorchGradients.Learnable())
+    {
+        t.FromFile(expected.Floats("grad." + t.Name)).CopyTo(t.Values, 0);
+    }
+
+    var norm = Iris.Vision.Training.AdamW.Clip(pytorchGradients, 5);
+    var expectedNorm = expected.Config["norm"]!.GetValue<double>();
+    Check("gradient norm", Math.Abs(norm - expectedNorm) <= 1e-4 * expectedNorm, $"C# {norm:G6}, PyTorch {expectedNorm:G6}");
+    var stepped = start.Copy();
+    new Iris.Vision.Training.AdamW().Step(stepped, pytorchGradients, 1e-3f);
+    foreach (var t in stepped.Learnable())
+    {
+        worstAfter = Math.Max(worstAfter, t.ForFile().Zip(expected.Floats("after." + t.Name), (a, b) => (double)Math.Abs(a - b)).Max());
+    }
+
+    Check("one AdamW step", worstAfter <= 2e-6, $"largest difference {worstAfter:E1}");
+
+    // speed: whole learning steps (forward, backward, clipping, AdamW) on this batch
+    var watch = Stopwatch.StartNew();
+    const int Steps = 3;
+    for (var s = 0; s < Steps; s++)
+    {
+        gradients.Clear();
+        network.Learn(batch, gradients);
+        Iris.Vision.Training.AdamW.Clip(gradients, 5);
+        adam.Step(weights, gradients, 1e-4f);
+    }
+
+    var seconds = watch.Elapsed.TotalSeconds / Steps;
+    var packed = expected.Config["seconds_packed"]!.GetValue<double>();
+    var padded = expected.Config["seconds_padded"]!.GetValue<double>();
+    Console.WriteLine($"speed of a step of {lines.Count} lines: C# {seconds:F2} s ({threads} threads), PyTorch {padded:F2} s as train.py (padded), " +
+                      $"{packed:F2} s each line at its own width ({expected.Config["threads"]} threads, torch {expected.Config["torch"]})");
+    foreach (var (part, time) in network.Timings.OrderByDescending(p => p.Value).Take(6))
+    {
+        Console.WriteLine($"    {part}: {time / (Steps + 1):F3} s");
+    }
+
+    Console.WriteLine(failures == 0 ? "the C# learning matches PyTorch" : $"{failures} differences");
+    return failures == 0 ? 0 : 1;
+}
+
 static int Usage()
 {
     Console.Error.WriteLine("""
@@ -573,8 +774,22 @@ static int Usage()
         iris ocr <iris-ocr.iris> <picture.png|jpg>      OCR: the text of a page photo or scan
         iris check-ocr <iris-ocr.iris> <reference folder> [--min-text R]
                                                        compares the OCR reader with the PyTorch reference (tools/ocr)
+        iris train-ocr <folder> [options]              OCR learning in C# on lines drawn with own font code
+            --start <iris-ocr-train.iris>              go on from a learning file (else a new reader)
+            --minutes M (60), --plan M, --rate R (0.001), --batch N (32), --seed N
+            --fonts <dir;dir>, --families a,b, --exclude a,b, --unseen <name> (Caladea), --sentences <dir>
+            --threads N, --drawing-threads N (1), --duty D (1; 0.5 = rest as long as it works)
+            --test-lines N (600), --test-every M (20)
+        iris check-ocr-training <reference folder> [--threads N]
+                                                       the C# OCR learning against PyTorch (tools/ocr/reference_training.py)
         iris info <model.iris>                         what a model file holds
         iris tokenize <model.spm> <text>               pieces and ids of a SentencePiece model
         """);
     return 2;
+}
+
+/// <summary>Reports progress on the thread that does the work (Progress&lt;T&gt; would post it elsewhere).</summary>
+sealed class SyncProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
 }
