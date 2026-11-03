@@ -77,6 +77,8 @@ public sealed class LabAgent
     private int _batch = 32;
     private bool _eco = true;
     private bool? _ecoSet;
+    private double _hot = 90;
+    private bool _tooHot;
     private bool _paused;
     private string _state = "starting";
     private MachineSample? _sample;
@@ -137,6 +139,17 @@ public sealed class LabAgent
     private async Task Session(LabChannel channel, CancellationToken cancel)
     {
         using var session = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        _ = Task.Run(async () =>
+        {
+            // what this computer is, once per connection (the firmware's tables, the cores, disks, the system)
+            try
+            {
+                await channel.SendAsync(new LabMessage(MessageKind.Inventory, Inventory.Collect()), session.Token);
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or SocketException)
+            {
+            }
+        }, session.Token);
         var status = Task.Run(async () =>
         {
             while (!session.IsCancellationRequested)
@@ -198,6 +211,7 @@ public sealed class LabAgent
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
             ["eco"] = _ecoSet,
+            ["too_hot"] = _tooHot,
             ["mac"] = _mac,
             ["version"] = LabUpdates.Version,
         };
@@ -222,6 +236,7 @@ public sealed class LabAgent
         _cores = Math.Clamp(settings["cores"]?.GetValue<double>() ?? _cores, 0.05, 1);
         _batch = Math.Clamp(settings["batch"]?.GetValue<int>() ?? _batch, 1, 256);
         _eco = settings["eco"]?.GetValue<bool>() ?? _eco;
+        _hot = Math.Clamp(settings["hot"]?.GetValue<double>() ?? _hot, 50, 100);
         ApplyEfficiency();
         if (settings["sentences"] is JsonObject sentences)
         {
@@ -305,8 +320,17 @@ public sealed class LabAgent
         }, CancellationToken.None);
     }
 
-    // goes on while not paused and nobody else needs the processor
-    private bool MayGoOn() => !_paused && (_sample is not { } s || s.CpuOthers < _options.OthersLimit);
+    // goes on while not paused, nobody else needs the processor and the computer is not too warm (it goes on again
+    // five degrees below the limit)
+    private bool MayGoOn()
+    {
+        if (_sample?.Temperature is { } temperature)
+        {
+            _tooHot = temperature >= _hot || (_tooHot && temperature > _hot - 5);
+        }
+
+        return !_paused && !_tooHot && (_sample is not { } s || s.CpuOthers < _options.OthersLimit);
+    }
 
     private void StopLearning()
     {
