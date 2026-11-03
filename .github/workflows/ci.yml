@@ -176,6 +176,16 @@ jobs:
           name: console-pictures
           path: ${{ runner.temp }}/console/
           retention-days: 14
+      # the programs of the classroom learning to try out (Actions → this run → Artifacts); a release comes only with
+      # the owner's consent
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iris-ucebna-windows
+          path: |
+            out/agent/iris-agent.exe
+            out/console/iris-console.exe
+            docs/ucebna.md
+          retention-days: 30
       - name: Hardware script (iris-hw.bat)
         run: |
           cmd /c tools\hardware\iris-hw.bat ci-runner
