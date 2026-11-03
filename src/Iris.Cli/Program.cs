@@ -675,22 +675,28 @@ static int CheckOcrTraining(string folder, Options options)
     Check("loss", Math.Abs(loss - expectedLoss) <= 1e-4 * Math.Abs(expectedLoss) + 1e-5, $"C# {loss:G7}, PyTorch {expectedLoss:G7}");
     double worstGradient = 0, worstAfter = 0, worstStatistic = 0;
     // a gradient that is nearly zero everywhere (a shift that the next normalization takes away) is compared with the
-    // largest gradient of the model instead of with itself
+    // largest gradient of the model instead of with itself; where two values of a pooling window are equal up to the
+    // last bit, the order of summation may pick the other one and send that bit of gradient elsewhere – so the whole
+    // tensor (relative length of the difference) must agree closely, single values a little less
     var largest = gradients.Learnable().Max(t => expected.Floats("grad." + t.Name).Max(MathF.Abs));
+    double worstLength = 0;
     foreach (var t in gradients.Learnable())
     {
         var mine = t.ForFile();
         var theirs = expected.Floats("grad." + t.Name);
         var scale = Math.Max(theirs.Max(MathF.Abs), 1e-4f * largest) + 1e-12f;
         var difference = mine.Zip(theirs, (a, b) => Math.Abs(a - b)).Max() / scale;
+        var length = Math.Sqrt(mine.Zip(theirs, (a, b) => (double)(a - b) * (a - b)).Sum()) /
+                     Math.Max(Math.Sqrt(theirs.Sum(b => (double)b * b)), 1e-4 * largest * Math.Sqrt(theirs.Length));
         worstGradient = Math.Max(worstGradient, difference);
-        if (difference > 2e-3)
+        worstLength = Math.Max(worstLength, length);
+        if (length > 2e-3 || difference > 3e-2)
         {
-            Check($"gradient of {t.Name}", false, $"largest difference {difference:E1} of its largest value");
+            Check($"gradient of {t.Name}", false, $"difference {length:E1} of its length, largest single {difference:E1} of its largest value");
         }
     }
 
-    Check("gradients", worstGradient <= 2e-3, $"largest difference {worstGradient:E1} of the tensor's largest value");
+    Check("gradients", worstLength <= 2e-3 && worstGradient <= 3e-2, $"difference at most {worstLength:E1} of a tensor's length, largest single {worstGradient:E1}");
     foreach (var t in weights.Statistics())
     {
         var theirs = expected.Floats("stat." + t.Name);

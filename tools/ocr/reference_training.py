@@ -173,7 +173,7 @@ def main():
         optimizer.step()
 
     times = {"packed": timed(packed_step), "padded": timed(padded_step)}
-    info = {"loss": float(loss), "norm": float(norm), "threads": torch.get_num_threads(), "torch": torch.__version__,
+    info = {"loss": loss.item(), "norm": norm.item(), "threads": torch.get_num_threads(), "torch": torch.__version__,
             "seconds_packed": times["packed"], "seconds_padded": times["padded"],
             "pixels": int(sum(p.shape[1] for p in pictures) * 32), "padded_pixels": int(padded_batch[0].numel())}
     iris_file.write(args.out / "expected.iris", "iris-ocr-expected", info, {}, expected, {})
