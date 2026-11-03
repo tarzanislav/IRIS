@@ -122,6 +122,26 @@ jobs:
           ./out/cli/iris.exe tokenize tests/Iris.Tests/testdata/tokenizer/nfkc.model "The premiere is tonight."
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "::notice title=iris.exe::self-contained single file, $size MB"
+      - name: Classroom agent as in a release (one file) – a trial, and the service installed, running and removed
+        run: |
+          dotnet publish src/Iris.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o out/agent
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./out/agent/iris-agent.exe test --minutes 1 | Tee-Object -FilePath "$env:RUNNER_TEMP/agent-test.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bytes = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+          Set-Content "$env:RUNNER_TEMP/agent.key" ([Convert]::ToBase64String($bytes))
+          ./out/agent/iris-agent.exe install --hub 127.0.0.1 --key "$env:RUNNER_TEMP/agent.key" --name ci-runner
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 10
+          $service = Get-Service IRIS-Lab
+          $acl = icacls "$env:ProgramData\IRIS Lab" | Out-String
+          $log = Get-Content "$env:ProgramData\IRIS Lab\agent.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          ./out/agent/iris-agent.exe uninstall
+          if ($service.Status -ne 'Running') { "::error::the service IRIS-Lab is $($service.Status)"; exit 1 }
+          if ($acl -match 'BUILTIN\\Users|Everyone|Authenticated') { "::error::students could read the key: $acl"; exit 1 }
+          if (Get-Service IRIS-Lab -ErrorAction SilentlyContinue) { "::error::the service was not removed"; exit 1 }
+          $summary = (Get-Content "$env:RUNNER_TEMP/agent-test.txt" | Select-Object -Last 1)
+          "::notice title=iris-agent.exe::$summary; service ran ($log), key readable only by SYSTEM and Administrators, removed cleanly"
       - name: Application as in a release (self-contained, one file) and its self-test
         run: |
           dotnet publish src/Iris.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/app

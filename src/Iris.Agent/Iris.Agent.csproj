@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>iris-agent</AssemblyName>
+    <RootNamespace>Iris.Agent</RootNamespace>
+    <Description>iris-agent – a computer of the classroom that learns the IRIS OCR at night (a Windows service).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Lab\Iris.Lab.csproj" />
+  </ItemGroup>
+</Project>

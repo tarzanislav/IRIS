@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- IRIS learning in a classroom: the signed protocol between the hub, the computers that learn and the console,
+       the rounds and the averaging of what each computer learned, the measurements of a computer. Pure .NET, no
+       packages; runs on every platform (the hub on a Linux server, the agents on Windows). -->
+  <PropertyGroup>
+    <RootNamespace>Iris.Lab</RootNamespace>
+    <Description>IRIS lab: learning the OCR on many computers at night – hub, agents, protocol.</Description>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Vision\Iris.Vision.csproj" />
+    <InternalsVisibleTo Include="Iris.Tests" />
+  </ItemGroup>
+</Project>
