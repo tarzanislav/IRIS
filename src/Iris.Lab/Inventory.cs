@@ -425,7 +425,15 @@ public static partial class Inventory
                     model = string.Join(' ', new[] { Text(12), Text(16) }.Where(t => t is not null));
                     bus = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(28)) switch
                     {
-                        1 => "SCSI", 3 => "ATA", 7 => "USB", 8 => "RAID", 10 => "SAS", 11 => "SATA", 12 => "SD", 17 => "NVMe", _ => null,
+                        1 => "SCSI",
+                        3 => "ATA",
+                        7 => "USB",
+                        8 => "RAID",
+                        10 => "SAS",
+                        11 => "SATA",
+                        12 => "SD",
+                        17 => "NVMe",
+                        _ => null,
                     };
                 }
 
