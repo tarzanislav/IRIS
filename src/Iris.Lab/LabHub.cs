@@ -50,6 +50,15 @@ public sealed record LabHubOptions
 
     public int TestLines { get; init; } = 300;
 
+    /// <summary>
+    /// Wakes the known computers that are off when the time of learning begins (Wake-on-LAN), and at its end shuts
+    /// down those it woke – a computer that was on stays on.
+    /// </summary>
+    public bool AutoWake { get; init; } = true;
+
+    /// <summary>How a computer is woken (tests replace it; by default the magic packet).</summary>
+    public Func<string, CancellationToken, Task> Wake { get; init; } = (mac, cancel) => NetworkScanner.WakeAsync(mac, cancel);
+
     /// <summary>The clock (tests set their own).</summary>
     public Func<DateTime> Now { get; init; } = () => DateTime.Now;
 }
@@ -75,8 +84,12 @@ public sealed class LabHub
     private readonly Lazy<(OcrNetwork Network, List<TrainingLine> Known, List<TrainingLine> Unseen)?> _tester;
     private OcrWeights _weights;
     private OcrLearningState _state;
+    private readonly HashSet<string> _woken = new(StringComparer.OrdinalIgnoreCase);
     private Round? _round;
     private TcpListener? _listener;
+    private bool? _wasOpen;
+    private DateTime _openedAt;
+    private DateTime _lastWake;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -95,6 +108,7 @@ public sealed class LabHub
             _tests.AddRange(File.ReadLines(tests).TakeLast(200).Select(l => JsonNode.Parse(l) as JsonObject).OfType<JsonObject>());
         }
 
+        LoadKnown();
         var log = Path.Combine(options.Folder, "rounds.jsonl");
         if (File.Exists(log))
         {
@@ -155,6 +169,8 @@ public sealed class LabHub
                 {
                     ["name"] = a.Name,
                     ["address"] = a.Address,
+                    ["mac"] = a.Mac,
+                    ["woken"] = _woken.Contains(a.Name),
                     ["connected"] = a.Channel is not null,
                     ["state"] = a.State,
                     ["seen"] = a.Seen.ToString("o", CultureInfo.InvariantCulture),
@@ -169,6 +185,7 @@ public sealed class LabHub
                 ["version"] = _state.Step,
                 ["minutes"] = Math.Round(_state.Minutes),
                 ["open"] = _options.Schedule.IsOpen(now),
+                ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
                 ["round"] = _round is null ? null : new JsonObject
                 {
@@ -208,9 +225,42 @@ public sealed class LabHub
         var now = _options.Now();
         List<AgentEntry> toStart = [];
         List<AgentEntry> toWait = [];
+        List<string> toWake = [];
+        List<AgentEntry> toReturn = [];
         lock (_gate)
         {
             var open = _options.Schedule.IsOpen(now);
+            if (_options.AutoWake)
+            {
+                if (open && _wasOpen == false)
+                {
+                    // the time of learning begins: wake every known computer that is off, and remember which
+                    _openedAt = now;
+                    _lastWake = now;
+                    foreach (var a in _agents.Values.Where(a => a.Channel is null && a.Mac is not null))
+                    {
+                        _woken.Add(a.Name);
+                        toWake.Add(a.Mac!);
+                    }
+
+                    SaveKnown();
+                }
+                else if (open && now - _openedAt < TimeSpan.FromMinutes(30) && now - _lastWake > TimeSpan.FromMinutes(5))
+                {
+                    // once more every five minutes for those that did not wake yet
+                    _lastWake = now;
+                    toWake.AddRange(_agents.Values.Where(a => _woken.Contains(a.Name) && a.Channel is null && a.Mac is not null).Select(a => a.Mac!));
+                }
+                else if (!open && _wasOpen == true)
+                {
+                    // the time of learning ends: the computers that were off go off again
+                    toReturn.AddRange(_agents.Values.Where(a => _woken.Contains(a.Name) && a.Channel is not null));
+                    _woken.Clear();
+                    SaveKnown();
+                }
+            }
+
+            _wasOpen = open;
             // a round is over when no connected computer learns for it any more, or a few minutes after its deadline
             if (_round is { } round && (!_agents.Values.Any(a => a.Channel is not null && a.State == "learning") ||
                                         now > round.Deadline.AddMinutes(_options.GraceMinutes)))
@@ -242,6 +292,16 @@ public sealed class LabHub
                     toWait.Add(a);
                 }
             }
+        }
+
+        foreach (var mac in toWake)
+        {
+            await WakeQuietly(mac, cancel);
+        }
+
+        foreach (var a in toReturn)
+        {
+            await Send(a, new LabMessage(MessageKind.Command, new JsonObject { ["command"] = LabCommands.Shutdown }), cancel);
         }
 
         foreach (var a in toStart)
@@ -396,6 +456,11 @@ public sealed class LabHub
                             lock (_gate)
                             {
                                 agent.Status = message.Header;
+                                if (message.Header["mac"]?.GetValue<string>() is { } mac && mac != agent.Mac)
+                                {
+                                    agent.Mac = mac;
+                                    SaveKnown();
+                                }
                             }
 
                             _history.Record(agent.Name, message.Header, _options.Now());
@@ -477,11 +542,34 @@ public sealed class LabHub
                         var history = _history.Query(from, to, message.Header["agent"]?.GetValue<string>(), message.Header["bucket"]?.GetValue<int>() ?? 5);
                         await channel.SendAsync(new LabMessage(MessageKind.History, history), cancel);
                         break;
+                    case MessageKind.Scan:
+                        var devices = await NetworkScanner.ScanAsync(cancel);
+                        var found = new JsonArray();
+                        foreach (var d in devices)
+                        {
+                            var json = d.ToJson();
+                            json["computer"] = _agents.Values.FirstOrDefault(a => (d.Mac is not null && string.Equals(a.Mac, d.Mac, StringComparison.OrdinalIgnoreCase)) || a.Address == d.Address)?.Name;
+                            found.Add((JsonNode)json);
+                        }
+
+                        await channel.SendAsync(new LabMessage(MessageKind.Scan, new JsonObject { ["devices"] = found, ["time"] = _options.Now().ToString("o", CultureInfo.InvariantCulture) }), cancel);
+                        break;
                     case MessageKind.Command:
                         var target = message.Header["target"]?.GetValue<string>() ?? "";
                         var command = message.Header["command"]?.GetValue<string>() ?? "";
                         var sent = 0;
-                        if (LabCommands.All.Contains(command))
+                        if (command == "wake")
+                        {
+                            // a computer of the classroom by its name, all that are off ("*"), or any card by its MAC
+                            var macs = target.StartsWith("mac:", StringComparison.Ordinal) ? [target[4..]]
+                                : _agents.Values.Where(a => a.Mac is not null && a.Channel is null && (target == "*" || string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase))).Select(a => a.Mac!).ToList();
+                            foreach (var mac in macs.Where(m => NetworkScanner.ParseMac(m) is not null))
+                            {
+                                await WakeQuietly(mac, cancel);
+                                sent++;
+                            }
+                        }
+                        else if (LabCommands.All.Contains(command))
                         {
                             foreach (var a in _agents.Values.Where(a => a.Channel is not null && (target == "*" || string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase))))
                             {
@@ -498,6 +586,54 @@ public sealed class LabHub
             }
         }
         catch (Exception e) when (e is IOException or LabProtocolException or OperationCanceledException or JsonException or SocketException)
+        {
+        }
+    }
+
+    private async Task WakeQuietly(string mac, CancellationToken cancel)
+    {
+        try
+        {
+            await _options.Wake(mac, cancel);
+        }
+        catch (Exception e) when (e is SocketException or ArgumentException or IOException)
+        {
+        }
+    }
+
+    // the computers the hub has met (name, MAC, address) and the ones it woke, kept across restarts of the hub
+    private void LoadKnown()
+    {
+        var path = Path.Combine(_options.Folder, "computers.json");
+        if (!File.Exists(path) || JsonNode.Parse(File.ReadAllText(path)) is not JsonObject json)
+        {
+            return;
+        }
+
+        foreach (var item in json["computers"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            var name = item["name"]!.GetValue<string>();
+            _agents[name] = new AgentEntry(name) { Mac = item["mac"]?.GetValue<string>(), Address = item["address"]?.GetValue<string>() ?? "", State = "gone" };
+        }
+
+        foreach (var name in json["woken"]?.AsArray().Select(n => n!.GetValue<string>()) ?? [])
+        {
+            _woken.Add(name);
+        }
+    }
+
+    private void SaveKnown()
+    {
+        try
+        {
+            var json = new JsonObject
+            {
+                ["computers"] = new JsonArray([.. _agents.Values.Select(a => (JsonNode?)new JsonObject { ["name"] = a.Name, ["mac"] = a.Mac, ["address"] = a.Address })]),
+                ["woken"] = new JsonArray([.. _woken.Select(n => (JsonNode?)n)]),
+            };
+            File.WriteAllText(Path.Combine(_options.Folder, "computers.json"), json.ToJsonString());
+        }
+        catch (IOException)
         {
         }
     }
@@ -607,6 +743,8 @@ public sealed class LabHub
         public LabChannel? Channel { get; set; }
 
         public string Address { get; set; } = "";
+
+        public string? Mac { get; set; }
 
         public DateTime Seen { get; set; }
 

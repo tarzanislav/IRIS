@@ -69,6 +69,8 @@ static async Task<int> Run(LabArguments a)
         PlanRounds = planRounds,
         Schedule = schedule,
         Sentences = a.Value("--sentences"),
+        AutoWake = (a.Value("--wake") ?? "yes") != "no",
+        Fonts = a.Value("--fonts")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? ["/usr/share/fonts", "/usr/local/share/fonts"],
     };
     var hub = new LabHub(options, weights, state);
     using var cancel = new CancellationTokenSource();
@@ -106,6 +108,9 @@ static int Usage()
             --duty D (0.5), --cores F (0.5)     share of time and of cores the computers use
             --from HH:mm (15:00), --until HH:mm (06:00), --weekends yes|no (yes)
             --sentences <dir>                   sk.txt, cs.txt, en.txt for the lines
+            --wake yes|no (yes)                 wakes the computers that are off when learning begins, and shuts them
+                                                down again when it ends (Wake-on-LAN must be on in their BIOS/UEFI)
+            --fonts <dir:dir>                   fonts of the server for measuring the model (/usr/share/fonts)
         iris-hub keys --folder <dir>            creates the keys (agent.key, console.key) and shows where they are
         """);
     return 2;

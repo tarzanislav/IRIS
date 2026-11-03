@@ -33,6 +33,21 @@ public partial class App : Application
             Directory.CreateDirectory(folder);
             var window = new MainWindow(new ConsoleSettings(), offline: true) { Width = 1320, Height = 860 };
             Fill(window.Data);
+            window.Network.Found = new JsonObject
+            {
+                ["time"] = DateTime.Now.ToString("o", CultureInfo.InvariantCulture),
+                ["devices"] = new JsonArray([.. Enumerable.Range(1, 22).Select(i => (JsonNode?)new JsonObject
+                {
+                    ["address"] = $"10.0.0.{(i <= 18 ? 100 + i : 200 + i)}",
+                    ["mac"] = $"00-11-22-33-44-{i:X2}",
+                    ["dns"] = i <= 18 ? $"pc-{i:00}.ucebna.local" : null,
+                    ["netbios"] = i <= 18 ? $"PC-{i:00}" : null,
+                    ["workgroup"] = i <= 18 ? "UCEBNA" : null,
+                    ["ping"] = i % 5 == 0 ? null : 0.4 + i * 0.03,
+                    ["local_mac"] = false,
+                    ["computer"] = i <= 18 ? $"PC-{i:00}" : null,
+                })]),
+            };
             window.Show();
             foreach (var page in window.PageNames.ToList())
             {
@@ -75,6 +90,8 @@ public partial class App : Application
             {
                 ["name"] = name,
                 ["address"] = $"10.0.0.{100 + i}",
+                ["mac"] = $"00-11-22-33-44-{i:X2}",
+                ["woken"] = i % 3 == 0,
                 ["connected"] = state != "gone",
                 ["state"] = state,
                 ["seen"] = now.AddSeconds(-random.Next(2, 30)).ToString("o", CultureInfo.InvariantCulture),
@@ -129,6 +146,7 @@ public partial class App : Application
         {
             ["version"] = 1060,
             ["open"] = true,
+            ["auto_wake"] = true,
             ["schedule"] = new JsonObject { ["from"] = "15:00", ["until"] = "06:00", ["weekends"] = true },
             ["round"] = new JsonObject { ["number"] = 61, ["deadline"] = now.AddMinutes(7).ToString("o", CultureInfo.InvariantCulture), ["taking_part"] = 16, ["done"] = 3 },
             ["agents"] = agents,

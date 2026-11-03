@@ -68,6 +68,7 @@ public sealed class LabAgent
     private MachineSample? _sample;
     private RoundWork? _last;
     private int _round;
+    private string? _mac;
 
     public LabAgent(LabAgentOptions options) => _options = options;
 
@@ -82,6 +83,12 @@ public sealed class LabAgent
                 using var client = new TcpClient { NoDelay = true };
                 await client.ConnectAsync(_options.Hub, _options.Port, cancel);
                 using var channel = await LabChannel.ConnectAsync(client.GetStream(), LabRole.Agent, _options.Name, _options.Key, cancel);
+                if (client.Client.LocalEndPoint is System.Net.IPEndPoint local)
+                {
+                    // the card that reaches the hub: its MAC lets the hub wake this computer when it is off
+                    _mac = NetworkScanner.MacOf(local.Address);
+                }
+
                 _options.Log?.Invoke($"connected to {_options.Hub}:{_options.Port}");
                 delay = TimeSpan.FromSeconds(5);
                 await Session(channel, cancel);
@@ -172,6 +179,7 @@ public sealed class LabAgent
             ["machine"] = _sample?.ToJson(),
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
+            ["mac"] = _mac,
         };
         if (_last is { } last)
         {
