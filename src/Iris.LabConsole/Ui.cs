@@ -12,7 +12,9 @@ internal static class Ui
 {
     public static T Resource<T>(string key) => (T)Application.Current.FindResource(key);
 
-    public static Brush Brush(string key) => Resource<Brush>(key);
+    /// <summary>A color of the look; some names are also styles (Danger), so the colors are asked first.</summary>
+    public static Brush Brush(string key) =>
+        Application.Current.FindResource(key) as Brush ?? (Brush)Application.Current.Resources.MergedDictionaries[0][key];
 
     public static Border Card(UIElement child, double margin = 8) => new()
     {
