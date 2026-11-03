@@ -122,6 +122,9 @@ public static class LabTests
                 CoreShare = 0.5,
                 BatchSize = 8,
                 Schedule = new LabSchedule(new TimeOnly(0, 0), new TimeOnly(0, 0), true), // always
+                Fonts = fonts,
+                TestEvery = 1,
+                TestLines = 16,
             };
             var hub = new LabHub(options, weights, new OcrLearningState { PlanStart = 0, PlanEnd = 50, PlanRate = 1e-3 });
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(90));
@@ -156,17 +159,22 @@ public static class LabTests
             Assert.True(!hub.Weights.OutWeight.SequenceEqual(start.OutWeight), "the model changed");
             Assert.True(File.Exists(Path.Combine(folder, "iris-ocr.iris")) && File.Exists(LabHub.ModelPath(folder)), "the model is saved");
 
-            // the console: what the hub knows, and a command to one computer
-            using var client = new TcpClient();
-            await client.ConnectAsync(IPAddress.Loopback, hub.Port);
-            using var console = await LabChannel.ConnectAsync(client.GetStream(), LabRole.Console, "console", LabKeys.Read(Path.Combine(folder, "console.key")), default);
-            await console.SendAsync(new LabMessage(MessageKind.Snapshot, []), default);
-            var snapshot = (await console.ReceiveAsync(default)).Header;
+            // the console: what the hub knows, the history, and a command to one computer
+            using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), default);
+            var snapshot = await console.SnapshotAsync(default);
             Assert.Equal(2, snapshot["agents"]!.AsArray().Count, "the hub knows both computers");
-            await console.SendAsync(new LabMessage(MessageKind.Command, new JsonObject { ["target"] = "PC-02", ["command"] = "shutdown" }), default);
-            Assert.Equal(1, (await console.ReceiveAsync(default)).Header["sent"]!.GetValue<int>(), "the command went to one computer");
-            await console.SendAsync(new LabMessage(MessageKind.Command, new JsonObject { ["target"] = "*", ["command"] = "format c:" }), default);
-            Assert.Equal(0, (await console.ReceiveAsync(default)).Header["sent"]!.GetValue<int>(), "anything else is not a command");
+            Assert.True(snapshot["agents"]!.AsArray().All(a => a!["status"]?["machine"]?["cores"] is not null), "with their measurements");
+            for (var i = 0; i < 100 && (await console.SnapshotAsync(default))["tests"]!.AsArray().Count == 0; i++)
+            {
+                await Task.Delay(100);
+            }
+
+            var test = (await console.SnapshotAsync(default))["tests"]!.AsArray();
+            Assert.True(test.Count > 0 && test[0]!["cer"]!.GetValue<double>() >= 0, "the hub measured how well the model reads");
+            var history = await console.HistoryAsync(DateTime.Now.AddMinutes(-5), DateTime.Now.AddMinutes(1), null, 1, default);
+            Assert.True(history["series"]!.AsObject().Count == 2, "a history of both computers");
+            Assert.Equal(1, await console.CommandAsync("PC-02", LabCommands.Shutdown, default), "the command went to one computer");
+            Assert.Equal(0, await console.CommandAsync("*", "format c:", default), "anything else is not a command");
             for (var i = 0; i < 50 && powered.Count == 0; i++)
             {
                 await Task.Delay(100);

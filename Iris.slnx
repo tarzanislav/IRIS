@@ -8,6 +8,7 @@
     <Project Path="src/Iris.Lab/Iris.Lab.csproj" />
     <Project Path="src/Iris.Hub/Iris.Hub.csproj" />
     <Project Path="src/Iris.Agent/Iris.Agent.csproj" />
+    <Project Path="src/Iris.LabConsole/Iris.LabConsole.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Iris.Tests/Iris.Tests.csproj" />

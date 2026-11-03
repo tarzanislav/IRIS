@@ -154,6 +154,28 @@ jobs:
           }
           $size = [math]::Round((Get-Item out/app/iris-app.exe).Length / 1MB, 1)
           "::notice title=iris-app.exe::self-contained single file, $size MB, every window and page built in SK, CS, EN and every look"
+      - name: Classroom console (one file) and its self-test with a picture of every page
+        run: |
+          dotnet publish src/Iris.LabConsole -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/console
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $test = Start-Process out/console/iris-console.exe -ArgumentList '--selftest', "$env:RUNNER_TEMP\console" -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP/console.txt"
+          if ($test.ExitCode -ne 0) {
+            $text = (Get-Content "$env:RUNNER_TEMP/console.txt" -Raw) -replace '%', '%25' -replace "`r?`n", '%0A'
+            "::error title=iris-console --selftest::$text"; exit 1
+          }
+          $size = [math]::Round((Get-Item out/console/iris-console.exe).Length / 1MB, 1)
+          $pages = (Get-ChildItem "$env:RUNNER_TEMP\console" -Filter *.png).Count
+          "::notice title=iris-console.exe::self-contained single file, $size MB, $pages pages built and pictured"
+          # the pictures also into the log (base64 between markers), where they can be read without the artifact storage
+          foreach ($png in Get-ChildItem "$env:RUNNER_TEMP\console" -Filter *.png) {
+            "IRIS-PICTURE-BEGIN $($png.Name)"; [Convert]::ToBase64String([IO.File]::ReadAllBytes($png.FullName)); "IRIS-PICTURE-END"
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: console-pictures
+          path: ${{ runner.temp }}/console/
+          retention-days: 14
       - name: Hardware script (iris-hw.bat)
         run: |
           cmd /c tools\hardware\iris-hw.bat ci-runner

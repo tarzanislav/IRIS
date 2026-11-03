@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The console of the classroom learning (WPF, part of .NET – no packages): the computers live, their history in
+       charts, the rounds and how well the model reads, the network, the commands. The look is the one of the IRIS
+       application (its theme files are shared, not copied). Builds on Linux too, runs on Windows. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>iris-console</AssemblyName>
+    <RootNamespace>Iris.LabConsole</RootNamespace>
+    <ApplicationIcon>..\Iris.App\Assets\iris.ico</ApplicationIcon>
+    <Description>IRIS console – the computers of the classroom learning at night.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Iris.Lab\Iris.Lab.csproj" />
+    <Page Include="..\Iris.App\Themes\Light.xaml" Link="Themes\Light.xaml" />
+    <Page Include="..\Iris.App\Themes\Dark.xaml" Link="Themes\Dark.xaml" />
+    <Page Include="..\Iris.App\Themes\Styles.xaml" Link="Themes\Styles.xaml" />
+    <Resource Include="..\Iris.App\Assets\iris.ico" Link="Assets\iris.ico" />
+  </ItemGroup>
+</Project>
