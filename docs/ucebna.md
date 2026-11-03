@@ -24,13 +24,16 @@ iris-agent.exe test --minutes 10
 ```
 - Učí sa 10 minút.
 - Využíva polovicu jadier a pracuje polovicu času (`--cores 0.5`, `--duty 0.5`).
+- Beží v **úspornom režime Windows** (EcoQoS, `--eco yes`): na procesoroch s úspornými jadrami ide práca na ne a jadrá
+  bežia na najúspornejšej frekvencii – menej energie a tepla, tichšie ventilátory, o niečo pomalšie. Porovnanie:
+  `--eco no`.
 - Každých 10 s ukáže:
   - vyťaženie procesora (celé PC aj samotné učenie);
   - pamäť;
   - teplotu, ak ju počítač ponúka;
   - počet riadkov za sekundu.
 
-Iné nastavenie: `--duty 0.3` (tichšie), `--cores 0.25`. Počas skúšky si vypočujte ventilátory.
+Iné nastavenie: `--duty 0.3` (tichšie), `--cores 0.25`, `--eco no`. Počas skúšky si vypočujte ventilátory.
 
 ## Server
 ```
@@ -40,7 +43,7 @@ iris-hub run --folder <priečinok servera> --start <iris-ocr-train.iris> --backu
 - Predvolené nastavenia:
   - kolo trvá 10 minút;
   - učí sa 15:00–6:00, cez víkendy celý deň;
-  - počítače pracujú polovicu času na polovici jadier;
+  - počítače pracujú polovicu času na polovici jadier, v úspornom režime Windows (`--eco no` ho vypne);
   - port je 47620.
 - Ako služba systemd: `tools/lab/iris-hub.service`.
 - Model v `lab-model.iris`, čítačka pre IRIS v `iris-ocr.iris`, kolá v `rounds.jsonl`.

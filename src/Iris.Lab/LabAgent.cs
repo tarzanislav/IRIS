@@ -60,9 +60,12 @@ public sealed class LabAgent
     private Dictionary<string, string[]> _sentences = [];
     private LabLearner? _learner;
     private CancellationTokenSource? _learning;
+    private Task _learningTask = Task.CompletedTask;
     private double _duty = 0.5;
     private double _cores = 0.5;
     private int _batch = 32;
+    private bool _eco = true;
+    private bool? _ecoSet;
     private bool _paused;
     private string _state = "starting";
     private MachineSample? _sample;
@@ -75,6 +78,7 @@ public sealed class LabAgent
     /// <summary>Runs until cancelled: connects, and after a lost connection connects again (waiting longer each time).</summary>
     public async Task RunAsync(CancellationToken cancel)
     {
+        ApplyEfficiency();
         var delay = TimeSpan.FromSeconds(5);
         while (!cancel.IsCancellationRequested)
         {
@@ -115,7 +119,7 @@ public sealed class LabAgent
             delay = TimeSpan.FromSeconds(Math.Min(120, delay.TotalSeconds * 2));
         }
 
-        StopLearning();
+        await StopLearningAsync();
         _learner?.Dispose();
     }
 
@@ -146,7 +150,7 @@ public sealed class LabAgent
                         _state = "waiting";
                         break;
                     case MessageKind.Model:
-                        StartRound(channel, message, session.Token);
+                        await StartRound(channel, message, session.Token);
                         break;
                     case MessageKind.Command:
                         await Command(message.Header["command"]?.GetValue<string>() ?? "");
@@ -179,6 +183,7 @@ public sealed class LabAgent
             ["machine"] = _sample?.ToJson(),
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
+            ["eco"] = _ecoSet,
             ["mac"] = _mac,
         };
         if (_last is { } last)
@@ -201,6 +206,8 @@ public sealed class LabAgent
         _duty = Math.Clamp(settings["duty"]?.GetValue<double>() ?? _duty, 0.05, 1);
         _cores = Math.Clamp(settings["cores"]?.GetValue<double>() ?? _cores, 0.05, 1);
         _batch = Math.Clamp(settings["batch"]?.GetValue<int>() ?? _batch, 1, 256);
+        _eco = settings["eco"]?.GetValue<bool>() ?? _eco;
+        ApplyEfficiency();
         if (settings["sentences"] is JsonObject sentences)
         {
             _sentences = sentences.ToDictionary(p => p.Key, p => p.Value!.AsArray().Select(s => s!.GetValue<string>()).ToArray(), StringComparer.Ordinal);
@@ -216,9 +223,13 @@ public sealed class LabAgent
 
     private int Threads() => Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * _cores));
 
-    private void StartRound(LabChannel channel, LabMessage message, CancellationToken cancel)
+    // the efficiency mode as the hub wants it (null in the status: the system has no such mode)
+    private void ApplyEfficiency() => _ecoSet = Machine.SetEfficiency(_eco) ? _eco : null;
+
+    private async Task StartRound(LabChannel channel, LabMessage message, CancellationToken cancel)
     {
-        StopLearning();
+        // the learning of an earlier round ends first (its step finishes): one network never learns twice at once
+        await StopLearningAsync();
         var shape = OcrShape.FromJson(message.Header["shape"]!.AsObject());
         lock (_gate)
         {
@@ -232,7 +243,8 @@ public sealed class LabAgent
                     return;
                 }
 
-                _learner = new LabLearner(new OcrWeights(shape), new LineArtist(fonts), _sentences, _options.Seed);
+                // two drawing threads: the faster learning must not wait for lines (they rest when the queue is full)
+                _learner = new LabLearner(new OcrWeights(shape), new LineArtist(fonts), _sentences, _options.Seed, drawingThreads: 2);
             }
 
             _learner.Duty = _duty;
@@ -250,7 +262,7 @@ public sealed class LabAgent
         _learning = learning;
         _round = round;
         _state = "learning";
-        _ = Task.Run(async () =>
+        _learningTask = Task.Run(async () =>
         {
             // learning runs below normal priority: whatever the computer is asked to do comes first
             Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
@@ -285,6 +297,13 @@ public sealed class LabAgent
     {
         _learning?.Cancel();
         _learning = null;
+    }
+
+    // stops the learning and waits until its step is over (before the network is used again or disposed)
+    private async Task StopLearningAsync()
+    {
+        StopLearning();
+        await _learningTask.ContinueWith(_ => { }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     private Task Command(string command)

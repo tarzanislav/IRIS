@@ -65,6 +65,7 @@ static async Task<int> Run(LabArguments a)
         RoundMinutes = a.Number("--round") ?? 10,
         Duty = a.Number("--duty") ?? 0.5,
         CoreShare = a.Number("--cores") ?? 0.5,
+        Eco = (a.Value("--eco") ?? "yes") != "no",
         Rate = state.PlanRate,
         PlanRounds = planRounds,
         Schedule = schedule,
@@ -106,6 +107,7 @@ static int Usage()
             --round M (10)                      minutes of a round
             --rate R (0.0003), --plan-rounds N (600)   a new plan of the learning rate
             --duty D (0.5), --cores F (0.5)     share of time and of cores the computers use
+            --eco yes|no (yes)                  the efficiency mode of Windows on the computers (cooler, quieter)
             --from HH:mm (15:00), --until HH:mm (06:00), --weekends yes|no (yes)
             --sentences <dir>                   sk.txt, cs.txt, en.txt for the lines
             --wake yes|no (yes)                 wakes the computers that are off when learning begins, and shuts them

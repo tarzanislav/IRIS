@@ -154,6 +154,16 @@ internal sealed unsafe class ConvLayer : IDisposable
 
     public bool Pools => _poolH > 1 || _poolW > 1;
 
+    /// <summary>
+    /// The fast ways: 3 × 3 convolutions by Winograd's minimal filtering (4 × fewer multiplications) and the first
+    /// convolution (one input channel) computed directly; off only to compare with the plain products.
+    /// </summary>
+    public static bool UseFastPaths { get; set; } = true;
+
+    private bool Winograd => UseFastPaths && Training.Winograd.Fits(_p, _pad);
+
+    private bool First => UseFastPaths && FirstConvolution.Fits(_p, _pad);
+
     /// <summary>Where the time of the layer goes (product, normalization, pooling), when set.</summary>
     public Dictionary<string, double>? Timings { get; set; }
 
@@ -180,10 +190,32 @@ internal sealed unsafe class ConvLayer : IDisposable
         var clock = Timings is null ? null : new Clock(Timings, Name + " forward ");
         var pixels = Conv.Pixels;
         var z = _normalized.Ensure((long)pixels * outputs);
-        fixed (float* w = _p.Weight)
+        if (First)
         {
-            Gemm.Multiply(new Neighbourhoods(input, _p.Inputs, _p.Kh, _p.Kw, _pad, level, Conv), new ColumnsB(w, _p.Features),
-                pixels, outputs, _p.Features, z, outputs, add: false, threads);
+            FirstConvolution.Convolve(input, level, _p.Weight, outputs, z, threads);
+        }
+        else if (Winograd)
+        {
+            var kernels = Training.Winograd.TransformKernels(_p.Weight, _p.Inputs, outputs, flipped: false);
+            try
+            {
+                Training.Winograd.Convolve(input, _p.Inputs, level, kernels, outputs, z, threads);
+            }
+            finally
+            {
+                foreach (var k in kernels)
+                {
+                    k.Dispose();
+                }
+            }
+        }
+        else
+        {
+            fixed (float* w = _p.Weight)
+            {
+                Gemm.Multiply(new Neighbourhoods(input, _p.Inputs, _p.Kh, _p.Kw, _pad, level, Conv), new ColumnsB(w, _p.Features),
+                    pixels, outputs, _p.Features, z, outputs, add: false, threads);
+            }
         }
 
         clock?.Mark("product");
@@ -252,11 +284,22 @@ internal sealed unsafe class ConvLayer : IDisposable
         clock?.Mark("pooling");
         NormalizeBackward(d, g, pixels, threads);
         clock?.Mark("normalization");
-        fixed (float* gw = g.Weight)
+        if (First)
         {
-            // dW [outputs, features] += dZᵀ · neighbourhoods
-            Gemm.MultiplyLong(new ColumnsA(d, outputs), new Neighbourhoods(_input, _p.Inputs, _p.Kh, _p.Kw, _pad, In, Conv),
-                outputs, _p.Features, pixels, gw, _p.Features, add: true, threads);
+            FirstConvolution.WeightGradient(_input, In, d, outputs, g.Weight, threads);
+        }
+        else if (Winograd)
+        {
+            Training.Winograd.WeightGradient(_input, _p.Inputs, d, outputs, In, g.Weight, threads);
+        }
+        else
+        {
+            fixed (float* gw = g.Weight)
+            {
+                // dW [outputs, features] += dZᵀ · neighbourhoods
+                Gemm.MultiplyLong(new ColumnsA(d, outputs), new Neighbourhoods(_input, _p.Inputs, _p.Kh, _p.Kw, _pad, In, Conv),
+                    outputs, _p.Features, pixels, gw, _p.Features, add: true, threads);
+            }
         }
 
         clock?.Mark("weight gradient");
@@ -283,6 +326,25 @@ internal sealed unsafe class ConvLayer : IDisposable
         var inputs = _inputChannels;
         var outputs = _p.Outputs;
         var dx = _inputGradient.Ensure((long)In.Pixels * inputs);
+        if (Winograd)
+        {
+            // the same convolution with the kernel turned and inputs and outputs swapped
+            var kernels = Training.Winograd.TransformKernels(_p.Weight, inputs, outputs, flipped: true);
+            try
+            {
+                Training.Winograd.Convolve(dz, outputs, Conv, kernels, inputs, dx, threads);
+            }
+            finally
+            {
+                foreach (var k in kernels)
+                {
+                    k.Dispose();
+                }
+            }
+
+            return dx;
+        }
+
         if (_pad * 2 == _p.Kh - 1 && _pad * 2 == _p.Kw - 1)
         {
             // a "same" convolution: the gradient of the input is the convolution of dZ with the weights turned by
@@ -344,57 +406,55 @@ internal sealed unsafe class ConvLayer : IDisposable
         return dx;
     }
 
-    // mean and (biased) variance of every channel over all pixels, two passes, summed in double per range
+    // mean and (biased) variance of every channel over all pixels in one pass over memory: short runs of rows are
+    // summed in float twice while they are in the cache (around their own mean), and the runs merged in double
     private static (double[] Mean, double[] Variance) Statistics(float* z, int pixels, int channels, int threads)
     {
+        var count = 0L;
         var mean = new double[channels];
-        Work.For(pixels, (long)pixels * channels, threads, (from, to) => SumRows(z, from, to, channels, null), part =>
-        {
-            for (var c = 0; c < channels; c++)
-            {
-                mean[c] += part[c];
-            }
-        });
-        for (var c = 0; c < channels; c++)
-        {
-            mean[c] /= Math.Max(1, pixels);
-        }
-
-        var center = mean.Select(m => (float)m).ToArray();
+        var squares = new double[channels];
+        Work.For(pixels, (long)pixels * channels, threads, (from, to) => Moments(z, from, to, channels),
+            part => Merge(ref count, mean, squares, part.Count, part.Mean, part.Squares));
         var variance = new double[channels];
-        Work.For(pixels, (long)pixels * channels, threads, (from, to) => SumRowsCentered(z, from, to, channels, center), part =>
-        {
-            for (var c = 0; c < channels; c++)
-            {
-                variance[c] += part[c];
-            }
-        });
         for (var c = 0; c < channels; c++)
         {
-            variance[c] /= Math.Max(1, pixels);
+            variance[c] = squares[c] / Math.Max(1, pixels);
         }
 
         return (mean, variance);
     }
 
-    // Σ x (center null) or Σ (x − center)² of each channel over rows [from, to)
-    private static double[] SumRowsCentered(float* z, int from, int to, int channels, float[]? center)
+    // count, mean and Σ (x − mean)² of each channel over the rows [from, to)
+    private static (long Count, double[] Mean, double[] Squares) Moments(float* z, int from, int to, int channels)
     {
-        fixed (float* m = center)
+        var count = 0L;
+        var mean = new double[channels];
+        var squares = new double[channels];
+        var runMean = new double[channels];
+        var runSquares = new double[channels];
+        var sum = stackalloc float[channels];
+        var center = stackalloc float[channels];
+        var offset = stackalloc float[channels];
+        var square = stackalloc float[channels];
+        const int Run = 256;
+        for (var start = from; start < to; start += Run)
         {
-            return SumRows(z, from, to, channels, m);
-        }
-    }
+            var end = Math.Min(to, start + Run);
+            var n = end - start;
+            new Span<float>(sum, channels).Clear();
+            for (var r = start; r < end; r++)
+            {
+                Kernels.AddScaled(new Span<float>(sum, channels), new ReadOnlySpan<float>(z + (long)r * channels, channels), 1f);
+            }
 
-    private static double[] SumRows(float* z, int from, int to, int channels, float* center)
-    {
-        var sums = new double[channels];
-        var part = stackalloc float[channels];
-        const int Chunk = 256; // float sums over short runs, double between them
-        for (var start = from; start < to; start += Chunk)
-        {
-            new Span<float>(part, channels).Clear();
-            var end = Math.Min(to, start + Chunk);
+            for (var c = 0; c < channels; c++)
+            {
+                center[c] = sum[c] / n;
+            }
+
+            // around the rounded mean of the run: Σ (x − m) and Σ (x − m)², which give the exact mean and squares
+            new Span<float>(offset, channels).Clear();
+            new Span<float>(square, channels).Clear();
             for (var r = start; r < end; r++)
             {
                 var row = z + (long)r * channels;
@@ -403,37 +463,50 @@ internal sealed unsafe class ConvLayer : IDisposable
                 {
                     for (; c <= channels - 8; c += 8)
                     {
-                        var v = Vector256.Load(row + c);
-                        if (center != null)
-                        {
-                            v -= Vector256.Load(center + c);
-                            v *= v;
-                        }
-
-                        Vector256.Store(Vector256.Load(part + c) + v, part + c);
+                        var d = Vector256.Load(row + c) - Vector256.Load(center + c);
+                        Vector256.Store(Vector256.Load(offset + c) + d, offset + c);
+                        Vector256.Store(Vector256.Load(square + c) + (d * d), square + c);
                     }
                 }
 
                 for (; c < channels; c++)
                 {
-                    var v = row[c];
-                    if (center != null)
-                    {
-                        v -= center[c];
-                        v *= v;
-                    }
-
-                    part[c] += v;
+                    var d = row[c] - center[c];
+                    offset[c] += d;
+                    square[c] += d * d;
                 }
             }
 
             for (var c = 0; c < channels; c++)
             {
-                sums[c] += part[c];
+                double shift = offset[c];
+                runMean[c] = center[c] + (shift / n);
+                runSquares[c] = Math.Max(0, square[c] - (shift * shift / n));
             }
+
+            Merge(ref count, mean, squares, n, runMean, runSquares);
         }
 
-        return sums;
+        return (count, mean, squares);
+    }
+
+    // two groups of rows together (Chan's formula: the squares around the common mean)
+    private static void Merge(ref long count, double[] mean, double[] squares, long n, double[] otherMean, double[] otherSquares)
+    {
+        if (n == 0)
+        {
+            return;
+        }
+
+        var total = count + n;
+        for (var c = 0; c < mean.Length; c++)
+        {
+            var delta = otherMean[c] - mean[c];
+            mean[c] += delta * n / total;
+            squares[c] += otherSquares[c] + (delta * delta * count * n / total);
+        }
+
+        count = total;
     }
 
     // z → x̂ = (z − mean) / σ in place, a = relu(γ x̂ + β)

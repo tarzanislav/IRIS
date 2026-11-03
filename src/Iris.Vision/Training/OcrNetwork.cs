@@ -53,7 +53,7 @@ public sealed unsafe class OcrNetwork : IDisposable
     /// <summary>Seconds spent in each part of the network since it was made (for measuring where the time goes).</summary>
     public Dictionary<string, double> Timings { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Times also the parts inside the convolutions (product, normalization, pooling).</summary>
+    /// <summary>Times also the parts inside the layers (products, normalization, pooling, recurrence).</summary>
     public bool Detailed
     {
         get => _convs[0].Timings is not null;
@@ -63,6 +63,12 @@ public sealed unsafe class OcrNetwork : IDisposable
             {
                 _convs[i].Timings = value ? Timings : null;
                 _convs[i].Name = $"conv {i}";
+            }
+
+            for (var i = 0; i < _lstm.Length; i++)
+            {
+                _lstm[i].Timings = value ? Timings : null;
+                _lstm[i].Name = $"lstm {i}";
             }
         }
     }

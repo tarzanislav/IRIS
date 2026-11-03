@@ -73,6 +73,12 @@ internal sealed unsafe class LstmLayer : IDisposable
 
     public float* Output => _output.Data;
 
+
+    /// <summary>Where the time of the layer goes (products, recurrence), when set.</summary>
+    public Dictionary<string, double>? Timings { get; set; }
+
+    public string Name { get; set; } = "lstm";
+
     public float* Forward(float* input, Sequences sequences, int threads)
     {
         _input = input;
@@ -80,6 +86,7 @@ internal sealed unsafe class LstmLayer : IDisposable
         var frames = sequences.Total;
         int h = _hidden, g4 = 4 * _hidden;
         var output = _output.Ensure((long)frames * 2 * h);
+        var clock = Timings is null ? null : new Clock(Timings, Name + " forward ");
         var packed = new Gemm.PackedB[2];
         for (var d = 0; d < 2; d++)
         {
@@ -112,6 +119,7 @@ internal sealed unsafe class LstmLayer : IDisposable
             }
         }
 
+        clock?.Mark("input product");
         try
         {
             RunTasks(threads, (direction, lines) => ForwardTask(direction, lines, packed[direction], output));
@@ -122,6 +130,7 @@ internal sealed unsafe class LstmLayer : IDisposable
             packed[1].Dispose();
         }
 
+        clock?.Mark("recurrence");
         return output;
     }
 
@@ -133,6 +142,7 @@ internal sealed unsafe class LstmLayer : IDisposable
     {
         var frames = _sequences.Total;
         int h = _hidden, g4 = 4 * _hidden;
+        var clock = Timings is null ? null : new Clock(Timings, Name + " backward ");
         var packed = new Gemm.PackedB[2];
         for (var d = 0; d < 2; d++)
         {
@@ -152,6 +162,8 @@ internal sealed unsafe class LstmLayer : IDisposable
             packed[0].Dispose();
             packed[1].Dispose();
         }
+
+        clock?.Mark("recurrence");
 
         var previous = _previous.Ensure((long)frames * h);
         float* dx = inputGradient ? _inputGradient.Ensure((long)frames * _inputs) : null;
@@ -177,26 +189,37 @@ internal sealed unsafe class LstmLayer : IDisposable
                 }
             }
 
+            clock?.Mark("previous");
             fixed (float* ghh = gd.HiddenWeight, gih = gd.InputWeight, wih = _p[d].InputWeight)
             {
                 Gemm.MultiplyLong(new ColumnsA(dz, g4), new RowsB(previous, h), g4, h, frames, ghh, h, add: true, threads);
                 Gemm.MultiplyLong(new ColumnsA(dz, g4), new RowsB(_input, _inputs), g4, _inputs, frames, gih, _inputs, add: true, threads);
+                clock?.Mark("weight gradient");
                 if (dx != null)
                 {
                     Gemm.Multiply(new RowsA(dz, g4), new RowsB(wih, _inputs), frames, _inputs, g4, dx, _inputs, add: d == 1, threads);
                 }
+
+                clock?.Mark("input gradient");
             }
 
             var bias = new double[g4];
             Work.For(frames, (long)frames * g4, threads, (from, to) =>
             {
+                // in float over short runs of frames (vectors), in double between them
                 var sum = new double[g4];
-                for (var f = from; f < to; f++)
+                var run = new float[g4];
+                for (var start = from; start < to; start += 64)
                 {
-                    var row = dz + (long)f * g4;
+                    Array.Clear(run);
+                    for (var f = start; f < Math.Min(to, start + 64); f++)
+                    {
+                        Kernels.AddScaled(run, new ReadOnlySpan<float>(dz + (long)f * g4, g4), 1f);
+                    }
+
                     for (var k = 0; k < g4; k++)
                     {
-                        sum[k] += row[k];
+                        sum[k] += run[k];
                     }
                 }
 
@@ -213,6 +236,8 @@ internal sealed unsafe class LstmLayer : IDisposable
                 gd.InputBias[k] += (float)bias[k];
                 gd.HiddenBias[k] += (float)bias[k];
             }
+
+            clock?.Mark("bias");
         }
 
         return dx;
@@ -290,6 +315,7 @@ internal sealed unsafe class LstmLayer : IDisposable
                 new ReadOnlySpan<float>(cs + (long)j * h, h).CopyTo(new Span<float>(cells + (long)frame * h, h));
                 new ReadOnlySpan<float>(hs + (long)j * h, h).CopyTo(new Span<float>(output + (long)frame * 2 * h + d * h, h));
             }
+
         }
     }
 
@@ -409,10 +435,10 @@ internal sealed unsafe class LstmLayer : IDisposable
     private static float Sigmoid(float x) => 1f / (1f + MathF.Exp(-x));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Vector256<float> Sigmoid(Vector256<float> x) => Vector256.Create(1f) / (Vector256.Create(1f) + Vector256.Exp(-x));
+    private static Vector256<float> Sigmoid(Vector256<float> x) => Vector256.Create(1f) / (Vector256.Create(1f) + Kernels.Exp(-x));
 
     // tanh x = 1 − 2 / (e^{2x} + 1); exact enough everywhere, and saturates cleanly (e^{2x} = ∞ → 1, 0 → −1)
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector256<float> Tanh(Vector256<float> x) =>
-        Vector256.Create(1f) - Vector256.Create(2f) / (Vector256.Exp(x + x) + Vector256.Create(1f));
+        Vector256.Create(1f) - Vector256.Create(2f) / (Kernels.Exp(x + x) + Vector256.Create(1f));
 }
