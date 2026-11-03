@@ -405,4 +405,32 @@ internal static class Kernels
             x[i] = MathF.Max(0, x[i]);
         }
     }
+
+    /// <summary>
+    /// e^x of eight values at once, to about a unit in the last place, several times faster than the general one:
+    /// x = n ln 2 + r with n whole (r taken off in two parts, so it keeps all its bits), e^r by a polynomial of degree
+    /// six on |r| ≤ ln 2 / 2, and 2^n written straight into the exponent. Inputs are held within [−87, 88], where e^x
+    /// is a normal float, so it never gives infinity or zero (σ and tanh built on it still reach 0, ±1).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Vector256<float> Exp(Vector256<float> x)
+    {
+        x = Vector256.Min(Vector256.Max(x, Vector256.Create(-87f)), Vector256.Create(88f));
+        var n = Vector256.Round(x * Vector256.Create(1.44269504088896341f));
+        var r = MulAdd(n, Vector256.Create(-0.693359375f), x);
+        r = MulAdd(n, Vector256.Create(2.12194440e-4f), r);
+        var p = Vector256.Create(1.9875691500e-4f);
+        p = MulAdd(p, r, Vector256.Create(1.3981999507e-3f));
+        p = MulAdd(p, r, Vector256.Create(8.3334519073e-3f));
+        p = MulAdd(p, r, Vector256.Create(4.1665795894e-2f));
+        p = MulAdd(p, r, Vector256.Create(1.6666665459e-1f));
+        p = MulAdd(p, r, Vector256.Create(5.0000001201e-1f));
+        p = MulAdd(p, r * r, r + Vector256.Create(1f));
+        var scale = Vector256.ShiftLeft(Vector256.ConvertToInt32Native(n) + Vector256.Create(127), 23).AsSingle();
+        return p * scale;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<float> MulAdd(Vector256<float> a, Vector256<float> b, Vector256<float> c) =>
+        System.Runtime.Intrinsics.X86.Fma.IsSupported ? System.Runtime.Intrinsics.X86.Fma.MultiplyAdd(a, b, c) : (a * b) + c;
 }

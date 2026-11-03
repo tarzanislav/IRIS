@@ -82,6 +82,24 @@ public static unsafe class OcrTrainingTests
     }
 
     [Test]
+    public static void VectorExponentialIsExact()
+    {
+        // across the whole range the gates see, and at the ends where it is held
+        var worst = 0.0;
+        for (var i = -870000; i <= 880000; i += 7)
+        {
+            var x = i / 10000f;
+            var fast = Kernels.Exp(System.Runtime.Intrinsics.Vector256.Create(x))[3];
+            var exact = Math.Exp(x);
+            worst = Math.Max(worst, Math.Abs(fast - exact) / exact);
+        }
+
+        Assert.True(worst < 3e-7, $"relative error {worst:E2}");
+        Assert.True(float.IsFinite(Kernels.Exp(System.Runtime.Intrinsics.Vector256.Create(1000f))[0]), "large inputs stay finite");
+        Assert.True(Kernels.Exp(System.Runtime.Intrinsics.Vector256.Create(-1000f))[0] > 0, "small inputs stay above zero");
+    }
+
+    [Test]
     public static void CtcGradientIsTheSlopeOfItsLoss()
     {
         var random = new Random(5);
@@ -195,6 +213,51 @@ public static unsafe class OcrTrainingTests
         }
 
         Assert.True(failures.Length == 0, "gradients differ from the slopes:" + failures);
+    }
+
+    [Test]
+    public static void FastConvolutionsGiveTheSameGradients()
+    {
+        // channels in whole vectors, so the 3 × 3 layers after the first take the Winograd way (odd widths and the
+        // pooling make tiles that stick out of the picture) and the first one the direct way (40 = 32 + 8 channels)
+        var shape = new OcrShape(8, [new(40, 2, 2), new(24, 1, 1), new(32, 2, 1)], 16, 8, 1, "abc");
+        var weights = OcrWeights.Create(shape, seed: 21);
+        var batch = TinyBatch(shape, 5, (41, "abca"), (35, "cab"), (22, "b"));
+        (double Loss, OcrWeights Gradients, float[][] Logits) Run(bool fast)
+        {
+            var previous = ConvLayer.UseFastPaths;
+            ConvLayer.UseFastPaths = fast;
+            try
+            {
+                using var network = new OcrNetwork(weights.Copy()) { Threads = 3 };
+                var g = new OcrWeights(shape);
+                g.Clear();
+                var loss = network.Learn(batch, g);
+                return (loss, g, network.Read(batch));
+            }
+            finally
+            {
+                ConvLayer.UseFastPaths = previous;
+            }
+        }
+
+        var direct = Run(false);
+        var fast = Run(true);
+        Assert.Near(direct.Loss, fast.Loss, 1e-5 * Math.Abs(direct.Loss), "loss");
+        foreach (var (a, b) in direct.Gradients.Learnable().Zip(fast.Gradients.Learnable()))
+        {
+            var scale = a.Values.Max(MathF.Abs) + 1e-9f;
+            var worst = a.Values.Zip(b.Values, (x, y) => MathF.Abs(x - y)).Max() / scale;
+            Assert.True(worst < 1e-4, $"gradient of {a.Name}: the fast way differs by {worst:E1} of its largest value");
+        }
+
+        for (var i = 0; i < direct.Logits.Length; i++)
+        {
+            for (var k = 0; k < direct.Logits[i].Length; k++)
+            {
+                Assert.Near(direct.Logits[i][k], fast.Logits[i][k], 1e-4, $"logit {k} of line {i}");
+            }
+        }
     }
 
     [Test]

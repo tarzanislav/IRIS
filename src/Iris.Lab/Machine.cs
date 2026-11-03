@@ -158,6 +158,47 @@ public sealed partial class Machine
         return (uint)(Environment.TickCount - (int)info.Time) / 1000.0;
     }
 
+    /// <summary>
+    /// Asks the system to run this process for efficiency, or not. Windows (EcoQoS, Windows 10 1709 and newer): on
+    /// processors with efficient cores the work goes there, and the cores run at their most economical clock – less
+    /// power and heat, quiet fans, somewhat slower. Every system: the process runs below normal priority, so whatever
+    /// the computer is asked to do comes first. Returns whether the efficiency mode was set.
+    /// </summary>
+    public static bool SetEfficiency(bool on)
+    {
+        try
+        {
+            using var self = Process.GetCurrentProcess();
+            self.PriorityClass = ProcessPriorityClass.BelowNormal;
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+        }
+
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+        {
+            return false;
+        }
+
+        // PROCESS_POWER_THROTTLING_EXECUTION_SPEED: on = throttled (EcoQoS), off = the normal way, set explicitly
+        var state = new PowerThrottling { Version = 1, ControlMask = 1, StateMask = on ? 1u : 0u };
+        return SetProcessInformation(-1, ProcessPowerThrottling, ref state, (uint)Marshal.SizeOf<PowerThrottling>());
+    }
+
+    private const int ProcessPowerThrottling = 4;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetProcessInformation(nint process, int informationClass, ref PowerThrottling information, uint size);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PowerThrottling
+    {
+        public uint Version;
+        public uint ControlMask;
+        public uint StateMask;
+    }
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetSystemTimes(out long idle, out long kernel, out long user);

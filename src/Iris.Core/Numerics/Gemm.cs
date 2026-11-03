@@ -60,6 +60,20 @@ internal readonly unsafe struct ColumnsA : IMatrixA
 
     public void Pack(float* target, int m0, int rows, int k0, int depth)
     {
+        if (rows == Gemm.MR && Sse2.IsSupported)
+        {
+            // six neighbouring values per k: four and two at once
+            for (var k = 0; k < depth; k++)
+            {
+                var source = _data + (long)(k0 + k) * _stride + m0;
+                var row = target + k * Gemm.MR;
+                Sse.Store(row, Sse.LoadVector128(source));
+                Sse2.StoreScalar((double*)(row + 4), Sse2.LoadScalarVector128((double*)(source + 4)));
+            }
+
+            return;
+        }
+
         for (var k = 0; k < depth; k++)
         {
             var source = _data + (long)(k0 + k) * _stride + m0;
@@ -175,6 +189,9 @@ internal static unsafe class Gemm
 
     // multiply-adds below which threads cost more than they bring
     private const long ParallelWork = 1 << 18;
+
+    // a block of zeros to read missing rows from (never written)
+    private static readonly float* Zeros = AllocateZeros();
 
     [ThreadStatic]
     private static float* t_a;
@@ -313,15 +330,81 @@ internal static unsafe class Gemm
 
     /// <summary>
     /// Writes MR rows (null = zeros) side by side: target[k · MR + i] = rows[i][k]. Six sequential reads and one
-    /// sequential write – the packing of A at the speed of memory.
+    /// sequential write – the packing of A at the speed of memory: eight values of each row at a time, turned in
+    /// registers (unpack, shuffle) into the 48 values of eight columns, written as twelve quarter-lines.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     internal static void Interleave(float** rows, int depth, float* target)
     {
         float* r0 = rows[0], r1 = rows[1], r2 = rows[2], r3 = rows[3], r4 = rows[4], r5 = rows[5];
+        var k = 0;
+        if (Avx.IsSupported && depth >= 8)
+        {
+            // a missing row reads from zeros (never longer than a block of k)
+            if (r0 == null || r1 == null || r2 == null || r3 == null || r4 == null || r5 == null)
+            {
+                if (depth > KC)
+                {
+                    goto Scalar;
+                }
+
+                var zeros = Zeros;
+                r0 = r0 == null ? zeros : r0;
+                r1 = r1 == null ? zeros : r1;
+                r2 = r2 == null ? zeros : r2;
+                r3 = r3 == null ? zeros : r3;
+                r4 = r4 == null ? zeros : r4;
+                r5 = r5 == null ? zeros : r5;
+            }
+
+            for (; k <= depth - 8; k += 8)
+            {
+                var x0 = Avx.LoadVector256(r0 + k);
+                var x1 = Avx.LoadVector256(r1 + k);
+                var x2 = Avx.LoadVector256(r2 + k);
+                var x3 = Avx.LoadVector256(r3 + k);
+                var x4 = Avx.LoadVector256(r4 + k);
+                var x5 = Avx.LoadVector256(r5 + k);
+
+                // per 128-bit half (columns k..k+3 below, k+4..k+7 above):
+                var t0 = Avx.UnpackLow(x0, x1);       // x00 x10 x01 x11
+                var t1 = Avx.UnpackHigh(x0, x1);      // x02 x12 x03 x13
+                var t2 = Avx.UnpackLow(x2, x3);       // x20 x30 x21 x31
+                var t3 = Avx.UnpackHigh(x2, x3);      // x22 x32 x23 x33
+                var u0 = Avx.UnpackLow(x4, x5);       // x40 x50 x41 x51
+                var u1 = Avx.UnpackHigh(x4, x5);      // x42 x52 x43 x53
+                var c0 = Avx.Shuffle(t0, t2, 0x44);   // x00 x10 x20 x30
+                var c1 = Avx.Shuffle(t0, t2, 0xEE);   // x01 x11 x21 x31
+                var c2 = Avx.Shuffle(t1, t3, 0x44);   // x02 x12 x22 x32
+                var c3 = Avx.Shuffle(t1, t3, 0xEE);   // x03 x13 x23 x33
+                var g1 = Avx.Shuffle(u0, c1, 0x44);   // x40 x50 x01 x11
+                var g2 = Avx.Shuffle(c1, u0, 0xEE);   // x21 x31 x41 x51
+                var g4 = Avx.Shuffle(u1, c3, 0x44);   // x42 x52 x03 x13
+                var g5 = Avx.Shuffle(c3, u1, 0xEE);   // x23 x33 x43 x53
+
+                // the lower halves are columns k..k+3 (24 values), the upper ones k+4..k+7
+                var low = target;
+                var high = target + 4 * MR;
+                Sse.Store(low, c0.GetLower());
+                Sse.Store(low + 4, g1.GetLower());
+                Sse.Store(low + 8, g2.GetLower());
+                Sse.Store(low + 12, c2.GetLower());
+                Sse.Store(low + 16, g4.GetLower());
+                Sse.Store(low + 20, g5.GetLower());
+                Sse.Store(high, c0.GetUpper());
+                Sse.Store(high + 4, g1.GetUpper());
+                Sse.Store(high + 8, g2.GetUpper());
+                Sse.Store(high + 12, c2.GetUpper());
+                Sse.Store(high + 16, g4.GetUpper());
+                Sse.Store(high + 20, g5.GetUpper());
+                target += 8 * MR;
+            }
+        }
+
+    Scalar:
         if (r0 != null && r1 != null && r2 != null && r3 != null && r4 != null && r5 != null)
         {
-            for (var k = 0; k < depth; k++)
+            for (; k < depth; k++)
             {
                 target[0] = r0[k];
                 target[1] = r1[k];
@@ -335,7 +418,7 @@ internal static unsafe class Gemm
             return;
         }
 
-        for (var k = 0; k < depth; k++)
+        for (; k < depth; k++)
         {
             target[0] = r0 == null ? 0 : r0[k];
             target[1] = r1 == null ? 0 : r1[k];
@@ -345,6 +428,13 @@ internal static unsafe class Gemm
             target[5] = r5 == null ? 0 : r5[k];
             target += MR;
         }
+    }
+
+    private static float* AllocateZeros()
+    {
+        var zeros = (float*)NativeMemory.AlignedAlloc((KC + 16) * sizeof(float), 64);
+        new Span<float>(zeros, KC + 16).Clear();
+        return zeros;
     }
 
     internal static void ZeroRows(float* target, int rows, int depth)
@@ -461,6 +551,16 @@ internal static unsafe class Gemm
         {
             PortableKernel(depth, a, b, c, ldc, rows, columns, add);
             return;
+        }
+
+        if (add)
+        {
+            // the block of C is read at the end: ask for it now, so it is near while the products run
+            for (var i = 0; i < rows; i++)
+            {
+                Sse.Prefetch0(c + (long)i * ldc);
+                Sse.Prefetch0(c + (long)i * ldc + 8);
+            }
         }
 
         Vector256<float> c00 = default, c01 = default, c10 = default, c11 = default, c20 = default, c21 = default;
@@ -589,6 +689,14 @@ internal static unsafe class Gemm
 
         public int Panels { get; }
 
+        /// <summary>A packed B of zeros (n × k), to be filled value by value through <see cref="At"/>.</summary>
+        public static PackedB Zeros(int n, int k)
+        {
+            var packed = new PackedB(n, k);
+            new Span<float>(packed._data, checked(packed.Panels * NR * Math.Max(1, k))).Clear();
+            return packed;
+        }
+
         public static PackedB Create<TB>(TB b, int n, int k, int threads = 1)
             where TB : struct, IMatrixB
         {
@@ -608,6 +716,13 @@ internal static unsafe class Gemm
             }
 
             return packed;
+        }
+
+        /// <summary>Where B[k, n] is kept; the values n … n + 7 follow it when n is a multiple of 8.</summary>
+        public float* At(int k, int n)
+        {
+            var k0 = k / KC * KC;
+            return Panel(k0, n / NR) + ((long)(k - k0) * NR) + (n % NR);
         }
 
         /// <summary>The panel j of the block of rows starting at k0 (kc × NR floats).</summary>

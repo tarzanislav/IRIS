@@ -95,6 +95,7 @@ static int Test(LabArguments a)
     var minutes = a.Number("--minutes") ?? 10;
     var duty = Math.Clamp(a.Number("--duty") ?? 0.5, 0.05, 1);
     var cores = Math.Clamp(a.Number("--cores") ?? 0.5, 0.05, 1);
+    var eco = (a.Value("--eco") ?? "yes") != "no";
     var shape = OcrShape.Default;
     var fonts = LineArtist.FindFonts(Fonts(a.Value("--fonts")), shape.Charset, ["Math", "Display", "Unifont", "Symbol"]);
     if (fonts.Count == 0)
@@ -103,10 +104,10 @@ static int Test(LabArguments a)
     }
 
     var threads = Math.Max(1, (int)(Environment.ProcessorCount * cores));
-    Console.WriteLine($"IRIS trial: {minutes} min, {threads} of {Environment.ProcessorCount} threads, works {duty:P0} of the time, {fonts.Count} fonts");
+    var efficient = Machine.SetEfficiency(eco) && eco;
+    Console.WriteLine($"IRIS trial: {minutes} min, {threads} of {Environment.ProcessorCount} threads, works {duty:P0} of the time, {fonts.Count} fonts{(efficient ? ", efficiency mode" : "")}");
     Console.WriteLine("time      processor  learning  memory  temperature  lines/s");
-    Lower();
-    using var learner = new LabLearner(OcrWeights.Create(shape, 1), new LineArtist(fonts), new Dictionary<string, string[]>(), seed: 1)
+    using var learner = new LabLearner(OcrWeights.Create(shape, 1), new LineArtist(fonts), new Dictionary<string, string[]>(), seed: 1, drawingThreads: 2)
     {
         Threads = threads,
         Duty = duty,
@@ -195,9 +196,10 @@ static void Log(string path, string line)
 static int Usage()
 {
     Console.Error.WriteLine("""
-        iris-agent test [--minutes M] [--duty D] [--cores F] [--fonts <dir;dir>]
+        iris-agent test [--minutes M] [--duty D] [--cores F] [--eco yes|no] [--fonts <dir;dir>]
                                               a trial on this computer without the hub: learns M minutes (10) with a
-                                              share of time D (0.5) and of cores F (0.5), shows load and temperature
+                                              share of time D (0.5) and of cores F (0.5), in the efficiency mode of
+                                              Windows (yes), shows load and temperature
         iris-agent run --hub <server> --key <agent.key> [--port N] [--name N] [--fonts <dir;dir>]
                                               learns with the hub in this window (Ctrl+C ends it)
         iris-agent install --hub <server> --key <agent.key> [--port N] [--name N]

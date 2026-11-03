@@ -32,6 +32,9 @@ public sealed record LabHubOptions
 
     public double CoreShare { get; init; } = 0.5;
 
+    /// <summary>Whether the computers learn in the efficiency mode of their system (cooler, quieter, less power).</summary>
+    public bool Eco { get; init; } = true;
+
     public int BatchSize { get; init; } = 32;
 
     /// <summary>The highest rate of a new plan, and the plan in rounds (the rate falls along them by a cosine).</summary>
@@ -715,6 +718,7 @@ public sealed class LabHub
     {
         ["duty"] = _options.Duty,
         ["cores"] = _options.CoreShare,
+        ["eco"] = _options.Eco,
         ["batch"] = _options.BatchSize,
         ["schedule"] = _options.Schedule.ToJson(),
     };

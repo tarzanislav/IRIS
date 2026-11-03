@@ -63,6 +63,8 @@ public sealed class LabAgent
     private double _duty = 0.5;
     private double _cores = 0.5;
     private int _batch = 32;
+    private bool _eco = true;
+    private bool? _ecoSet;
     private bool _paused;
     private string _state = "starting";
     private MachineSample? _sample;
@@ -75,6 +77,7 @@ public sealed class LabAgent
     /// <summary>Runs until cancelled: connects, and after a lost connection connects again (waiting longer each time).</summary>
     public async Task RunAsync(CancellationToken cancel)
     {
+        ApplyEfficiency();
         var delay = TimeSpan.FromSeconds(5);
         while (!cancel.IsCancellationRequested)
         {
@@ -179,6 +182,7 @@ public sealed class LabAgent
             ["machine"] = _sample?.ToJson(),
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
+            ["eco"] = _ecoSet,
             ["mac"] = _mac,
         };
         if (_last is { } last)
@@ -201,6 +205,8 @@ public sealed class LabAgent
         _duty = Math.Clamp(settings["duty"]?.GetValue<double>() ?? _duty, 0.05, 1);
         _cores = Math.Clamp(settings["cores"]?.GetValue<double>() ?? _cores, 0.05, 1);
         _batch = Math.Clamp(settings["batch"]?.GetValue<int>() ?? _batch, 1, 256);
+        _eco = settings["eco"]?.GetValue<bool>() ?? _eco;
+        ApplyEfficiency();
         if (settings["sentences"] is JsonObject sentences)
         {
             _sentences = sentences.ToDictionary(p => p.Key, p => p.Value!.AsArray().Select(s => s!.GetValue<string>()).ToArray(), StringComparer.Ordinal);
@@ -215,6 +221,9 @@ public sealed class LabAgent
     }
 
     private int Threads() => Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * _cores));
+
+    // the efficiency mode as the hub wants it (null in the status: the system has no such mode)
+    private void ApplyEfficiency() => _ecoSet = Machine.SetEfficiency(_eco) ? _eco : null;
 
     private void StartRound(LabChannel channel, LabMessage message, CancellationToken cancel)
     {
@@ -232,7 +241,8 @@ public sealed class LabAgent
                     return;
                 }
 
-                _learner = new LabLearner(new OcrWeights(shape), new LineArtist(fonts), _sentences, _options.Seed);
+                // two drawing threads: the faster learning must not wait for lines (they rest when the queue is full)
+                _learner = new LabLearner(new OcrWeights(shape), new LineArtist(fonts), _sentences, _options.Seed, drawingThreads: 2);
             }
 
             _learner.Duty = _duty;
