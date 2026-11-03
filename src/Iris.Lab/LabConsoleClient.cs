@@ -81,6 +81,12 @@ public sealed class LabConsoleClient : IDisposable
         return manifest?.File(UpdateManifest.Console) is { } file && LabUpdates.Matches(file, answer.Data) ? (manifest, answer.Data) : null;
     }
 
+    /// <summary>
+    /// Changes the configuration (a name, a group or settings – see <see cref="LabConfig.Apply"/>), or only reads it
+    /// with an empty change; returns the configuration as it is now, with the hub's defaults.
+    /// </summary>
+    public Task<JsonObject> ConfigureAsync(JsonObject change, CancellationToken cancel) => Ask(new LabMessage(MessageKind.Configure, change), cancel);
+
     public void Dispose()
     {
         _channel.Dispose();

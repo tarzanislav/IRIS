@@ -303,6 +303,25 @@ public static class LabTests
             Assert.Equal("9.9.9", snapshot["update"]?["version"]?.GetValue<string>(), "the console sees the signed version, not the stranger's");
             var (consoleManifest, data) = await console.ConsoleProgramAsync(default) ?? throw new InvalidOperationException("no console program");
             Assert.True(consoleManifest.Version == "9.9.9" && data.SequenceEqual(consoleProgram), "the console gets its program, checked");
+
+            // the computer told what it is; the console names it and gives it its own settings
+            for (var i = 0; i < 50 && (await console.SnapshotAsync(default))["agents"]![0]!["inventory"] is null; i++)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.True((await console.SnapshotAsync(default))["agents"]![0]!["inventory"]?["cpu"]?["logical"] is not null, "the inventory arrived");
+            var config = await console.ConfigureAsync(JsonNode.Parse("""{"settings":{"scope":"computer","name":"PC-07","values":{"duty":0.25,"learn":false}}}""")!.AsObject(), default);
+            Assert.True(config["settings"]?["computers"]?["PC-07"]?["duty"]?.GetValue<double>() == 0.25, "the hub keeps the setting");
+            await console.ConfigureAsync(JsonNode.Parse("""{"alias":{"computer":"PC-07","name":"Okno 3"}}""")!.AsObject(), default);
+            var agentInSnapshot = (await console.SnapshotAsync(default))["agents"]![0]!;
+            Assert.True(agentInSnapshot["alias"]?.GetValue<string>() == "Okno 3" && agentInSnapshot["settings"]?["learn"]?.GetValue<bool>() == false, "the snapshot shows the name and the settings");
+            for (var i = 0; i < 50 && (await console.SnapshotAsync(default))["agents"]![0]!["status"]?["duty"]?.GetValue<double>() != 0.25; i++)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.True((await console.SnapshotAsync(default))["agents"]![0]!["status"]?["duty"]?.GetValue<double>() == 0.25, "the computer works with its new share of time");
             stop.Cancel();
             await Task.WhenAll(hubTask, agent);
         }
@@ -340,6 +359,123 @@ public static class LabTests
             })]),
         }.ToJsonString());
         return (json, key.SignData(json, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.DSASignatureFormat.Rfc3279DerSequence));
+    }
+
+    [Test]
+    public static void FirmwareTablesAreRead()
+    {
+        // an invented computer: maker, model, service tag, BIOS, case, processor, two memory modules and an empty slot
+        var system = new byte[23];
+        system[0] = 1; // maker
+        system[1] = 2; // model
+        system[2] = 3; // version: a placeholder
+        system[3] = 4; // serial
+        for (var i = 0; i < 16; i++)
+        {
+            system[4 + i] = (byte)(i + 1);
+        }
+
+        system[22] = 5; // family
+        var processor = new byte[0x2A - 4];
+        processor[0x04 - 4] = 1;
+        processor[0x07 - 4] = 2;
+        processor[0x10 - 4] = 3;
+        BitConverter.GetBytes((ushort)4800).CopyTo(processor, 0x14 - 4);
+        processor[0x18 - 4] = 0x41; // populated, enabled
+        processor[0x23 - 4] = 14;
+        processor[0x25 - 4] = 20;
+        byte[] Module(ushort megabytes, byte slot)
+        {
+            var m = new byte[0x22 - 4];
+            BitConverter.GetBytes(megabytes).CopyTo(m, 0x0C - 4);
+            m[0x10 - 4] = slot;
+            m[0x12 - 4] = 0x1A; // DDR4
+            BitConverter.GetBytes((ushort)3200).CopyTo(m, 0x15 - 4);
+            m[0x1A - 4] = 2;
+            BitConverter.GetBytes((ushort)3200).CopyTo(m, 0x20 - 4);
+            return m;
+        }
+
+        var table = Concat(
+            Structure(0, [1, 2, 0, 0, 3], "Example BIOS Ltd.", "1.23.0", "05/06/2026"),
+            Structure(1, system, "Example Corp", "Desk 3000", "To Be Filled By O.E.M.", "TEST0001", "Desk"),
+            Structure(3, [1, 6, 0, 2, 0], "Example Corp", "TEST0001"),
+            Structure(4, processor, "SOCKET 0", "Example Chips", "Example Core 9 900"),
+            Structure(17, Module(8192, 1), "DIMM 1", "PART-8G"),
+            Structure(17, Module(0, 1), "DIMM 2"),
+            Structure(17, Module(8192, 1), "DIMM 3", "PART-8G"),
+            Structure(127, []));
+        var json = SmBios.Parse(table);
+        Assert.Equal("Example Corp", json["maker"]?.GetValue<string>(), "maker");
+        Assert.Equal("Desk 3000", json["model"]?.GetValue<string>(), "model");
+        Assert.Equal("TEST0001", json["serial"]?.GetValue<string>(), "service tag");
+        Assert.True(json["version"] is null, "a placeholder of the firmware counts as missing");
+        Assert.Equal("1.23.0", json["bios"]?["version"]?.GetValue<string>(), "BIOS");
+        Assert.Equal("mini tower", json["chassis"]?["type"]?.GetValue<string>(), "case");
+        Assert.Equal("Example Core 9 900", json["cpu"]?["name"]?.GetValue<string>(), "processor");
+        Assert.Equal(14, json["cpu"]?["cores"]?.GetValue<int>() ?? 0, "cores");
+        Assert.Equal(20, json["cpu"]?["threads"]?.GetValue<int>() ?? 0, "threads");
+        var modules = json["memory_modules"]!.AsArray();
+        Assert.Equal(2, modules.Count, "two modules, the empty slot left out");
+        Assert.True(modules.All(m => m!["size_gb"]!.GetValue<double>() == 8 && m["type"]!.GetValue<string>() == "DDR4" && m["speed"]!.GetValue<int>() == 3200), "8 GB DDR4-3200 each");
+        Assert.True(json["uuid"]?.GetValue<string>() is { Length: 36 }, "the UUID");
+        Assert.True(SmBios.Parse([1, 2, 3]).Count == 0 && SmBios.Parse(Structure(1, [9, 9], "x")).Count == 0, "broken tables give nothing, no exception");
+        var here = Inventory.Collect();
+        Assert.True(here["cpu"]?["logical"]?.GetValue<int>() == Environment.ProcessorCount, "the inventory of this computer has its processor");
+
+        static byte[] Structure(byte type, byte[] fields, params string[] strings)
+        {
+            var bytes = new List<byte> { type, (byte)(4 + fields.Length), 0, 0 };
+            bytes.AddRange(fields);
+            foreach (var text in strings)
+            {
+                bytes.AddRange(System.Text.Encoding.Latin1.GetBytes(text));
+                bytes.Add(0);
+            }
+
+            bytes.Add(0);
+            if (strings.Length == 0)
+            {
+                bytes.Add(0);
+            }
+
+            return [.. bytes];
+        }
+
+        static byte[] Concat(params byte[][] parts) => [.. parts.SelectMany(p => p)];
+    }
+
+    [Test]
+    public static void SettingsGoFromAllToTheGroupToTheComputer()
+    {
+        var config = new LabConfig();
+        var defaults = new JsonObject { ["duty"] = 0.5, ["cores"] = 0.5, ["eco"] = true, ["hot"] = 90.0, ["learn"] = true };
+        Assert.True(config.Apply(JsonNode.Parse("""{"settings":{"scope":"all","values":{"duty":0.7,"cores":3,"evil":"rm -rf"}}}""")!.AsObject()), "all");
+        Assert.True(config.Apply(JsonNode.Parse("""{"settings":{"scope":"group","name":"Desk 3000","values":{"cores":0.25,"eco":false}}}""")!.AsObject()), "a hardware group");
+        Assert.True(config.Apply(JsonNode.Parse("""{"settings":{"scope":"computer","name":"PC-02","values":{"duty":0.3}}}""")!.AsObject()), "one computer");
+        Assert.True(config.Apply(JsonNode.Parse("""{"alias":{"computer":"PC-02","name":"Miesto 2"}}""")!.AsObject()), "a name");
+        Assert.True(!config.Apply(JsonNode.Parse("""{"command":"format"}""")!.AsObject()), "nothing else");
+        var first = config.Effective(defaults, "PC-01", "Desk 3000");
+        Assert.True(first["duty"]!.GetValue<double>() == 0.7 && first["cores"]!.GetValue<double>() == 0.25 && !first["eco"]!.GetValue<bool>(), "PC-01: all, then its model's group");
+        Assert.True(first["evil"] is null, "unknown settings are dropped");
+        var second = config.Effective(defaults, "PC-02", "Desk 3000");
+        Assert.True(second["duty"]!.GetValue<double>() == 0.3 && second["cores"]!.GetValue<double>() == 0.25, "PC-02: its own share of time wins");
+        Assert.True(config.Effective(defaults, "PC-09", "Other 1")["cores"]!.GetValue<double>() == 1, "cores are held at most 1 (100 %)");
+        config.Apply(JsonNode.Parse("""{"group":{"computer":"PC-01","name":"Rad A"}}""")!.AsObject());
+        Assert.Equal("Rad A", config.GroupOf("PC-01", "Desk 3000"), "a group set by hand wins over the model");
+        Assert.True(config.Effective(defaults, "PC-01", "Desk 3000")["eco"]!.GetValue<bool>(), "and the model's settings no longer apply");
+        var path = Path.Combine(Path.GetTempPath(), $"iris-lab-config-{Environment.ProcessId}.json");
+        try
+        {
+            config.Save(path);
+            var again = LabConfig.Load(path);
+            Assert.Equal("Miesto 2", again.Aliases["PC-02"], "names are kept");
+            Assert.True(again.Effective(defaults, "PC-02", "Desk 3000").ToJsonString() == second.ToJsonString(), "settings are kept");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Test]

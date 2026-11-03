@@ -101,6 +101,7 @@ public sealed class LabHub
     private DateTime _lastWake;
     private DateTime _lastUpdateLook = DateTime.MinValue;
     private AvailableUpdate? _update;
+    private readonly LabConfig _config;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -112,6 +113,7 @@ public sealed class LabHub
         _state = state;
         _sentences = LineTexts.ReadSentences(options.Sentences);
         _history = new LabHistory(Path.Combine(options.Folder, "history"));
+        _config = LabConfig.Load(ConfigPath);
         _tester = new(MakeTester);
         var tests = Path.Combine(options.Folder, "tests.jsonl");
         if (File.Exists(tests))
@@ -129,6 +131,8 @@ public sealed class LabHub
 
     /// <summary>The model file the hub keeps (iris-ocr-train) in its folder.</summary>
     public static string ModelPath(string folder) => Path.Combine(folder, "lab-model.iris");
+
+    private string ConfigPath => Path.Combine(_options.Folder, "lab-config.json");
 
     /// <summary>The port it listens on (useful when 0 was asked for).</summary>
     public int Port => (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? _options.Port;
@@ -188,6 +192,11 @@ public sealed class LabHub
                     ["rounds"] = a.Rounds,
                     ["lines"] = a.Lines,
                     ["version"] = a.Version,
+                    ["alias"] = _config.Aliases.GetValueOrDefault(a.Name),
+                    ["group"] = _config.GroupOf(a.Name, Model(a)),
+                    ["model"] = Model(a),
+                    ["settings"] = SettingsOf(a),
+                    ["inventory"] = a.Inventory?.DeepClone(),
                     ["status"] = a.Status?.DeepClone(),
                 });
             }
@@ -200,6 +209,7 @@ public sealed class LabHub
                 ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
                 ["hub_version"] = LabUpdates.Version,
+                ["config"] = ConfigJson(),
                 ["update"] = _update is { } u ? new JsonObject
                 {
                     ["version"] = u.Manifest.Version,
@@ -260,7 +270,7 @@ public sealed class LabHub
             if (_update is { } update && update.Manifest.File(UpdateManifest.Agent) is not null)
             {
                 foreach (var a in _agents.Values.Where(a => a.Channel is not null && a.Version is { } v && LabUpdates.IsNewer(update.Manifest.Version, v) &&
-                    (_options.AutoUpdate || a.UpdateWanted) && a.State is "idle" or "waiting" && now - a.UpdateSent > TimeSpan.FromMinutes(15)).Take(3))
+                    (Switch(a, "update") || a.UpdateWanted) && a.State is "idle" or "waiting" && now - a.UpdateSent > TimeSpan.FromMinutes(15)).Take(3))
                 {
                     a.UpdateSent = now;
                     a.UpdateWanted = false;
@@ -277,7 +287,7 @@ public sealed class LabHub
                     // the time of learning begins: wake every known computer that is off, and remember which
                     _openedAt = now;
                     _lastWake = now;
-                    foreach (var a in _agents.Values.Where(a => a.Channel is null && a.Mac is not null))
+                    foreach (var a in _agents.Values.Where(a => a.Channel is null && a.Mac is not null && Switch(a, "wake")))
                     {
                         _woken.Add(a.Name);
                         toWake.Add(a.Mac!);
@@ -308,7 +318,7 @@ public sealed class LabHub
                 Close(round, now);
             }
 
-            var idle = _agents.Values.Where(a => a.Channel is not null && a.State is "idle" or "waiting").ToList();
+            var idle = _agents.Values.Where(a => a.Channel is not null && a.State is "idle" or "waiting" && Switch(a, "learn")).ToList();
             if (open && _round is null && idle.Count > 0)
             {
                 var number = (_rounds.LastOrDefault()?["round"]?.GetValue<int>() ?? 0) + 1;
@@ -475,7 +485,7 @@ public sealed class LabHub
 
             try
             {
-                await Send(agent, new LabMessage(MessageKind.Settings, Settings()), cancel);
+                await Send(agent, new LabMessage(MessageKind.Settings, Settings(agent)), cancel);
                 if (_sentences.Count > 0)
                 {
                     var sentences = new JsonObject();
@@ -517,6 +527,16 @@ public sealed class LabHub
                             break;
                         case MessageKind.Delta:
                             Receive(agent, message);
+                            break;
+                        case MessageKind.Inventory:
+                            lock (_gate)
+                            {
+                                agent.Inventory = message.Header;
+                                SaveKnown();
+                            }
+
+                            // its model may put it into another group
+                            await Send(agent, new LabMessage(MessageKind.Settings, Settings(agent)), cancel);
                             break;
                         default:
                             break;
@@ -632,6 +652,10 @@ public sealed class LabHub
                         break;
                     case MessageKind.Update:
                         await channel.SendAsync(UpdateRequest(message.Header), cancel);
+                        break;
+                    case MessageKind.Configure:
+                        await Configure(message.Header, cancel);
+                        await channel.SendAsync(new LabMessage(MessageKind.Configure, ConfigJson()), cancel);
                         break;
                     default:
                         break;
@@ -788,7 +812,13 @@ public sealed class LabHub
         foreach (var item in json["computers"]?.AsArray().OfType<JsonObject>() ?? [])
         {
             var name = item["name"]!.GetValue<string>();
-            _agents[name] = new AgentEntry(name) { Mac = item["mac"]?.GetValue<string>(), Address = item["address"]?.GetValue<string>() ?? "", State = "gone" };
+            _agents[name] = new AgentEntry(name)
+            {
+                Mac = item["mac"]?.GetValue<string>(),
+                Address = item["address"]?.GetValue<string>() ?? "",
+                State = "gone",
+                Inventory = item["inventory"] as JsonObject is { } inventory ? (JsonObject)inventory.DeepClone() : null,
+            };
         }
 
         foreach (var name in json["woken"]?.AsArray().Select(n => n!.GetValue<string>()) ?? [])
@@ -803,7 +833,13 @@ public sealed class LabHub
         {
             var json = new JsonObject
             {
-                ["computers"] = new JsonArray([.. _agents.Values.Select(a => (JsonNode?)new JsonObject { ["name"] = a.Name, ["mac"] = a.Mac, ["address"] = a.Address })]),
+                ["computers"] = new JsonArray([.. _agents.Values.Select(a => (JsonNode?)new JsonObject
+                {
+                    ["name"] = a.Name,
+                    ["mac"] = a.Mac,
+                    ["address"] = a.Address,
+                    ["inventory"] = a.Inventory?.DeepClone(),
+                })]),
                 ["woken"] = new JsonArray([.. _woken.Select(n => (JsonNode?)n)]),
             };
             File.WriteAllText(Path.Combine(_options.Folder, "computers.json"), json.ToJsonString());
@@ -886,14 +922,67 @@ public sealed class LabHub
         }
     }
 
-    private JsonObject Settings() => new()
+    // what every computer gets unless the console set something else
+    private JsonObject Defaults() => new()
     {
         ["duty"] = _options.Duty,
         ["cores"] = _options.CoreShare,
         ["eco"] = _options.Eco,
-        ["batch"] = _options.BatchSize,
-        ["schedule"] = _options.Schedule.ToJson(),
+        ["hot"] = 90.0,
+        ["learn"] = true,
+        ["wake"] = _options.AutoWake,
+        ["update"] = _options.AutoUpdate,
     };
+
+    private static string? Model(AgentEntry agent) => agent.Inventory?["model"]?.GetValue<string>();
+
+    private JsonObject SettingsOf(AgentEntry agent) => _config.Effective(Defaults(), agent.Name, Model(agent));
+
+    private bool Switch(AgentEntry agent, string name) => SettingsOf(agent)[name]?.GetValue<bool>() ?? true;
+
+    // the settings message of a computer: its own settings, the batch and the schedule
+    private JsonObject Settings(AgentEntry agent)
+    {
+        var settings = SettingsOf(agent);
+        settings["batch"] = _options.BatchSize;
+        settings["schedule"] = _options.Schedule.ToJson();
+        return settings;
+    }
+
+    private JsonObject ConfigJson()
+    {
+        var json = _config.ToJson();
+        json["defaults"] = Defaults();
+        return json;
+    }
+
+    // a change from the console: saved, and every connected computer gets its settings again
+    private async Task Configure(JsonObject change, CancellationToken cancel)
+    {
+        List<AgentEntry> connected;
+        lock (_gate)
+        {
+            if (!_config.Apply(change))
+            {
+                return;
+            }
+
+            try
+            {
+                _config.Save(ConfigPath);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+
+            connected = [.. _agents.Values.Where(a => a.Channel is not null)];
+        }
+
+        foreach (var a in connected)
+        {
+            await Send(a, new LabMessage(MessageKind.Settings, Settings(a)), cancel);
+        }
+    }
 
     private static async Task Send(AgentEntry agent, LabMessage message, CancellationToken cancel)
     {
@@ -939,6 +1028,9 @@ public sealed class LabHub
         public DateTime UpdateSent { get; set; } = DateTime.MinValue;
 
         public bool UpdateWanted { get; set; }
+
+        /// <summary>What the computer is (from its firmware), as it last told.</summary>
+        public JsonObject? Inventory { get; set; }
     }
 
     private sealed record AvailableUpdate(UpdateManifest Manifest, byte[] Json, byte[] Signature, string Folder);

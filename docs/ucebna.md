@@ -111,12 +111,44 @@ sudo bash /opt/iris-hub/uninstall.sh --purge    # aj dáta (model, kľúče, his
 Zdieľaný priečinok so zálohou modelu ani nič iné v systéme sa pri odinštalovaní nemení.
 
 ## Konzola
-- `iris-console.exe` na vašom PC. V *Nastaveniach* zadajte server a kľúč `console.key`. Konzola má tieto stránky:
-  - **Prehľad** – dlaždice počítačov podľa stavu, vyťaženia alebo teploty; pravým tlačidlom príkazy.
-  - **Počítače** – tabuľka všetkých meraní.
-  - **Grafy** – história za 6 h až týždeň.
-  - **Kolá a učenie** – loss a chybovosť (CER).
-  - **Sieť** – prehľadanie siete a budenie.
+`iris-console.exe` beží na vašom PC. V **Nastaveniach** zadajte server a kľúč `console.key`. Hore je vždy vidieť:
+- či je konzola pripojená;
+- čas učenia;
+- bežiace kolo;
+- novú verziu, ak je pripravená.
+
+Stránky:
+- **Prehľad:**
+  - čísla učebne a dlaždice počítačov po skupinách, s farbami podľa stavu, vyťaženia alebo teploty;
+  - kliknutie otvorí počítač, pravé tlačidlo ukáže príkazy;
+  - vpravo je **Pozornosť** (odpojené počas učenia, príliš teplé, starý program) a chybovosť modelu.
+- **Počítače:**
+  - zoznam s hľadaním;
+  - pri vybranom počítači:
+    - **meno v konzole** – počítač si ponechá svoje;
+    - **skupina**;
+    - ako sa mu darí a príkazy;
+    - **vlastné nastavenia**;
+    - **hardvér z firmvéru**: výrobca, model, servisný štítok, BIOS, procesor s výkonnými a úspornými jadrami, pamäťové moduly, disky, grafika, systém, sieťové karty.
+- **Grafy:** história za 6 h až týždeň.
+- **Kolá a učenie:** loss a chybovosť (CER).
+- **Sieť:** prehľadanie siete a budenie.
+- **Nastavenia:**
+  - učenie pre všetky počítače a pre každú skupinu;
+  - aktualizácie;
+  - pripojenie;
+  - svetlý alebo tmavý vzhľad.
+
+**Nastavenia učenia** platia od najširšieho po najužšie: všetky počítače → skupina → jeden počítač. Užšie vyhráva.
+- **Skupina** je model počítača (z firmvéru), pokiaľ počítač nedáte do inej ručne.
+- **Čo sa dá nastaviť:**
+  - **podiel času** a **podiel jadier**;
+  - **úsporný režim Windows**;
+  - **hranica teploty** – nad ňou učenie čaká, kým sa počítač neochladí o 5 °C;
+  - **učí sa** – vypnuté vynechá počítač z kôl;
+  - **budiť** na začiatku učenia;
+  - **aktualizovať samo**.
+- Server si nastavenia pamätá v `lab-config.json` a počítače ich dostanú hneď.
 
 ## Budenie a vypínanie
 - **Server o 15:00 zobudí počítače učebne, ktoré sú vypnuté** (Wake-on-LAN) a **o 6:00 ich zasa vypne**. Tie, ktoré
