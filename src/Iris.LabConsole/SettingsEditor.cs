@@ -28,9 +28,12 @@ public sealed class SettingsEditor : StackPanel
     ];
 
     private readonly List<(string Key, CheckBox Own, Func<JsonNode> Read)> _rows = [];
+    private readonly bool _narrow;
 
-    public SettingsEditor(string scope, string name, JsonObject own, JsonObject inherited, Func<JsonObject, Task<bool>> save)
+    /// <param name="narrow">For a narrow panel: the name of each setting above its control.</param>
+    public SettingsEditor(string scope, string name, JsonObject own, JsonObject inherited, Func<JsonObject, Task<bool>> save, bool narrow = false)
     {
+        _narrow = narrow;
         var ownText = scope == "all" ? "zmeniť" : "vlastné";
         foreach (var (key, text, note, min, max, step, unit) in Numbers)
         {
@@ -87,20 +90,31 @@ public sealed class SettingsEditor : StackPanel
 
     private void AddRow(string key, string text, string note, FrameworkElement control, TextBlock? value, bool own, string ownText, Func<object> read, JsonNode? inherited)
     {
-        var grid = new Grid { Margin = new Thickness(0, 4, 0, 4) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { MinWidth = 120 });
+        // wide: name | control | value | own; narrow: the name on a line of its own above the rest
+        var grid = new Grid { Margin = new Thickness(0, 4, 0, _narrow ? 8 : 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(_narrow ? 0 : 210) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { MinWidth = 100 });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(value is null ? 0 : 64) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
-        var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(104) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var row = _narrow ? 1 : 0;
+        var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, _narrow ? 4 : 0) };
         label.Children.Add(Ui.Text(text, 13.5, bold: true));
         label.Children.Add(Ui.Text(note, 11.5, brush: "TextMuted"));
+        if (_narrow)
+        {
+            Grid.SetColumnSpan(label, 4);
+        }
+
         grid.Children.Add(label);
         Grid.SetColumn(control, 1);
+        Grid.SetRow(control, row);
         grid.Children.Add(control);
         if (value is not null)
         {
             Grid.SetColumn(value, 2);
+            Grid.SetRow(value, row);
             grid.Children.Add(value);
         }
 
@@ -108,6 +122,7 @@ public sealed class SettingsEditor : StackPanel
         check.ToolTip = inherited is null ? null : $"inak: {Describe(key, inherited)}";
         check.HorizontalAlignment = HorizontalAlignment.Right;
         Grid.SetColumn(check, 3);
+        Grid.SetRow(check, row);
         grid.Children.Add(check);
         control.IsEnabled = own;
         check.Checked += (_, _) => control.IsEnabled = true;

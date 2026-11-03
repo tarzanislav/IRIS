@@ -242,7 +242,7 @@ public sealed class ComputersPage : ConsolePage
         // its own settings (what it does not set comes from its group and from all)
         var settings = new StackPanel();
         settings.Children.Add(Ui.Heading("Nastavenia tohto počítača", "čo nie je vlastné, berie zo skupiny a zo „všetkých“"));
-        settings.Children.Add(new SettingsEditor("computer", name, data.Own("computer", name), data.Inherited("computer", Ui.String(agent["group"])), Configure));
+        settings.Children.Add(new SettingsEditor("computer", name, data.Own("computer", name), data.Inherited("computer", Ui.String(agent["group"])), Configure, narrow: true));
         panel.Children.Add(Ui.Card(settings));
 
         panel.Children.Add(Ui.Card(Hardware(agent)));
