@@ -232,6 +232,117 @@ public static class LabTests
     }
 
     [Test]
+    public static void UpdatesAreBelievedOnlyWithTheSignature()
+    {
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        var publicKey = key.ExportSubjectPublicKeyInfo();
+        var program = Enumerable.Range(0, 5000).Select(i => (byte)(i * 7)).ToArray();
+        var (json, signature) = Manifest(key, "1.2.3", (UpdateManifest.Agent, program));
+        var manifest = LabUpdates.Open(json, signature, publicKey);
+        Assert.True(manifest is { Version: "1.2.3" }, "a signed manifest is believed");
+        Assert.True(LabUpdates.Matches(manifest!.File(UpdateManifest.Agent)!, program), "and the file that matches it");
+        var changed = (byte[])program.Clone();
+        changed[100] ^= 1;
+        Assert.True(!LabUpdates.Matches(manifest.File(UpdateManifest.Agent)!, changed), "a changed file is not");
+        var forged = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(json).Replace("1.2.3", "9.2.3", StringComparison.Ordinal));
+        Assert.True(LabUpdates.Open(forged, signature, publicKey) is null, "a changed manifest is not");
+        using var other = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        Assert.True(LabUpdates.Open(json, signature, other.ExportSubjectPublicKeyInfo()) is null, "another key is not");
+        var (badJson, badSignature) = Manifest(key, "1.2.4", ("../evil.exe", program));
+        Assert.True(LabUpdates.Open(badJson, badSignature, publicKey) is null, "a file name with a path is refused even when signed");
+        Assert.True(LabUpdates.IsNewer("0.10.0", "0.9.9") && !LabUpdates.IsNewer("0.4.0", "0.4.0") && !LabUpdates.IsNewer("x", "0.1.0"), "versions compare as numbers");
+    }
+
+    [Test]
+    public static async Task HubGivesTheComputersASignedProgram()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-update-{Environment.ProcessId}");
+        var program = Path.Combine(folder, "agent", "iris-agent.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(program)!);
+        File.WriteAllText(program, "the old program");
+        using var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+        LabUpdates.KeyOverride = key.ExportSubjectPublicKeyInfo();
+        try
+        {
+            var agentProgram = Enumerable.Range(0, 70000).Select(i => (byte)(i % 251)).ToArray();
+            var consoleProgram = Enumerable.Range(0, 30000).Select(i => (byte)(i % 13)).ToArray();
+            Put(folder, key, "9.9.9", (UpdateManifest.Agent, agentProgram), (UpdateManifest.Console, consoleProgram));
+            using var stranger = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+            Put(folder, stranger, "10.0.0", (UpdateManifest.Agent, [1, 2, 3])); // newer, but not signed by the key
+            var hub = new LabHub(new LabHubOptions
+            {
+                Folder = folder,
+                Port = 0,
+                Schedule = new LabSchedule(new TimeOnly(10, 0), new TimeOnly(10, 0), false), // never learning
+                AutoWake = false,
+            }, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState());
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var hubTask = hub.RunAsync(stop.Token);
+            while (hub.Port == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            var restarted = new TaskCompletionSource();
+            var agent = new LabAgent(new LabAgentOptions
+            {
+                Hub = "127.0.0.1",
+                Port = hub.Port,
+                Name = "PC-07",
+                Key = LabKeys.Read(Path.Combine(folder, "agent.key")),
+                Fonts = [],
+                StatusSeconds = 1,
+                Program = program,
+                Restart = () => restarted.TrySetResult(),
+            }).RunAsync(stop.Token);
+            await restarted.Task.WaitAsync(stop.Token);
+            Assert.Sequence(agentProgram, File.ReadAllBytes(program), "the program of the computer is the signed one now");
+
+            using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), default);
+            var snapshot = await console.SnapshotAsync(default);
+            Assert.Equal("9.9.9", snapshot["update"]?["version"]?.GetValue<string>(), "the console sees the signed version, not the stranger's");
+            var (consoleManifest, data) = await console.ConsoleProgramAsync(default) ?? throw new InvalidOperationException("no console program");
+            Assert.True(consoleManifest.Version == "9.9.9" && data.SequenceEqual(consoleProgram), "the console gets its program, checked");
+            stop.Cancel();
+            await Task.WhenAll(hubTask, agent);
+        }
+        finally
+        {
+            LabUpdates.KeyOverride = null;
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    // a signed set of programs in the hub's folder of updates
+    private static void Put(string folder, System.Security.Cryptography.ECDsa key, string version, params (string Name, byte[] Data)[] files)
+    {
+        var target = Path.Combine(folder, "updates", version);
+        Directory.CreateDirectory(target);
+        var (json, signature) = Manifest(key, version, files);
+        File.WriteAllBytes(Path.Combine(target, UpdateManifest.ManifestName), json);
+        File.WriteAllBytes(Path.Combine(target, UpdateManifest.SignatureName), signature);
+        foreach (var (name, data) in files)
+        {
+            File.WriteAllBytes(Path.Combine(target, name), data);
+        }
+    }
+
+    private static (byte[] Json, byte[] Signature) Manifest(System.Security.Cryptography.ECDsa key, string version, params (string Name, byte[] Data)[] files)
+    {
+        var json = System.Text.Encoding.UTF8.GetBytes(new JsonObject
+        {
+            ["version"] = version,
+            ["files"] = new JsonArray([.. files.Select(f => (JsonNode?)new JsonObject
+            {
+                ["name"] = f.Name,
+                ["size"] = f.Data.Length,
+                ["sha256"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(f.Data)),
+            })]),
+        }.ToJsonString());
+        return (json, key.SignData(json, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.DSASignatureFormat.Rfc3279DerSequence));
+    }
+
+    [Test]
     public static void NetworkNamesAndCardsAreRead()
     {
         Assert.Sequence(new byte[] { 0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E }, NetworkScanner.ParseMac("00-1a-2b-3c-4d-5e")!, "a MAC with dashes");

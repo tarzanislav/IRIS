@@ -1,7 +1,8 @@
 name: Release
 
 # A release of IRIS: the core library, the command line and the application for Windows and the int8 language packs
-# (en→sk, en→cs, sk→en, cs→en) with their catalog packs.json, licences and SHA-256 sums. Started by hand (Actions → Release → Run workflow) and run only after the owner approves it in the
+# (en→sk, en→cs, sk→en, cs→en) with their catalog packs.json, the signed programs of the classroom learning (server,
+# computers, console), licences and SHA-256 sums. Started by hand (Actions → Release → Run workflow) and run only after the owner approves it in the
 # environment "release". Only a commit of main whose CI passed every gate (F1 reference, F2 quality and speed) is released.
 
 on:
@@ -107,6 +108,47 @@ jobs:
           rm src/Iris.App/packs.json
           cp LICENSE out/app/
           (cd out/app && zip -q "../assets/iris-app-$VERSION-win-x64.zip" iris-app.exe LICENSE)
+      # the programs of the classroom learning, with a manifest signed by the key of the releases (a secret of this
+      # workflow); the server installs them only with this signature and gives them to the computers and the console
+      - name: Classroom programs, signed (when the key of the releases is set up)
+        env:
+          IRIS_UPDATE_KEY: ${{ secrets.IRIS_UPDATE_KEY }}
+        run: |
+          if [ -z "$IRIS_UPDATE_KEY" ] || [ ! -f tools/lab/update-key.pub ]; then
+            echo "::warning title=Classroom programs::not in this release – the key of the releases is not set up (the secret IRIS_UPDATE_KEY and tools/lab/update-key.pub)"
+            exit 0
+          fi
+          set -e
+          mkdir -p out/lab out/server
+          for arch in x64 arm64; do
+            dotnet publish src/Iris.Hub -c Release -r "linux-$arch" --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "out/hub-$arch"
+            cp "out/hub-$arch/iris-hub" "out/lab/iris-hub-linux-$arch"
+          done
+          dotnet publish src/Iris.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o out/agent
+          cp out/agent/iris-agent.exe out/lab/iris-agent-win-x64.exe
+          dotnet publish src/Iris.LabConsole -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o out/console
+          cp out/console/iris-console.exe out/lab/iris-console-win-x64.exe
+          python3 - "$VERSION" out/lab > "$RUNNER_TEMP/iris-lab-manifest.json" <<'PY'
+          import hashlib, json, os, sys
+          version, folder = sys.argv[1], sys.argv[2]
+          files = []
+          for name in sorted(os.listdir(folder)):
+              data = open(os.path.join(folder, name), 'rb').read()
+              files.append({'name': name, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+          print(json.dumps({'version': version, 'files': files}, indent=1))
+          PY
+          mv "$RUNNER_TEMP/iris-lab-manifest.json" out/lab/iris-lab-manifest.json
+          umask 077
+          printf '%s\n' "$IRIS_UPDATE_KEY" > "$RUNNER_TEMP/update-key.pem"
+          openssl dgst -sha256 -sign "$RUNNER_TEMP/update-key.pem" -out out/lab/iris-lab-manifest.sig out/lab/iris-lab-manifest.json
+          rm -f "$RUNNER_TEMP/update-key.pem"
+          umask 022
+          openssl dgst -sha256 -verify tools/lab/update-key.pub -signature out/lab/iris-lab-manifest.sig out/lab/iris-lab-manifest.json
+          cat out/lab/iris-lab-manifest.json
+          # the server in one archive: both builds, install and removal, the units, the guide
+          cp out/lab/iris-hub-linux-* tools/lab/install.sh tools/lab/uninstall.sh tools/lab/iris-hub.service tools/lab/iris-hub-update.* docs/ucebna.md out/server/
+          tar -czf "out/assets/iris-hub-$VERSION-linux.tar.gz" -C out/server .
+          cp out/lab/* out/assets/
       - name: Licences, provenance, checksums
         run: |
           cp LICENSE out/assets/LICENSE

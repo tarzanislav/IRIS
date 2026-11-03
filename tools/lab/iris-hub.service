@@ -1,21 +1,33 @@
-# systemd unit of the IRIS hub (the server of the classroom learning). Copy to /etc/systemd/system/iris-hub.service,
-# put iris-hub (published for linux-x64) into /opt/iris-hub, then: systemctl daemon-reload && systemctl enable --now iris-hub
-# The hub needs no root: it runs as its own user and keeps everything in /var/lib/iris-hub.
+# systemd unit of the IRIS hub (the server of the classroom learning), put in place by install.sh.
+# The hub needs no root: it runs as its own user iris-hub and keeps everything in /var/lib/iris-hub. Its options
+# (backup folder, round, schedule …) are in /etc/default/iris-hub.
 [Unit]
 Description=IRIS hub – learning in the classroom
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-DynamicUser=yes
-StateDirectory=iris-hub
-ExecStart=/opt/iris-hub/iris-hub run --folder /var/lib/iris-hub
+User=iris-hub
+Group=iris-hub
+EnvironmentFile=-/etc/default/iris-hub
+ExecStart=/opt/iris-hub/iris-hub run --folder /var/lib/iris-hub $IRIS_HUB_OPTIONS
 Restart=on-failure
 RestartSec=30
+UMask=0022
+# only to send ping (ICMP) when it looks through the network; nothing else of root
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+ReadWritePaths=/var/lib/iris-hub
+ProtectHome=read-only
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target

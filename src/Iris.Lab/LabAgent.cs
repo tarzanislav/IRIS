@@ -34,6 +34,17 @@ public sealed record LabAgentOptions
     /// <summary>Lines of progress (the service writes them to its log).</summary>
     public Action<string>? Log { get; init; }
 
+    /// <summary>
+    /// The program file of the agent, replaced by a newer signed one from the hub (null: never updated, e.g. in tests).
+    /// </summary>
+    public string? Program { get; init; }
+
+    /// <summary>
+    /// What happens after the program was replaced: by default the process ends with code 3, and the service manager
+    /// starts the service again (its recovery), now with the new program.
+    /// </summary>
+    public Action Restart { get; init; } = () => Environment.Exit(3);
+
     private static void DefaultPower(string command)
     {
         var restart = command == LabCommands.Restart;
@@ -155,6 +166,9 @@ public sealed class LabAgent
                     case MessageKind.Command:
                         await Command(message.Header["command"]?.GetValue<string>() ?? "");
                         break;
+                    case MessageKind.Update:
+                        Update(message);
+                        break;
                     default:
                         break;
                 }
@@ -185,6 +199,7 @@ public sealed class LabAgent
             ["duty"] = _duty,
             ["eco"] = _ecoSet,
             ["mac"] = _mac,
+            ["version"] = LabUpdates.Version,
         };
         if (_last is { } last)
         {
@@ -304,6 +319,35 @@ public sealed class LabAgent
     {
         StopLearning();
         await _learningTask.ContinueWith(_ => { }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+    }
+
+    // a newer program from the hub: believed only with the signature of the IRIS releases and the right SHA-256
+    private void Update(LabMessage message)
+    {
+        try
+        {
+            var manifest = LabUpdates.Open(Convert.FromBase64String(message.Header["manifest"]?.GetValue<string>() ?? ""),
+                Convert.FromBase64String(message.Header["signature"]?.GetValue<string>() ?? ""));
+            if (manifest is null || manifest.File(UpdateManifest.Agent) is not { } file || !LabUpdates.Matches(file, message.Data))
+            {
+                _options.Log?.Invoke("update refused: the signature or the file is not right");
+                return;
+            }
+
+            if (!LabUpdates.IsNewer(manifest.Version, LabUpdates.Version) || _options.Program is not { } program)
+            {
+                return;
+            }
+
+            StopLearning();
+            LabUpdates.ReplaceProgram(program, message.Data);
+            _options.Log?.Invoke($"updated to {manifest.Version}; starting again");
+            _options.Restart();
+        }
+        catch (Exception e) when (e is FormatException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _options.Log?.Invoke($"update failed: {e.Message}");
+        }
     }
 
     private Task Command(string command)

@@ -1,0 +1,14 @@
+# The updater of the IRIS hub (root, once a day by iris-hub-update.timer, or at once when the console asks – see
+# iris-hub-update.path): asks GitHub for the newest release, checks the signature of its classroom programs, puts the
+# server's program in place, restarts the hub, and keeps the programs of the computers and the console for the hub.
+[Unit]
+Description=IRIS hub – signed update from the IRIS releases
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/iris-hub/iris-hub update --folder /var/lib/iris-hub --install /opt/iris-hub --service iris-hub
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes

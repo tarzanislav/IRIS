@@ -11,4 +11,9 @@
     <ProjectReference Include="..\Iris.Vision\Iris.Vision.csproj" />
     <InternalsVisibleTo Include="Iris.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- the public key of the IRIS releases: only manifests signed by its private part (a secret of the release
+         workflow) are installed; without the file the programs never update themselves -->
+    <EmbeddedResource Include="..\..\tools\lab\update-key.pub" LogicalName="update-key.pub" Condition="Exists('..\..\tools\lab\update-key.pub')" />
+  </ItemGroup>
 </Project>

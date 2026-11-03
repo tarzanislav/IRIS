@@ -1,0 +1,11 @@
+# Once a day, around noon (the learning runs 15:00–6:00): the IRIS hub looks for a newer signed version.
+[Unit]
+Description=IRIS hub – daily look for a signed update
+
+[Timer]
+OnCalendar=*-*-* 11:30
+RandomizedDelaySec=90min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

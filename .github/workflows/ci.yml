@@ -124,7 +124,7 @@ jobs:
           "::notice title=iris.exe::self-contained single file, $size MB"
       - name: Classroom agent as in a release (one file) – a trial, and the service installed, running and removed
         run: |
-          dotnet publish src/Iris.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o out/agent
+          dotnet publish src/Iris.Agent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o out/agent
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./out/agent/iris-agent.exe test --minutes 1 | Tee-Object -FilePath "$env:RUNNER_TEMP/agent-test.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -156,7 +156,7 @@ jobs:
           "::notice title=iris-app.exe::self-contained single file, $size MB, every window and page built in SK, CS, EN and every look"
       - name: Classroom console (one file) and its self-test with a picture of every page
         run: |
-          dotnet publish src/Iris.LabConsole -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/console
+          dotnet publish src/Iris.LabConsole -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o out/console
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $test = Start-Process out/console/iris-console.exe -ArgumentList '--selftest', "$env:RUNNER_TEMP\console" -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP/console.txt"
           if ($test.ExitCode -ne 0) {
@@ -251,6 +251,73 @@ jobs:
           echo "BASELINE_IRIS=dotnet /tmp/base/src/Iris.Cli/bin/Release/net10.0/iris.dll" >> "$GITHUB_ENV"
       - name: int8, speed and FLORES-200 quality – gates F2
         run: bash tools/reference/quality.sh /tmp/opus-en-sk.iris
+
+  # the server of the classroom on Linux as the owner installs it: both builds, install.sh on a system with systemd,
+  # the hub running as its own user with its keys, the updater, a second install over the first, and removal
+  lab-linux:
+    name: Classroom server on Linux (install, update, removal)
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: .NET 10 SDK
+        run: |
+          if ! dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then sudo apt-get update -q && sudo apt-get install -y -q dotnet-sdk-10.0; fi
+          dotnet --list-sdks
+      - name: The hub for x64 and arm64 (self-contained, one file), with its scripts
+        run: |
+          set -e
+          mkdir -p out/hub
+          for arch in x64 arm64; do
+            dotnet publish src/Iris.Hub -c Release -r "linux-$arch" --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o "out/hub-$arch"
+            cp "out/hub-$arch/iris-hub" "out/hub/iris-hub-linux-$arch"
+          done
+          cp tools/lab/install.sh tools/lab/uninstall.sh tools/lab/iris-hub.service tools/lab/iris-hub-update.service \
+            tools/lab/iris-hub-update.timer tools/lab/iris-hub-update.path docs/ucebna.md out/hub/
+          ls -la out/hub
+          echo "::notice title=iris-hub::x64 $(du -m out/hub/iris-hub-linux-x64 | cut -f1) MB, arm64 $(du -m out/hub/iris-hub-linux-arm64 | cut -f1) MB"
+      - name: Install, the hub runs as its own user, keys only for it, the backup folder untouched otherwise
+        run: |
+          set -e
+          sudo mkdir -p /srv/share/IRIS && echo "a file of the owner" | sudo tee /srv/share/IRIS/note.txt >/dev/null
+          sudo bash out/hub/install.sh --backup /srv/share/IRIS --options "--round 10"
+          systemctl is-active iris-hub iris-hub-update.timer iris-hub-update.path
+          [ "$(ps -o user= -C iris-hub | head -1)" = "iris-hub" ] || { echo "::error::the hub does not run as iris-hub"; exit 1; }
+          for i in $(seq 1 20); do ss -ltn | grep -q ':47620 ' && break; sleep 1; done
+          ss -ltn | grep -q ':47620 ' || { echo "::error::the hub does not listen on 47620"; journalctl -u iris-hub --no-pager | tail -40; exit 1; }
+          [ "$(sudo stat -c '%U %a' /var/lib/iris-hub/agent.key)" = "iris-hub 600" ] || { echo "::error::agent.key is not only the hub's"; exit 1; }
+          [ "$(sudo stat -c '%a' /var/lib/iris-hub)" = "750" ] || { echo "::error::the data folder is open to others"; exit 1; }
+          sudo runuser -u iris-hub -- test -w /srv/share/IRIS || { echo "::error::the hub cannot write the backup"; exit 1; }
+          [ "$(cat /srv/share/IRIS/note.txt)" = "a file of the owner" ] || { echo "::error::the backup folder was changed"; exit 1; }
+          grep -q -- '--backup /srv/share/IRIS --round 10' /etc/default/iris-hub || { echo "::error::the options were not written"; exit 1; }
+      - name: The updater (as systemd runs it), a second install over the first keeps the data
+        run: |
+          set -e
+          sudo /opt/iris-hub/iris-hub version
+          sudo systemctl start iris-hub-update.service
+          journalctl -u iris-hub-update --no-pager | tail -5
+          key=$(sudo sha256sum /var/lib/iris-hub/agent.key)
+          sudo bash out/hub/install.sh
+          [ "$(sudo sha256sum /var/lib/iris-hub/agent.key)" = "$key" ] || { echo "::error::a second install changed the keys"; exit 1; }
+          grep -q -- '--backup /srv/share/IRIS' /etc/default/iris-hub || { echo "::error::a second install lost the options"; exit 1; }
+          systemctl is-active iris-hub
+      - name: Removal – everything of the hub gone, the data kept until --purge, the backup folder untouched
+        run: |
+          set -e
+          sudo bash /opt/iris-hub/uninstall.sh
+          ! systemctl list-unit-files | grep -q iris-hub || { echo "::error::units left"; exit 1; }
+          if [ -e /opt/iris-hub ] || [ -e /etc/default/iris-hub ] || [ ! -d /var/lib/iris-hub ]; then echo "::error::removal left the program or lost the data"; exit 1; fi
+          sudo bash out/hub/install.sh
+          sudo bash /opt/iris-hub/uninstall.sh --purge
+          if [ -e /var/lib/iris-hub ] || id iris-hub 2>/dev/null; then echo "::error::--purge left data or the user"; exit 1; fi
+          [ "$(cat /srv/share/IRIS/note.txt)" = "a file of the owner" ] || { echo "::error::removal touched the backup folder"; exit 1; }
+          echo "::notice title=Classroom server on Linux::installed, ran as iris-hub on 47620, updater ran, reinstalled with the same keys, removed cleanly"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iris-ucebna-linux
+          path: out/hub/
+          retention-days: 30
 
   # F3: learning – loss and gradient as PyTorch computes them, learning from corrections, no harm on FLORES-200 devtest
   # the own OCR learning in C#: exactly what PyTorch computes (loss, every gradient, one AdamW step) on the same lines,
