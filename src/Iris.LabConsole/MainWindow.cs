@@ -21,6 +21,9 @@ public sealed class ConsoleSettings
 
     public string KeyFile { get; set; } = "";
 
+    /// <summary>The folder the key is looked for in when no key is chosen by hand (see <see cref="KeyFolder"/>).</summary>
+    public string KeyFolder { get; set; } = "";
+
     /// <summary>light or dark.</summary>
     public string Theme { get; set; } = "light";
 
@@ -37,6 +40,7 @@ public sealed class ConsoleSettings
                     Hub = json["hub"]?.GetValue<string>() ?? "",
                     Port = json["port"]?.GetValue<int>() ?? 47620,
                     KeyFile = json["key"]?.GetValue<string>() ?? "",
+                    KeyFolder = json["key_folder"]?.GetValue<string>() ?? "",
                     Theme = json["theme"]?.GetValue<string>() == "dark" ? "dark" : "light",
                 };
             }
@@ -51,7 +55,7 @@ public sealed class ConsoleSettings
     public void Save()
     {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-        File.WriteAllText(Path, new JsonObject { ["hub"] = Hub, ["port"] = Port, ["key"] = KeyFile, ["theme"] = Theme }.ToJsonString());
+        File.WriteAllText(Path, new JsonObject { ["hub"] = Hub, ["port"] = Port, ["key"] = KeyFile, ["key_folder"] = KeyFolder, ["theme"] = Theme }.ToJsonString());
     }
 }
 
@@ -80,6 +84,11 @@ public sealed class MainWindow : Window, IConsoleActions
     public MainWindow(ConsoleSettings settings, bool offline = false)
     {
         _settings = settings;
+        if (!offline)
+        {
+            KeyFolder.EnsureDefault(settings);
+        }
+
         Title = "IRIS – učebňa";
         Width = 1360;
         Height = 880;
@@ -339,16 +348,19 @@ public sealed class MainWindow : Window, IConsoleActions
         {
             if (_client is null)
             {
-                if (_settings.Hub.Length == 0 || !File.Exists(_settings.KeyFile))
+                var (keyFile, problem) = KeyFolder.Find(_settings);
+                if (_settings.Hub.Length == 0 || keyFile is null)
                 {
-                    _data.Error = "Konzola ešte nevie, kde je server: v Nastaveniach zadajte server a kľúč konzoly (console.key).";
+                    _data.Error = _settings.Hub.Length == 0
+                        ? "Konzola ešte nevie, kde je server: v Nastaveniach zadajte server a kľúč konzoly."
+                        : problem;
                     _connection.Text = "nepripojené";
                     ShowData();
                     return;
                 }
 
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var (key, keyName) = LabKeys.ReadNamed(_settings.KeyFile);
+                var (key, keyName) = LabKeys.ReadNamed(keyFile);
                 _client = await LabConsoleClient.ConnectAsync(_settings.Hub, _settings.Port, key, LabKeys.HelloName(keyName), timeout.Token);
             }
 

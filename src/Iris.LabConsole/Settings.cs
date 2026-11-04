@@ -18,6 +18,8 @@ public sealed class SettingsPage : ConsolePage
     private readonly TextBox _hub = new() { MinWidth = 260 };
     private readonly TextBox _port = new() { MinWidth = 100 };
     private readonly TextBox _key = new() { MinWidth = 420 };
+    private readonly TextBox _keyFolder = new() { MinWidth = 420 };
+    private readonly TextBlock _keyFolderNote = Ui.Text("", 12, brush: "TextMuted");
     private readonly TextBlock _keyName = Ui.Text("", 12, brush: "TextMuted");
     private readonly Border _connection;
     private string? _group;
@@ -28,6 +30,7 @@ public sealed class SettingsPage : ConsolePage
         _hub.Text = settings.Hub;
         _port.Text = settings.Port.ToString(CultureInfo.InvariantCulture);
         _key.Text = settings.KeyFile;
+        _keyFolder.Text = settings.KeyFolder;
         var form = new StackPanel();
         form.Children.Add(Ui.Heading("Pripojenie", "server učebne a kľúč konzoly"));
         form.Children.Add(Ui.Caption("Server (adresa alebo názov)"));
@@ -36,9 +39,24 @@ public sealed class SettingsPage : ConsolePage
         form.Children.Add(Ui.Caption("Port"));
         form.Children.Add(_port);
         form.Children.Add(new Border { Height = 12 });
-        form.Children.Add(Ui.Caption("Kľúč konzoly (console.key zo servera)"));
+        form.Children.Add(Ui.Caption("Priečinok s kľúčom (skopírujte doň kľúč konzoly zo servera; konzola si ho nájde sama)"));
+        var folderRow = new DockPanel();
+        var open = Ui.Button("Otvoriť priečinok", OpenFolder);
+        var change = Ui.Button("Zmeniť…", ChooseFolder);
+        open.Margin = change.Margin = new Thickness(8, 0, 0, 0);
+        DockPanel.SetDock(open, Dock.Right);
+        DockPanel.SetDock(change, Dock.Right);
+        folderRow.Children.Add(open);
+        folderRow.Children.Add(change);
+        folderRow.Children.Add(_keyFolder);
+        form.Children.Add(folderRow);
+        _keyFolderNote.Margin = new Thickness(0, 4, 0, 0);
+        form.Children.Add(_keyFolderNote);
+        form.Children.Add(new Border { Height = 12 });
+        form.Children.Add(Ui.Caption("Kľúč konzoly (nepovinné: len ak je v priečinku viac kľúčov alebo leží inde)"));
         var keyRow = new DockPanel();
         var browse = Ui.Button("Vybrať…", Browse);
+        browse.Margin = new Thickness(8, 0, 0, 0);
         DockPanel.SetDock(browse, Dock.Right);
         keyRow.Children.Add(browse);
         keyRow.Children.Add(_key);
@@ -51,10 +69,11 @@ public sealed class SettingsPage : ConsolePage
             settings.Hub = _hub.Text.Trim();
             settings.Port = int.TryParse(_port.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port) ? port : 47620;
             settings.KeyFile = _key.Text.Trim();
+            settings.KeyFolder = _keyFolder.Text.Trim();
             settings.Save();
             Saved?.Invoke();
         }, primary: true));
-        form.Children.Add(Ui.Text("Kľúč konzoly patrí len na tento počítač. Komu ho dáte, ten môže počítače v učebni pozastaviť, reštartovať, vypnúť a meniť ich nastavenia. Každý počítač so svojou konzolou môže mať vlastný kľúč, ktorý sa na serveri dá zrušiť sám (iris-hub console-key).", 12, brush: "TextMuted"));
+        form.Children.Add(Ui.Text("Kľúč konzoly patrí len na tento počítač a nechajte ho v priečinku natrvalo (konzola ho číta pri každom pripojení). Komu ho dáte, ten môže počítače v učebni pozastaviť, reštartovať, vypnúť a meniť ich nastavenia. Každý počítač so svojou konzolou môže mať vlastný kľúč, ktorý sa na serveri dá zrušiť sám (iris-hub console-key).", 12, brush: "TextMuted"));
         _connection = Ui.Card(form);
         Content = Scroll(_root);
     }
@@ -108,7 +127,9 @@ public sealed class SettingsPage : ConsolePage
         }
 
         _root.Children.Add(Updates(data, connected));
-        _keyName.Text = KeyName(_settings.KeyFile);
+        var (keyFile, problem) = KeyFolder.Find(_settings);
+        _keyName.Text = keyFile is null ? problem : (keyFile == _settings.KeyFile ? "" : $"používa sa {Path.GetFileName(keyFile)} – ") + KeyName(keyFile);
+        _keyFolderNote.Text = KeyFolder.Openness(_settings.KeyFolder);
         _root.Children.Add(_connection);
         if (connected && data.Snapshot?["consoles"] is JsonArray consoles)
         {
@@ -184,9 +205,38 @@ public sealed class SettingsPage : ConsolePage
         return Ui.Card(panel);
     }
 
+    private void ChooseFolder()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Priečinok s kľúčom konzoly" };
+        if (_keyFolder.Text.Trim() is { Length: > 0 } now && Directory.Exists(now))
+        {
+            dialog.InitialDirectory = now;
+        }
+
+        if (dialog.ShowDialog() == true)
+        {
+            _keyFolder.Text = dialog.FolderName;
+            _keyFolderNote.Text = KeyFolder.Openness(dialog.FolderName);
+        }
+    }
+
+    private void OpenFolder()
+    {
+        var folder = _keyFolder.Text.Trim();
+        if (folder.Length > 0 && Directory.Exists(folder))
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = false });
+        }
+    }
+
     private void Browse()
     {
         var dialog = new Microsoft.Win32.OpenFileDialog { Filter = "Kľúč (*.key)|*.key|Všetky súbory|*.*" };
+        if (_keyFolder.Text.Trim() is { Length: > 0 } folder && Directory.Exists(folder))
+        {
+            dialog.InitialDirectory = folder;
+        }
+
         if (dialog.ShowDialog() == true)
         {
             _key.Text = dialog.FileName;

@@ -111,7 +111,12 @@ sudo bash /opt/iris-hub/uninstall.sh --purge    # aj dáta (model, kľúče, his
 Zdieľaný priečinok so zálohou modelu ani nič iné v systéme sa pri odinštalovaní nemení.
 
 ## Konzola
-`iris-console.exe` beží na vašom PC. V **Nastaveniach** zadajte server a kľúč `console.key`. Hore je vždy vidieť:
+`iris-console.exe` beží na vašom PC. Pri prvom spustení si vedľa seba vytvorí prázdny priečinok **`kluc`**, do ktorého
+smie len prihlásený používateľ (a systém). Skopírujte doň kľúč konzoly zo servera – konzola si ho nájde sama; v
+**Nastaveniach** zadajte len server. Priečinok sa dá zmeniť (Nastavenia → Priečinok s kľúčom → Zmeniť…), tlačidlo
+„Otvoriť priečinok“ ho otvorí v Prieskumníkovi; ak priečinok môžu čítať aj iní používatelia, konzola upozorní. Ak je
+v priečinku viac kľúčov alebo leží kľúč inde, vyberte ho v Nastaveniach (Kľúč konzoly → Vybrať…). Kľúč nechajte
+v priečinku natrvalo – konzola ho číta pri každom pripojení. Hore je vždy vidieť:
 - či je konzola pripojená;
 - čas učenia;
 - bežiace kolo;
