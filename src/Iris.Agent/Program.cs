@@ -18,6 +18,7 @@ try
         ["service"] when OperatingSystem.IsWindows() => Service(),
         ["install", .. var rest] when OperatingSystem.IsWindows() => Install(LabArguments.Parse(rest)),
         ["uninstall"] when OperatingSystem.IsWindows() => Installer.Uninstall(),
+        ["uninstall", "--later"] when OperatingSystem.IsWindows() => Later(),
         _ => Usage(),
     };
 }
@@ -209,6 +210,19 @@ static void Log(string path, string line)
     }
 }
 
+// the same removal the console's uninstall starts in the service (in the background, after this ends)
+static int Later()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return 2;
+    }
+
+    Installer.RemoveLater();
+    Console.WriteLine($"the service {Installer.ServiceName} and its files are removed in about a minute");
+    return 0;
+}
+
 static int Usage()
 {
     Console.Error.WriteLine("""
@@ -220,7 +234,8 @@ static int Usage()
                                               learns with the hub in this window (Ctrl+C ends it)
         iris-agent install --hub <server> --key <agent.key> [--port N] [--name N]
                                               (Windows, as administrator) installs the service "IRIS-Lab"
-        iris-agent uninstall                  (Windows, as administrator) removes the service and its files
+        iris-agent uninstall [--later]        (Windows, as administrator) removes the service and its files;
+                                              --later: in the background, as the console's uninstall does
         """);
     return 2;
 }

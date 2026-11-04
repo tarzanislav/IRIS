@@ -140,8 +140,20 @@ jobs:
           if ($service.Status -ne 'Running') { "::error::the service IRIS-Lab is $($service.Status)"; exit 1 }
           if ($acl -match 'BUILTIN\\Users|Everyone|Authenticated') { "::error::students could read the key: $acl"; exit 1 }
           if (Get-Service IRIS-Lab -ErrorAction SilentlyContinue) { "::error::the service was not removed"; exit 1 }
+          # the uninstall the console asks for: started while the service runs, it removes it all in the background
+          ./out/agent/iris-agent.exe install --hub 127.0.0.1 --key "$env:RUNNER_TEMP/agent.key" --name ci-runner
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 5
+          & "$env:ProgramFiles\IRIS Lab\iris-agent.exe" uninstall --later
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gone = $false
+          for ($i = 0; $i -lt 30 -and -not $gone; $i++) {
+            Start-Sleep -Seconds 5
+            $gone = -not (Get-Service IRIS-Lab -ErrorAction SilentlyContinue) -and -not (Test-Path "$env:ProgramFiles\IRIS Lab") -and -not (Test-Path "$env:ProgramData\IRIS Lab")
+          }
+          if (-not $gone) { "::error::the uninstall in the background left something: service $((Get-Service IRIS-Lab -ErrorAction SilentlyContinue).Status), program $(Test-Path "$env:ProgramFiles\IRIS Lab"), data $(Test-Path "$env:ProgramData\IRIS Lab")"; exit 1 }
           $summary = (Get-Content "$env:RUNNER_TEMP/agent-test.txt" | Select-Object -Last 1)
-          "::notice title=iris-agent.exe::$summary; service ran ($log), key readable only by SYSTEM and Administrators, removed cleanly"
+          "::notice title=iris-agent.exe::$summary; service ran ($log), key readable only by SYSTEM and Administrators, removed cleanly, also in the background as the console asks"
       - name: Application as in a release (self-contained, one file) and its self-test
         run: |
           dotnet publish src/Iris.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/app
