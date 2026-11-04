@@ -99,12 +99,15 @@ jobs:
           # the same model as a learning file: the classroom server starts from it (install.sh --start)
           /tmp/venv/bin/pip install -q -r tools/ocr/requirements.txt
           /tmp/venv/bin/python tools/ocr/to_training_file.py /tmp/ocr-model/checkpoint.pt out/assets/iris-ocr-train.iris
-          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core fonts-crosextra-caladea >/dev/null
+          # the fonts of the learning run (ocr.yml), so the check reads the lines the model learned on
+          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core fonts-dejavu-extra fonts-liberation2 \
+            fonts-noto-core fonts-texgyre fonts-crosextra-carlito fonts-crosextra-caladea fonts-linuxlibertine >/dev/null
           mkdir -p /tmp/ocr-check
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll train-ocr /tmp/ocr-check --start out/assets/iris-ocr-train.iris \
-            --minutes 0.2 --test-lines 100 --test-every 0.1 --fonts /usr/share/fonts --threads 4 | tee /tmp/ocr-check.txt | tail -3
+            --minutes 0.2 --test-lines 300 --test-every 0.1 --fonts /usr/share/fonts --threads 4 | tee /tmp/ocr-check.txt | tail -3
+          # a broken file reads nothing (CER near 100 %); the C# drawing differs a little from the learning run's
           first=$(grep -m1 -o 'CER [0-9.]* %' /tmp/ocr-check.txt | grep -o '[0-9.]*')
-          awk -v c="$first" 'BEGIN { exit !(c < 5) }' || { echo "::error::the learning file does not read like the model (CER $first %)"; exit 1; }
+          awk -v c="$first" 'BEGIN { exit !(c < 10) }' || { echo "::error::the learning file does not read like the model (CER $first %)"; exit 1; }
           echo "::notice title=OCR learning file::iris-ocr-train.iris reads with CER $first % before any further learning"
           cer=$(python3 -c "import json; r = json.load(open('/tmp/ocr-model/result.json')); print(f'CER {r[\"cer_known\"]} % / {r[\"cer_unseen\"]} % (unseen font), step {r[\"step\"]}')")
           source="IRIS OCR, learning run ${{ inputs.ocr_run }}, $cer"
