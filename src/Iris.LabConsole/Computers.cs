@@ -20,6 +20,7 @@ public sealed class ComputersPage : ConsolePage
     private StackPanel? _live;
     private string? _selected;
     private string? _detailFor;
+    private string? _detailConfig;
     private ConsoleData? _last;
 
     public ComputersPage()
@@ -182,10 +183,13 @@ public sealed class ComputersPage : ConsolePage
         }
 
         _detailHost.Visibility = Visibility.Visible;
-        // the editors are built once per computer (a refresh must not throw away what is being typed); the measurements every time
-        if (_detailFor != _selected)
+        // the editors are built once per computer and again whenever the hub's settings change (a refresh must not throw
+        // away what is being typed, but a snapshot taken before a save must not stick); the measurements every time
+        var config = data.Config.ToJsonString();
+        if (_detailFor != _selected || _detailConfig != config)
         {
             _detailFor = _selected;
+            _detailConfig = config;
             _live = new StackPanel();
             _detail.Content = Build(data, agent, _live);
         }
