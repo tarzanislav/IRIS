@@ -302,7 +302,16 @@ jobs:
         run: |
           set -e
           sudo /opt/iris-hub/iris-hub version
-          sudo systemctl start iris-hub-update.service
+          # the updater asks GitHub for the newest release (built with the key of the releases); a shared runner may be
+          # refused by GitHub's limit for clients without a sign-in – then only that is allowed to fail
+          if ! sudo systemctl start iris-hub-update.service; then
+            journalctl -u iris-hub-update --no-pager | tail -20
+            if journalctl -u iris-hub-update --no-pager | grep -qE 'iris-hub: .*(403|429|rate limit|Forbidden|Too Many)'; then
+              echo "::warning title=Updater::GitHub refused this runner (limit for clients without a sign-in) – the updater itself ran"
+            else
+              echo "::error::the updater failed"; exit 1
+            fi
+          fi
           journalctl -u iris-hub-update --no-pager | tail -5
           key=$(sudo sha256sum /var/lib/iris-hub/agent.key)
           sudo bash out/hub/install.sh
