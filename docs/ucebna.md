@@ -49,8 +49,10 @@ pravidlo pre port 47620.
    sudo bash install.sh --backup <cesta k zdieľanému priečinku na serveri>
    ```
    Ďalšie voľby:
-   - `--start <iris-ocr-train.iris>` – model, z ktorého sa začne;
-   - `--fonts` – doinštaluje voľné písma Debianu, s ktorými server meria, ako model číta;
+   - `--start <iris-ocr-train.iris>` – model, z ktorého sa začne (súbor `iris-ocr-train.iris` je medzi súbormi
+     vydania od 0.4.2: ten istý model ako `iris-ocr.iris`, naučený na GitHube; bez neho sa učebňa učí od nuly);
+   - `--fonts` – doinštaluje voľné písma Debianu, s ktorými server meria, ako model číta (bez písiem server
+     chybovosť nemeria – v konzole „zatiaľ nezmeraná“);
    - `--port N` – iný port;
    - `--options "…"` – ostatné nastavenia, napr. `"--round 10 --from 15:00 --until 06:00"`.
 3. Skript nainštaluje:

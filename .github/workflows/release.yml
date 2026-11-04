@@ -96,6 +96,16 @@ jobs:
           gh run download "${{ inputs.ocr_run }}" -n ocr-model -D /tmp/ocr-model
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr /tmp/ocr-model/iris-ocr.iris /tmp/ocr-model/reference
           cp /tmp/ocr-model/iris-ocr.iris out/assets/iris-ocr.iris
+          # the same model as a learning file: the classroom server starts from it (install.sh --start)
+          /tmp/venv/bin/pip install -q -r tools/ocr/requirements.txt
+          /tmp/venv/bin/python tools/ocr/to_training_file.py /tmp/ocr-model/checkpoint.pt out/assets/iris-ocr-train.iris
+          sudo apt-get install -y -q --no-install-recommends fonts-dejavu-core fonts-crosextra-caladea >/dev/null
+          mkdir -p /tmp/ocr-check
+          dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll train-ocr /tmp/ocr-check --start out/assets/iris-ocr-train.iris \
+            --minutes 0.2 --test-lines 100 --test-every 0.1 --fonts /usr/share/fonts --threads 4 | tee /tmp/ocr-check.txt | tail -3
+          first=$(grep -m1 -o 'CER [0-9.]* %' /tmp/ocr-check.txt | grep -o '[0-9.]*')
+          awk -v c="$first" 'BEGIN { exit !(c < 5) }' || { echo "::error::the learning file does not read like the model (CER $first %)"; exit 1; }
+          echo "::notice title=OCR learning file::iris-ocr-train.iris reads with CER $first % before any further learning"
           cer=$(python3 -c "import json; r = json.load(open('/tmp/ocr-model/result.json')); print(f'CER {r[\"cer_known\"]} % / {r[\"cer_unseen\"]} % (unseen font), step {r[\"step\"]}')")
           source="IRIS OCR, learning run ${{ inputs.ocr_run }}, $cer"
           echo "OCR_SOURCE=$source" >> "$GITHUB_ENV"
