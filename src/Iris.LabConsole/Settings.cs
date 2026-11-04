@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
@@ -17,6 +18,7 @@ public sealed class SettingsPage : ConsolePage
     private readonly TextBox _hub = new() { MinWidth = 260 };
     private readonly TextBox _port = new() { MinWidth = 100 };
     private readonly TextBox _key = new() { MinWidth = 420 };
+    private readonly TextBlock _keyName = Ui.Text("", 12, brush: "TextMuted");
     private readonly Border _connection;
     private string? _group;
 
@@ -41,6 +43,8 @@ public sealed class SettingsPage : ConsolePage
         keyRow.Children.Add(browse);
         keyRow.Children.Add(_key);
         form.Children.Add(keyRow);
+        _keyName.Margin = new Thickness(0, 4, 0, 0);
+        form.Children.Add(_keyName);
         form.Children.Add(new Border { Height = 16 });
         form.Children.Add(Ui.Button("Uložiť a pripojiť", () =>
         {
@@ -50,7 +54,7 @@ public sealed class SettingsPage : ConsolePage
             settings.Save();
             Saved?.Invoke();
         }, primary: true));
-        form.Children.Add(Ui.Text("Kľúč konzoly patrí len na tento počítač. Komu ho dáte, ten môže počítače v učebni pozastaviť, reštartovať, vypnúť a meniť ich nastavenia.", 12, brush: "TextMuted"));
+        form.Children.Add(Ui.Text("Kľúč konzoly patrí len na tento počítač. Komu ho dáte, ten môže počítače v učebni pozastaviť, reštartovať, vypnúť a meniť ich nastavenia. Každý počítač so svojou konzolou môže mať vlastný kľúč, ktorý sa na serveri dá zrušiť sám (iris-hub console-key).", 12, brush: "TextMuted"));
         _connection = Ui.Card(form);
         Content = Scroll(_root);
     }
@@ -104,7 +108,13 @@ public sealed class SettingsPage : ConsolePage
         }
 
         _root.Children.Add(Updates(data, connected));
+        _keyName.Text = KeyName(_settings.KeyFile);
         _root.Children.Add(_connection);
+        if (connected && data.Snapshot?["consoles"] is JsonArray consoles)
+        {
+            _root.Children.Add(Consoles(consoles));
+        }
+
         _root.Children.Add(Look());
     }
 
@@ -137,6 +147,32 @@ public sealed class SettingsPage : ConsolePage
 
         panel.Children.Add(buttons);
         panel.Children.Add(Ui.Text("Server sa na novú verziu pozrie raz denne okolo poludnia; „teraz“ to urobí hneď. Nová verzia vzniká len vydaním, ktoré schvaľuje vlastník.", 12, brush: "TextMuted"));
+        return Ui.Card(panel);
+    }
+
+    private static string KeyName(string file)
+    {
+        try
+        {
+            return File.Exists(file) && LabKeys.ReadNamed(file).Name is { } name ? $"vlastný kľúč konzoly „{name}“" : File.Exists(file) ? "hlavný kľúč konzoly servera" : "";
+        }
+        catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
+        {
+            return "súbor nie je kľúč konzoly";
+        }
+    }
+
+    private static Border Consoles(JsonArray consoles)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Heading("Pripojené konzoly", "kto má práve konzolu pripojenú k serveru (aj táto)"));
+        var names = consoles.Select(c => Ui.String(c) ?? "").ToList();
+        foreach (var group in names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase))
+        {
+            panel.Children.Add(Ui.Fact(group.Key.Length == 0 ? "hlavný kľúč" : group.Key, group.Count() == 1 ? "pripojená" : $"pripojená {group.Count()}×"));
+        }
+
+        panel.Children.Add(Ui.Text("Vlastný kľúč pre ďalší počítač: na serveri sudo /opt/iris-hub/iris-hub console-key add <meno>; zrušenie: … console-key remove <meno> (konzola s ním sa hneď odpojí).", 12, brush: "TextMuted"));
         return Ui.Card(panel);
     }
 

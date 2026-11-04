@@ -287,6 +287,13 @@ jobs:
           for i in $(seq 1 20); do ss -ltn | grep -q ':47620 ' && break; sleep 1; done
           ss -ltn | grep -q ':47620 ' || { echo "::error::the hub does not listen on 47620"; journalctl -u iris-hub --no-pager | tail -40; exit 1; }
           [ "$(sudo stat -c '%U %a' /var/lib/iris-hub/agent.key)" = "iris-hub 600" ] || { echo "::error::agent.key is not only the hub's"; exit 1; }
+          sudo /opt/iris-hub/iris-hub console-key add notebook-a --out /srv/share/IRIS
+          [ "$(sudo stat -c '%U %a' /var/lib/iris-hub/consoles/notebook-a.key)" = "iris-hub 600" ] || { echo "::error::a console key made by root is not the hub's"; exit 1; }
+          sudo runuser -u iris-hub -- test -r /var/lib/iris-hub/consoles/notebook-a.key || { echo "::error::the hub cannot read the console key"; exit 1; }
+          sudo test -f /srv/share/IRIS/notebook-a.key || { echo "::error::no copy of the console key"; exit 1; }
+          sudo /opt/iris-hub/iris-hub console-key list | grep -qx notebook-a || { echo "::error::the console key is not listed"; exit 1; }
+          sudo /opt/iris-hub/iris-hub console-key remove notebook-a
+          ! sudo test -e /var/lib/iris-hub/consoles/notebook-a.key || { echo "::error::the console key was not removed"; exit 1; }
           [ "$(sudo stat -c '%a' /var/lib/iris-hub)" = "750" ] || { echo "::error::the data folder is open to others"; exit 1; }
           sudo runuser -u iris-hub -- test -w /srv/share/IRIS || { echo "::error::the hub cannot write the backup"; exit 1; }
           [ "$(cat /srv/share/IRIS/note.txt)" = "a file of the owner" ] || { echo "::error::the backup folder was changed"; exit 1; }
@@ -295,7 +302,16 @@ jobs:
         run: |
           set -e
           sudo /opt/iris-hub/iris-hub version
-          sudo systemctl start iris-hub-update.service
+          # the updater asks GitHub for the newest release (built with the key of the releases); a shared runner may be
+          # refused by GitHub's limit for clients without a sign-in – then only that is allowed to fail
+          if ! sudo systemctl start iris-hub-update.service; then
+            journalctl -u iris-hub-update --no-pager | tail -20
+            if journalctl -u iris-hub-update --no-pager | grep -qE 'iris-hub: .*(403|429|rate limit|Forbidden|Too Many)'; then
+              echo "::warning title=Updater::GitHub refused this runner (limit for clients without a sign-in) – the updater itself ran"
+            else
+              echo "::error::the updater failed"; exit 1
+            fi
+          fi
           journalctl -u iris-hub-update --no-pager | tail -5
           key=$(sudo sha256sum /var/lib/iris-hub/agent.key)
           sudo bash out/hub/install.sh
@@ -312,7 +328,7 @@ jobs:
           sudo bash /opt/iris-hub/uninstall.sh --purge
           if [ -e /var/lib/iris-hub ] || id iris-hub 2>/dev/null; then echo "::error::--purge left data or the user"; exit 1; fi
           [ "$(cat /srv/share/IRIS/note.txt)" = "a file of the owner" ] || { echo "::error::removal touched the backup folder"; exit 1; }
-          echo "::notice title=Classroom server on Linux::installed, ran as iris-hub on 47620, updater ran, reinstalled with the same keys, removed cleanly"
+          echo "::notice title=Classroom server on Linux::installed, ran as iris-hub on 47620, console keys made and taken away, updater ran, reinstalled with the same keys, removed cleanly"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: iris-ucebna-linux

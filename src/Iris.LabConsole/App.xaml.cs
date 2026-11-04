@@ -193,6 +193,7 @@ public partial class App : Application
             ["tests"] = tests,
             ["minutes"] = 6600,
             ["hub_version"] = "0.4.0",
+            ["consoles"] = new JsonArray("notebook-skola", "notebook-praca"),
             ["update"] = new JsonObject { ["version"] = "0.4.1", ["auto"] = true, ["agent"] = true, ["console"] = true },
             ["config"] = new JsonObject
             {

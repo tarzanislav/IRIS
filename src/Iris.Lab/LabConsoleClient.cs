@@ -16,13 +16,17 @@ public sealed class LabConsoleClient : IDisposable
 
     private LabConsoleClient(TcpClient client, LabChannel channel) => (_client, _channel) = (client, channel);
 
-    public static async Task<LabConsoleClient> ConnectAsync(string hub, int port, byte[] key, CancellationToken cancel)
+    public static Task<LabConsoleClient> ConnectAsync(string hub, int port, byte[] key, CancellationToken cancel) =>
+        ConnectAsync(hub, port, key, LabKeys.HelloName(null), cancel);
+
+    /// <summary>Connects with a key; <paramref name="name"/> is <see cref="LabKeys.HelloName"/> of the key file.</summary>
+    public static async Task<LabConsoleClient> ConnectAsync(string hub, int port, byte[] key, string name, CancellationToken cancel)
     {
         var client = new TcpClient { NoDelay = true };
         try
         {
             await client.ConnectAsync(hub, port, cancel);
-            var channel = await LabChannel.ConnectAsync(client.GetStream(), LabRole.Console, "console", key, cancel);
+            var channel = await LabChannel.ConnectAsync(client.GetStream(), LabRole.Console, name, key, cancel);
             return new LabConsoleClient(client, channel);
         }
         catch
