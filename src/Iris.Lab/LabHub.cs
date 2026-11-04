@@ -84,6 +84,7 @@ public sealed class LabHub
     private readonly LabHubOptions _options;
     private readonly byte[] _agentKey;
     private readonly byte[] _consoleKey;
+    private readonly ConcurrentDictionary<LabChannel, (string Name, byte[] Key)> _consoles = new();
     private readonly ConcurrentDictionary<string, AgentEntry> _agents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
     private readonly List<JsonObject> _rounds = [];
@@ -209,6 +210,7 @@ public sealed class LabHub
                 ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
                 ["hub_version"] = LabUpdates.Version,
+                ["consoles"] = new JsonArray([.. _consoles.Values.Select(c => c.Name.StartsWith('@') ? c.Name[1..] : "").Order(StringComparer.OrdinalIgnoreCase).Select(n => (JsonNode?)n)]),
                 ["config"] = ConfigJson(),
                 ["update"] = _update is { } u ? new JsonObject
                 {
@@ -458,7 +460,10 @@ public sealed class LabHub
         LabChannel channel;
         try
         {
-            channel = await LabChannel.AcceptAsync(client.GetStream(), role => role == LabRole.Agent ? _agentKey : role == LabRole.Console ? _consoleKey : null, cancel);
+            channel = await LabChannel.AcceptAsync(
+                client.GetStream(),
+                (role, name) => role == LabRole.Agent ? _agentKey : role == LabRole.Console ? LabKeys.ConsoleKey(_options.Folder, _consoleKey, name) : null,
+                cancel);
         }
         catch (Exception e) when (e is IOException or LabProtocolException or OperationCanceledException or JsonException)
         {
@@ -469,7 +474,16 @@ public sealed class LabHub
         {
             if (channel.PeerRole == LabRole.Console)
             {
-                await ServeConsole(channel, cancel);
+                _consoles[channel] = (channel.PeerName, LabKeys.ConsoleKey(_options.Folder, _consoleKey, channel.PeerName) ?? []);
+                try
+                {
+                    await ServeConsole(channel, cancel);
+                }
+                finally
+                {
+                    _consoles.TryRemove(channel, out var _);
+                }
+
                 return;
             }
 
@@ -600,6 +614,13 @@ public sealed class LabHub
             while (!cancel.IsCancellationRequested)
             {
                 var message = await channel.ReceiveAsync(cancel);
+                if (!_consoles.TryGetValue(channel, out var known) || LabKeys.ConsoleKey(_options.Folder, _consoleKey, channel.PeerName) is not { } current
+                    || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(current, known.Key))
+                {
+                    // the console's own key was taken away (or made anew) on the server: it is let go at its next request
+                    return;
+                }
+
                 switch (message.Kind)
                 {
                     case MessageKind.Snapshot:

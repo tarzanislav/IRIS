@@ -103,7 +103,14 @@ public sealed class LabChannel : IDisposable
     public string PeerName { get; }
 
     /// <summary>The hub's side: checks that the other end knows the key of its role.</summary>
-    public static async Task<LabChannel> AcceptAsync(Stream stream, Func<LabRole, byte[]?> keyOf, CancellationToken cancel)
+    public static Task<LabChannel> AcceptAsync(Stream stream, Func<LabRole, byte[]?> keyOf, CancellationToken cancel) =>
+        AcceptAsync(stream, (role, _) => keyOf(role), cancel);
+
+    /// <summary>
+    /// The hub's side: checks that the other end knows the key of its role and name (a console with a key of its own
+    /// says the key's name as its own).
+    /// </summary>
+    public static async Task<LabChannel> AcceptAsync(Stream stream, Func<LabRole, string, byte[]?> keyOf, CancellationToken cancel)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         timeout.CancelAfter(TimeSpan.FromSeconds(15));
@@ -133,7 +140,7 @@ public sealed class LabChannel : IDisposable
         var name = Encoding.UTF8.GetString(rest, 0, nameLength);
         var clientNonce = rest.AsSpan(nameLength, 32).ToArray();
         var proof = rest.AsSpan(nameLength + 32, 32).ToArray();
-        var key = (role is LabRole.Agent or LabRole.Console ? keyOf(role) : null) ?? throw new LabProtocolException("unknown role");
+        var key = (role is LabRole.Agent or LabRole.Console ? keyOf(role, name) : null) ?? throw new LabProtocolException("unknown role or key");
         var expected = Mac(key, "hello"u8, [(byte)role], Encoding.UTF8.GetBytes(name), serverNonce, clientNonce);
         if (!CryptographicOperations.FixedTimeEquals(expected, proof))
         {
@@ -300,6 +307,9 @@ public sealed class LabProtocolException(string message) : Exception(message);
 /// <summary>The keys of the lab: 32 random bytes per role, kept in files only the system and administrators may read.</summary>
 public static class LabKeys
 {
+    /// <summary>The name a console with the main key says to the hub.</summary>
+    public const string MainConsole = "console";
+
     /// <summary>Reads a key file (base64), or creates one with a new random key when it does not exist.</summary>
     public static byte[] ReadOrCreate(string path)
     {
@@ -319,9 +329,98 @@ public static class LabKeys
         return key;
     }
 
-    public static byte[] Read(string path)
+    public static byte[] Read(string path) => ReadNamed(path).Key;
+
+    /// <summary>
+    /// A key file: the key in base64 on the first line, and for a console with a key of its own a line
+    /// "console &lt;name&gt;".
+    /// </summary>
+    public static (byte[] Key, string? Name) ReadNamed(string path)
     {
-        var key = Convert.FromBase64String(File.ReadAllText(path).Trim());
-        return key.Length >= 32 ? key : throw new FormatException("a lab key has 32 bytes");
+        var lines = File.ReadAllLines(path).Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        if (lines.Count == 0)
+        {
+            throw new FormatException("the key file is empty");
+        }
+
+        var key = Convert.FromBase64String(lines[0]);
+        if (key.Length < 32)
+        {
+            throw new FormatException("a lab key has 32 bytes");
+        }
+
+        var name = lines.Skip(1).Where(l => l.StartsWith("console ", StringComparison.Ordinal)).Select(l => l[8..].Trim()).FirstOrDefault();
+        return (key, name is not null && IsConsoleName(name) ? name : null);
+    }
+
+    /// <summary>What a console says to the hub: "console" with the main key, "@name" with a key of its own.</summary>
+    public static string HelloName(string? consoleName) => consoleName is null ? MainConsole : "@" + consoleName;
+
+    /// <summary>A name of a console's own key: letters, digits, '.', '_' and '-', at most 40.</summary>
+    public static bool IsConsoleName(string name) =>
+        name.Length is > 0 and <= 40 && char.IsAsciiLetterOrDigit(name[0]) && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
+    /// <summary>The folder of the consoles' own keys in the hub's folder.</summary>
+    public static string ConsoleFolder(string hubFolder) => Path.Combine(hubFolder, "consoles");
+
+    public static string ConsolePath(string hubFolder, string name) => Path.Combine(ConsoleFolder(hubFolder), name + ".key");
+
+    /// <summary>A new key of its own for one console; an existing one is never overwritten.</summary>
+    public static string CreateConsole(string hubFolder, string name)
+    {
+        if (!IsConsoleName(name))
+        {
+            throw new ArgumentException($"\"{name}\" is not a name of a console key (letters, digits, '.', '_', '-', at most 40)");
+        }
+
+        var path = ConsolePath(hubFolder, name);
+        Directory.CreateDirectory(ConsoleFolder(hubFolder));
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(ConsoleFolder(hubFolder), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+        using (var writer = new StreamWriter(file))
+        {
+            writer.Write($"{Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))}\nconsole {name}\n");
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        return path;
+    }
+
+    /// <summary>The names of the consoles' own keys.</summary>
+    public static IReadOnlyList<string> Consoles(string hubFolder) =>
+        Directory.Exists(ConsoleFolder(hubFolder))
+            ? [.. Directory.EnumerateFiles(ConsoleFolder(hubFolder), "*.key").Select(Path.GetFileNameWithoutExtension).OfType<string>().Where(IsConsoleName).Order(StringComparer.OrdinalIgnoreCase)]
+            : [];
+
+    /// <summary>The key the hub expects from a console that says this name, or null.</summary>
+    public static byte[]? ConsoleKey(string hubFolder, byte[] mainKey, string helloName)
+    {
+        if (helloName == MainConsole)
+        {
+            return mainKey;
+        }
+
+        if (!helloName.StartsWith('@') || !IsConsoleName(helloName[1..]))
+        {
+            return null;
+        }
+
+        try
+        {
+            var path = ConsolePath(hubFolder, helloName[1..]);
+            return File.Exists(path) ? Read(path) : null;
+        }
+        catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 }

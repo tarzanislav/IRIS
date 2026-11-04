@@ -14,6 +14,9 @@ try
         ["update", "--check", .. var rest] => await Update(LabArguments.Parse(rest), check: true),
         ["update", .. var rest] => await Update(LabArguments.Parse(rest), check: false),
         ["signing-key", .. var rest] => SigningKey(LabArguments.Parse(rest)),
+        ["console-key", "add", var name, .. var rest] => ConsoleKeyAdd(name, LabArguments.Parse(rest)),
+        ["console-key", "remove", var name, .. var rest] => ConsoleKeyRemove(name, LabArguments.Parse(rest)),
+        ["console-key", "list", .. var rest] => ConsoleKeyList(LabArguments.Parse(rest)),
         ["version"] => Version(),
         _ => Usage(),
     };
@@ -203,6 +206,58 @@ static int SigningKey(LabArguments a)
     return 0;
 }
 
+// a key of its own for one console (one administrator's computer): taken away alone, without the others' keys
+static int ConsoleKeyAdd(string name, LabArguments a)
+{
+    var folder = a.Value("--folder") ?? "/var/lib/iris-hub";
+    var path = LabKeys.CreateConsole(folder, name);
+    HubFiles.GiveToHub(LabKeys.ConsoleFolder(folder), a.Value("--user") ?? "iris-hub");
+    HubFiles.GiveToHub(path, a.Value("--user") ?? "iris-hub");
+    Console.WriteLine($"the key of the console \"{name}\" is in {path}");
+    if (a.Value("--out") is { } copy)
+    {
+        if (Directory.Exists(copy))
+        {
+            copy = Path.Combine(copy, name + ".key");
+        }
+
+        File.Copy(path, copy, overwrite: false);
+        Console.WriteLine($"a copy for the console: {copy} – put it into the console (Settings → key), then delete the copy");
+    }
+    else
+    {
+        Console.WriteLine($"copy it to the computer of the console, e.g. --out <folder>, then delete the copy");
+    }
+
+    return 0;
+}
+
+static int ConsoleKeyRemove(string name, LabArguments a)
+{
+    var folder = a.Value("--folder") ?? "/var/lib/iris-hub";
+    var path = LabKeys.ConsolePath(folder, LabKeys.IsConsoleName(name) ? name : throw new ArgumentException($"\"{name}\" is not a name of a console key"));
+    if (!File.Exists(path))
+    {
+        throw new IOException($"there is no console key \"{name}\"");
+    }
+
+    File.Delete(path);
+    Console.WriteLine($"the key of the console \"{name}\" is gone: that console is let go at its next request and cannot connect again");
+    return 0;
+}
+
+static int ConsoleKeyList(LabArguments a)
+{
+    var folder = a.Value("--folder") ?? "/var/lib/iris-hub";
+    Console.WriteLine("console.key (the main key)");
+    foreach (var name in LabKeys.Consoles(folder))
+    {
+        Console.WriteLine(name);
+    }
+
+    return 0;
+}
+
 static int Version()
 {
     Console.WriteLine($"iris-hub {LabUpdates.Version}{(LabUpdates.CanVerify ? "" : " (no key of the releases: no updates)")}");
@@ -242,7 +297,47 @@ static int Usage()
                                                 (as root, by the systemd timer once a day): the server's program is
                                                 put in place and the service restarted; --check only tells
         iris-hub signing-key [--out <file>]     a new key for signing the releases (for the owner of the repository)
+        iris-hub console-key add <name> [--out <file or dir>] [--folder <dir>]
+                                                a key of its own for one console; taken away alone with
+        iris-hub console-key remove <name>      (the console is let go at once)
+        iris-hub console-key list
         iris-hub version
         """);
     return 2;
+}
+
+/// <summary>
+/// The files of the hub belong to its user: a console key made by root is given to iris-hub, so the service (which
+/// does not run as root) can read it.
+/// </summary>
+internal static partial class HubFiles
+{
+    public static void GiveToHub(string path, string user)
+    {
+        if (!OperatingSystem.IsLinux() || Environment.UserName != "root")
+        {
+            return;
+        }
+
+        var entry = GetPasswordEntry(user);
+        if (entry == IntPtr.Zero)
+        {
+            Console.WriteLine($"  (there is no user {user}: {path} stays root's)");
+            return;
+        }
+
+        // struct passwd: two pointers (name, password), then uid and gid
+        var uid = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(entry, 2 * IntPtr.Size);
+        var gid = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(entry, (2 * IntPtr.Size) + 4);
+        if (ChangeOwner(path, uid, gid) != 0)
+        {
+            throw new IOException($"{path} could not be given to {user}");
+        }
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "getpwnam", StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
+    private static partial IntPtr GetPasswordEntry(string name);
+
+    [System.Runtime.InteropServices.LibraryImport("libc", EntryPoint = "chown", StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
+    private static partial int ChangeOwner(string path, uint owner, uint group);
 }

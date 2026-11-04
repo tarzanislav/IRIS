@@ -348,7 +348,8 @@ public sealed class MainWindow : Window, IConsoleActions
                 }
 
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                _client = await LabConsoleClient.ConnectAsync(_settings.Hub, _settings.Port, LabKeys.Read(_settings.KeyFile), timeout.Token);
+                var (key, keyName) = LabKeys.ReadNamed(_settings.KeyFile);
+                _client = await LabConsoleClient.ConnectAsync(_settings.Hub, _settings.Port, key, LabKeys.HelloName(keyName), timeout.Token);
             }
 
             using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))

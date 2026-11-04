@@ -150,6 +150,24 @@ Stránky:
   - **aktualizovať samo**.
 - Server si nastavenia pamätá v `lab-config.json` a počítače ich dostanú hneď.
 
+### Vlastný kľúč pre každú konzolu
+Konzolu môžete mať na viacerých počítačoch (napr. notebook v škole a pracovný notebook). **Každý môže mať vlastný kľúč**
+a ten sa dá zrušiť sám – ostatné konzoly fungujú ďalej:
+```
+sudo /opt/iris-hub/iris-hub console-key add notebook-skola --out <zdieľaný priečinok>
+sudo /opt/iris-hub/iris-hub console-key list
+sudo /opt/iris-hub/iris-hub console-key remove notebook-skola
+```
+- `add` vytvorí kľúč na serveri (`/var/lib/iris-hub/consoles/`) a kópiu `notebook-skola.key` do zadaného priečinka.
+  Kópiu v konzole vyberte v **Nastaveniach → Kľúč konzoly** a zo zdieľaného priečinka ju zmažte.
+- `remove` kľúč zruší: konzola s ním sa **hneď odpojí** a znova sa nepripojí. Server netreba reštartovať.
+- Meno: písmená bez diakritiky, číslice, `.`, `_`, `-` (najviac 40).
+- Nastavenia konzoly ukazujú, ktorý kľúč používa, a **ktoré konzoly sú práve pripojené**.
+- Hlavný kľúč `console.key` funguje ďalej. Keď majú všetky konzoly vlastné kľúče, hlavný nechajte len na serveri;
+  ak by unikol, vymeňte ho: `sudo rm /var/lib/iris-hub/console.key && sudo systemctl restart iris-hub`.
+- **Z domu** sa konzola na server nepripojí (server je len v sieti školy) – použite vzdialenú plochu na počítač v škole
+  alebo VPN školy. Port 47620 do internetu neotvárajte.
+
 ## Budenie a vypínanie
 - **Server o 15:00 zobudí počítače učebne, ktoré sú vypnuté** (Wake-on-LAN) a **o 6:00 ich zasa vypne**. Tie, ktoré
   boli zapnuté, nechá tak.

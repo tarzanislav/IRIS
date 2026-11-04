@@ -332,6 +332,81 @@ public static class LabTests
         }
     }
 
+    [Test]
+    public static async Task EachConsoleCanHaveItsOwnKey()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-consoles-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var school = LabKeys.CreateConsole(folder, "notebook-a");
+            var home = LabKeys.CreateConsole(folder, "notebook-b");
+            Assert.True(LabKeys.ReadNamed(school).Name == "notebook-a" && LabKeys.ReadNamed(Path.Combine(folder, "consoles", "notebook-b.key")).Name == "notebook-b", "the key file knows its name");
+            Assert.Throws<IOException>(() => LabKeys.CreateConsole(folder, "notebook-a"), "a key is never overwritten");
+            Assert.Throws<ArgumentException>(() => LabKeys.CreateConsole(folder, "../x"), "a name cannot leave the folder");
+            Assert.Sequence(["notebook-a", "notebook-b"], LabKeys.Consoles(folder), "the keys are listed");
+
+            var hub = new LabHub(new LabHubOptions
+            {
+                Folder = folder,
+                Port = 0,
+                Schedule = new LabSchedule(new TimeOnly(10, 0), new TimeOnly(10, 0), false),
+                AutoWake = false,
+            }, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState());
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var hubTask = hub.RunAsync(stop.Token);
+            while (hub.Port == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            async Task<LabConsoleClient> Connect(string file)
+            {
+                var (key, name) = LabKeys.ReadNamed(file);
+                return await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, key, LabKeys.HelloName(name), stop.Token);
+            }
+
+            using var main = await Connect(Path.Combine(folder, "console.key"));
+            using var first = await Connect(school);
+            using var second = await Connect(home);
+            var consoles = (await main.SnapshotAsync(stop.Token))["consoles"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+            Assert.Sequence(["", "notebook-a", "notebook-b"], consoles, "the hub shows which consoles are connected (\"\" = the main key)");
+
+            // a key under another console's name does not fit
+            var (schoolKey, _) = LabKeys.ReadNamed(school);
+            await AssertFails(() => LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, schoolKey, LabKeys.HelloName("notebook-b"), stop.Token), "a key under another name");
+            await AssertFails(() => LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, schoolKey, LabKeys.HelloName(null), stop.Token), "an own key as the main one");
+
+            // taking one key away lets that console go at once, the others stay
+            var (homeKey, _) = LabKeys.ReadNamed(home);
+            File.Delete(home);
+            await AssertFails(() => second.SnapshotAsync(stop.Token), "the console whose key is gone");
+            Assert.True((await first.SnapshotAsync(stop.Token))["consoles"]!.AsArray().Count == 2, "the other consoles go on");
+            LabKeys.CreateConsole(folder, "notebook-b");
+            await AssertFails(() => LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, homeKey, LabKeys.HelloName("notebook-b"), stop.Token), "the old key of a name made anew");
+            stop.Cancel();
+            await hubTask;
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static async Task AssertFails<T>(Func<Task<T>> action, string what)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception e) when (e is IOException or LabProtocolException or System.Net.Sockets.SocketException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException($"{what}: should have failed");
+    }
+
     // a signed set of programs in the hub's folder of updates
     private static void Put(string folder, System.Security.Cryptography.ECDsa key, string version, params (string Name, byte[] Data)[] files)
     {
