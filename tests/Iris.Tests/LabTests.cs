@@ -136,6 +136,7 @@ public static class LabTests
 
             var key = LabKeys.Read(Path.Combine(folder, "agent.key"));
             var powered = new List<string>();
+            var left = new List<string>();
             var agents = new[] { "PC-01", "PC-02" }.Select(name => new LabAgent(new LabAgentOptions
             {
                 Hub = "127.0.0.1",
@@ -146,6 +147,7 @@ public static class LabTests
                 StatusSeconds = 1,
                 OthersLimit = 101,
                 Power = command => { lock (powered) { powered.Add(name + " " + command); } },
+                Leave = () => { lock (left) { left.Add(name); } },
             }).RunAsync(stop.Token)).ToArray();
 
             while (hub.Version < 2 && !stop.IsCancellationRequested)
@@ -181,6 +183,31 @@ public static class LabTests
             }
 
             Assert.Sequence(["PC-02 shutdown"], powered, "the computer was told to shut down");
+
+            // uninstall: never to all at once; one computer finishes its round, says so and removes itself
+            Assert.Equal(0, await console.CommandAsync("*", LabCommands.Uninstall, default), "uninstall is never sent to all");
+            Assert.Equal(1, await console.CommandAsync("PC-01", LabCommands.Uninstall, default), "uninstall went to one computer");
+            for (var i = 0; i < 150 && left.Count == 0; i++)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.Sequence(["PC-01"], left, "the computer removed itself after its round");
+            JsonObject? pc01 = null;
+            for (var i = 0; i < 50 && Ui(pc01) != "uninstalling"; i++)
+            {
+                await Task.Delay(100);
+                pc01 = (await console.SnapshotAsync(default))["agents"]!.AsArray().OfType<JsonObject>().First(a => a["name"]!.GetValue<string>() == "PC-01");
+            }
+
+            Assert.Equal("uninstalling", Ui(pc01), "the console sees it going");
+            Assert.True(pc01!["leaving"]!.GetValue<bool>() == false, "the command is not kept any more");
+            Assert.True(JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "computers.json")))!["computers"]!.AsArray()
+                .Any(c => c!["name"]!.GetValue<string>() == "PC-01" && c["uninstalled"]?.GetValue<bool>() == true), "the hub remembers it removed itself");
+
+            // a computer that is connected is never taken off the list
+            await console.ConfigureAsync(new JsonObject { ["forget"] = new JsonObject { ["computer"] = "PC-02" } }, default);
+            Assert.Equal(2, (await console.SnapshotAsync(default))["agents"]!.AsArray().Count, "a connected computer stays on the list");
             stop.Cancel();
             await Task.WhenAll(agents.Append(hubTask));
         }
@@ -392,6 +419,56 @@ public static class LabTests
             Directory.Delete(folder, recursive: true);
         }
     }
+
+    [Test]
+    public static async Task AComputerThatIsOffIsUninstalledLaterOrForgotten()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-leave-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            File.WriteAllText(Path.Combine(folder, "computers.json"), """
+                {"computers":[{"name":"PC-01","address":"10.0.0.101"},{"name":"PC-02","address":"10.0.0.102"}],"woken":[]}
+                """);
+            var options = new LabHubOptions
+            {
+                Folder = folder,
+                Port = 0,
+                Schedule = new LabSchedule(new TimeOnly(10, 0), new TimeOnly(10, 0), false),
+                AutoWake = false,
+            };
+            var hub = new LabHub(options, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState());
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var hubTask = hub.RunAsync(stop.Token);
+            while (hub.Port == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), stop.Token);
+            await console.ConfigureAsync(new JsonObject { ["alias"] = new JsonObject { ["computer"] = "PC-02", ["name"] = "Pri okne" } }, stop.Token);
+            Assert.Equal(1, await console.CommandAsync("PC-01", LabCommands.Uninstall, stop.Token), "an uninstall waits for a computer that is off");
+            var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "computers.json")))!["computers"]!.AsArray();
+            Assert.True(saved.Any(c => c!["name"]!.GetValue<string>() == "PC-01" && c["leaving"]?.GetValue<bool>() == true), "kept across restarts of the hub");
+            Assert.Equal(1, await console.CommandAsync("PC-01", LabCommands.Stay, stop.Token), "and can be called off");
+            Assert.True((await console.SnapshotAsync(stop.Token))["agents"]!.AsArray().All(a => a!["leaving"]!.GetValue<bool>() == false), "nothing waits any more");
+
+            // a computer that left the classroom: off the list with its name in the console
+            await console.ConfigureAsync(new JsonObject { ["forget"] = new JsonObject { ["computer"] = "PC-02" } }, stop.Token);
+            var snapshot = await console.SnapshotAsync(stop.Token);
+            Assert.Sequence(["PC-01"], snapshot["agents"]!.AsArray().Select(a => a!["name"]!.GetValue<string>()), "the computer is off the list");
+            Assert.True(snapshot["config"]!["aliases"]!.AsObject().Count == 0, "with its name in the console");
+            Assert.True(!File.ReadAllText(Path.Combine(folder, "computers.json")).Contains("PC-02", StringComparison.Ordinal), "and the hub's file");
+            stop.Cancel();
+            await hubTask;
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static string? Ui(JsonObject? agent) => agent?["status"]?["state"]?.GetValue<string>();
 
     private static async Task AssertFails<T>(Func<Task<T>> action, string what)
     {

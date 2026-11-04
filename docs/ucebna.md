@@ -194,6 +194,14 @@ iris-agent.exe uninstall
     neprečíta;
   - vytvorí sa služba `IRIS-Lab`.
 - **Denník** je v `ProgramData\IRIS Lab\agent.log`.
+- **Príkazový riadok musí byť spustený ako správca** (Štart → cmd → pravým tlačidlom → Spustiť ako správca), inak
+  agent napíše, že ho treba spustiť ako správca.
+- **Odinštalovanie na diaľku** (konzola → Počítače → počítač → **Odinštalovať…**): počítač dokončí rozrobené kolo,
+  pošle ho a potom odstráni službu, program aj priečinok s kľúčom. Vypnutý počítač to urobí pri najbližšom
+  pripojení (server si príkaz pamätá); kým sa to nestane, dá sa to **zrušiť**. Príkaz ide vždy len na jeden počítač,
+  nikdy na všetky naraz.
+- **Odstrániť zo zoznamu** (len nepripojený počítač, napr. po preinštalovaní Windows): zmizne zo servera s menom
+  v konzole, skupinou a vlastnými nastaveniami; história ostane. Po novej inštalácii sa objaví ako nový.
 
 ## Ako sa učenie správa k počítaču
 - **Učenie ustúpi**, keď počítač robí niečo iné (iné programy berú viac ako 35 % procesora).

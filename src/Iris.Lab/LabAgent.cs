@@ -28,6 +28,12 @@ public sealed record LabAgentOptions
     /// <summary>Seconds between two status messages.</summary>
     public double StatusSeconds { get; init; } = 10;
 
+    /// <summary>
+    /// How the agent removes itself when the console asks (after its round): the service sets it to take away the
+    /// service, its program, settings and key once the agent has stopped. By default nothing is installed to remove.
+    /// </summary>
+    public Action Leave { get; init; } = () => { };
+
     /// <summary>What shutdown and restart do (tests replace it; by default the system's shutdown command).</summary>
     public Action<string> Power { get; init; } = DefaultPower;
 
@@ -80,6 +86,8 @@ public sealed class LabAgent
     private double _hot = 90;
     private bool _tooHot;
     private bool _paused;
+    private bool _leaving;
+    private bool _left;
     private string _state = "starting";
     private MachineSample? _sample;
     private RoundWork? _last;
@@ -177,7 +185,7 @@ public sealed class LabAgent
                         await StartRound(channel, message, session.Token);
                         break;
                     case MessageKind.Command:
-                        await Command(message.Header["command"]?.GetValue<string>() ?? "");
+                        await Command(channel, message.Header["command"]?.GetValue<string>() ?? "", session.Token);
                         break;
                     case MessageKind.Update:
                         Update(message);
@@ -205,7 +213,7 @@ public sealed class LabAgent
     {
         var json = new JsonObject
         {
-            ["state"] = _paused ? "paused" : _state,
+            ["state"] = _left ? "uninstalling" : _leaving ? "leaving" : _paused ? "paused" : _state,
             ["round"] = _round,
             ["machine"] = _sample?.ToJson(),
             ["threads"] = _learner?.Threads,
@@ -258,6 +266,11 @@ public sealed class LabAgent
 
     private async Task StartRound(LabChannel channel, LabMessage message, CancellationToken cancel)
     {
+        if (_leaving || _left)
+        {
+            return; // it is going away: no new round
+        }
+
         // the learning of an earlier round ends first (its step finishes): one network never learns twice at once
         await StopLearningAsync();
         var shape = OcrShape.FromJson(message.Header["shape"]!.AsObject());
@@ -317,6 +330,11 @@ public sealed class LabAgent
             catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or SocketException)
             {
             }
+
+            if (_leaving)
+            {
+                await LeaveAsync(channel, cancel); // the round is done and sent: now it goes
+            }
         }, CancellationToken.None);
     }
 
@@ -374,11 +392,22 @@ public sealed class LabAgent
         }
     }
 
-    private Task Command(string command)
+    private async Task Command(LabChannel channel, string command, CancellationToken cancel)
     {
         _options.Log?.Invoke($"command: {command}");
         switch (command)
         {
+            case LabCommands.Uninstall when !_left:
+                _leaving = true;
+                if (_learningTask.IsCompleted || _state != "learning")
+                {
+                    await LeaveAsync(channel, cancel); // nothing to finish
+                }
+
+                break; // else it goes when the round is sent
+            case LabCommands.Stay when !_left:
+                _leaving = false;
+                break;
             case LabCommands.Pause:
                 _paused = true;
                 StopLearning();
@@ -393,7 +422,31 @@ public sealed class LabAgent
             default:
                 break; // anything else is not a command of IRIS
         }
+    }
 
-        return Task.CompletedTask;
+    // tells the hub it removes itself, then hands over to the removal (which stops the service)
+    private async Task LeaveAsync(LabChannel channel, CancellationToken cancel)
+    {
+        lock (_gate)
+        {
+            if (_left || !_leaving)
+            {
+                return;
+            }
+
+            _left = true;
+        }
+
+        StopLearning();
+        _options.Log?.Invoke("uninstalling as the console asked");
+        try
+        {
+            await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), cancel);
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or SocketException)
+        {
+        }
+
+        _options.Leave();
     }
 }

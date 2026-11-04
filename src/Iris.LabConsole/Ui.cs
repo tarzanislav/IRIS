@@ -252,7 +252,9 @@ internal static class Ui
     {
         if (agent["connected"]?.GetValue<bool>() != true)
         {
-            return ("odpojený", "SurfaceAlt", "TextMuted");
+            return String(agent["state"]) == "uninstalled" ? ("odinštalovaný", "SurfaceAlt", "TextMuted")
+                : agent["leaving"]?.GetValue<bool>() == true ? ("odinštaluje sa po pripojení", "WarnSoft", "Warn")
+                : ("odpojený", "SurfaceAlt", "TextMuted");
         }
 
         if (agent["status"]?["too_hot"]?.GetValue<bool>() == true)
@@ -266,6 +268,8 @@ internal static class Ui
             "paused" => ("pozastavený", "WarnSoft", "Warn"),
             "waiting" => ("čaká na čas učenia", "Sky", "SkyDeep"),
             "updating" => ("aktualizuje sa", "Lilac", "LilacDeep"),
+            "leaving" => ("odinštaluje sa po kole", "WarnSoft", "Warn"),
+            "uninstalling" => ("odinštalúva sa", "WarnSoft", "Warn"),
             "no fonts" => ("chýbajú písma", "WarnSoft", "Warn"),
             _ => ("pripravený", "Lavender", "LavenderDeep"),
         };

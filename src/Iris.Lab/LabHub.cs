@@ -188,7 +188,8 @@ public sealed class LabHub
                     ["mac"] = a.Mac,
                     ["woken"] = _woken.Contains(a.Name),
                     ["connected"] = a.Channel is not null,
-                    ["state"] = a.State,
+                    ["state"] = a.Uninstalled && a.Channel is null ? "uninstalled" : a.State,
+                    ["leaving"] = a.Leaving,
                     ["seen"] = a.Seen.ToString("o", CultureInfo.InvariantCulture),
                     ["rounds"] = a.Rounds,
                     ["lines"] = a.Lines,
@@ -495,6 +496,7 @@ public sealed class LabHub
                 agent.Address = address;
                 agent.Seen = _options.Now();
                 agent.State = "idle";
+                agent.Uninstalled = false; // it is here again (installed anew, or it could not remove itself)
             }
 
             try
@@ -509,6 +511,12 @@ public sealed class LabHub
                     }
 
                     await Send(agent, new LabMessage(MessageKind.Settings, new JsonObject { ["sentences"] = sentences }), cancel);
+                }
+
+                if (agent.Leaving)
+                {
+                    // asked while it was off
+                    await Send(agent, new LabMessage(MessageKind.Command, new JsonObject { ["command"] = LabCommands.Uninstall }), cancel);
                 }
 
                 while (!cancel.IsCancellationRequested)
@@ -526,6 +534,12 @@ public sealed class LabHub
                             {
                                 agent.Status = message.Header;
                                 agent.Version = message.Header["version"]?.GetValue<string>();
+                                if (message.Header["state"]?.GetValue<string>() == "uninstalling" && !agent.Uninstalled)
+                                {
+                                    agent.Leaving = false;
+                                    agent.Uninstalled = true;
+                                    SaveKnown();
+                                }
                                 if (agent.State == "updating" && _options.Now() - agent.UpdateSent > TimeSpan.FromMinutes(2))
                                 {
                                     agent.State = "idle"; // it did not take the program (it says why in its log)
@@ -657,6 +671,34 @@ public sealed class LabHub
                             foreach (var mac in macs.Where(m => NetworkScanner.ParseMac(m) is not null))
                             {
                                 await WakeQuietly(mac, cancel);
+                                sent++;
+                            }
+                        }
+                        else if (command is LabCommands.Uninstall or LabCommands.Stay)
+                        {
+                            // one computer at a time (never "*"), also one that is off: it is kept until it connects
+                            List<AgentEntry> chosen;
+                            lock (_gate)
+                            {
+                                chosen = [.. _agents.Values.Where(a => target != "*" && string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase))];
+                                foreach (var a in chosen)
+                                {
+                                    a.Leaving = command == LabCommands.Uninstall;
+                                }
+
+                                if (chosen.Count > 0)
+                                {
+                                    SaveKnown();
+                                }
+                            }
+
+                            foreach (var a in chosen)
+                            {
+                                if (a.Channel is not null)
+                                {
+                                    await Send(a, new LabMessage(MessageKind.Command, new JsonObject { ["command"] = command }), cancel);
+                                }
+
                                 sent++;
                             }
                         }
@@ -839,6 +881,8 @@ public sealed class LabHub
                 Address = item["address"]?.GetValue<string>() ?? "",
                 State = "gone",
                 Inventory = item["inventory"] as JsonObject is { } inventory ? (JsonObject)inventory.DeepClone() : null,
+                Leaving = item["leaving"]?.GetValue<bool>() ?? false,
+                Uninstalled = item["uninstalled"]?.GetValue<bool>() ?? false,
             };
         }
 
@@ -860,6 +904,8 @@ public sealed class LabHub
                     ["mac"] = a.Mac,
                     ["address"] = a.Address,
                     ["inventory"] = a.Inventory?.DeepClone(),
+                    ["leaving"] = a.Leaving ? true : null,
+                    ["uninstalled"] = a.Uninstalled ? true : null,
                 })]),
                 ["woken"] = new JsonArray([.. _woken.Select(n => (JsonNode?)n)]),
             };
@@ -983,7 +1029,20 @@ public sealed class LabHub
         List<AgentEntry> connected;
         lock (_gate)
         {
-            if (!_config.Apply(change))
+            if (change["forget"]?["computer"]?.GetValue<string>() is { Length: > 0 } forget)
+            {
+                // a computer that is not connected leaves the list with its name, group and own settings (its
+                // history stays); a connected one is kept
+                if (!_agents.TryGetValue(forget, out var gone) || gone.Channel is not null || !_agents.TryRemove(forget, out _))
+                {
+                    return;
+                }
+
+                _woken.Remove(forget);
+                SaveKnown();
+                _config.Forget(forget);
+            }
+            else if (!_config.Apply(change))
             {
                 return;
             }
@@ -1052,6 +1111,12 @@ public sealed class LabHub
 
         /// <summary>What the computer is (from its firmware), as it last told.</summary>
         public JsonObject? Inventory { get; set; }
+
+        /// <summary>Asked to uninstall itself; a computer that is off gets the command when it connects.</summary>
+        public bool Leaving { get; set; }
+
+        /// <summary>It said it removes itself (until it connects again, e.g. installed anew).</summary>
+        public bool Uninstalled { get; set; }
     }
 
     private sealed record AvailableUpdate(UpdateManifest Manifest, byte[] Json, byte[] Signature, string Folder);
@@ -1084,5 +1149,11 @@ public static class LabCommands
     public const string Shutdown = "shutdown";
     public const string Restart = "restart";
 
-    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Pause, Resume, Shutdown, Restart };
+    /// <summary>The agent finishes its round, then removes itself: the service, its program, settings and key.</summary>
+    public const string Uninstall = "uninstall";
+
+    /// <summary>An uninstall asked for is called off (while the agent is still finishing its round).</summary>
+    public const string Stay = "stay";
+
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Pause, Resume, Shutdown, Restart, Uninstall, Stay };
 }

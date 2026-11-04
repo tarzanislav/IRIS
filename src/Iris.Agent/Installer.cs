@@ -80,6 +80,33 @@ internal static class Installer
         return 0;
     }
 
+    /// <summary>
+    /// The uninstall the console asked for, started by the running service itself: a small command of Windows, left
+    /// running on its own, stops the service (so the program can be deleted), deletes it, then the program's folder
+    /// and the folder with the settings and the key. The agent has already sent its round.
+    /// </summary>
+    public static void RemoveLater()
+    {
+        var steps = string.Join(" & ",
+            "ping -n 6 127.0.0.1 >nul",
+            $"sc.exe stop {ServiceName} >nul",
+            "ping -n 16 127.0.0.1 >nul",
+            $"sc.exe delete {ServiceName} >nul",
+            $"rmdir /s /q \"{ProgramFolder}\"",
+            $"rmdir /s /q \"{DataFolder}\"",
+            // once more a little later, should the program still have been ending a moment ago
+            "ping -n 31 127.0.0.1 >nul",
+            $"if exist \"{ProgramFolder}\" rmdir /s /q \"{ProgramFolder}\"",
+            $"if exist \"{DataFolder}\" rmdir /s /q \"{DataFolder}\"");
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/d /c \"{steps}\"")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Environment.SystemDirectory, // not inside a folder that is about to be deleted
+        };
+        using var _ = Process.Start(start);
+    }
+
     private static void Run(string program, string arguments, bool allowFailure = false)
     {
         var start = new ProcessStartInfo(program, arguments) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };

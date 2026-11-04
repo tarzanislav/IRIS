@@ -146,6 +146,14 @@ public sealed class LabConfig
         return false;
     }
 
+    /// <summary>A computer that left the classroom: its name in the console, its group and its own settings go.</summary>
+    public void Forget(string computer)
+    {
+        Aliases.Remove(computer);
+        Groups.Remove(computer);
+        ComputerSettings.Remove(computer);
+    }
+
     public JsonObject ToJson() => new()
     {
         ["aliases"] = Object(Aliases),

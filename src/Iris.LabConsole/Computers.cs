@@ -183,9 +183,11 @@ public sealed class ComputersPage : ConsolePage
         }
 
         _detailHost.Visibility = Visibility.Visible;
-        // the editors are built once per computer and again whenever the hub's settings change (a refresh must not throw
-        // away what is being typed, but a snapshot taken before a save must not stick); the measurements every time
-        var config = data.Config.ToJsonString();
+        // the editors are built once per computer and again whenever the hub's settings change or the computer comes,
+        // goes or leaves (a refresh must not throw away what is being typed, but a snapshot taken before a save must
+        // not stick); the measurements every time
+        var config = data.Config.ToJsonString()
+            + $"|{agent["connected"]?.GetValue<bool>()}|{agent["leaving"]?.GetValue<bool>()}|{Ui.String(agent["state"]) == "uninstalled"}";
         if (_detailFor != _selected || _detailConfig != config)
         {
             _detailFor = _selected;
@@ -241,6 +243,30 @@ public sealed class ComputersPage : ConsolePage
         commands.Children.Add(Ui.Small("Reštartovať", () => Ask(name, "restart", $"Reštartovať {Ui.Name(agent)}? (o minútu)")));
         commands.Children.Add(Ui.Small("Vypnúť", () => Ask(name, "shutdown", $"Vypnúť {Ui.Name(agent)}? (o minútu)"), danger: true));
         doing.Children.Add(commands);
+
+        // leaving the classroom: uninstall (after the round; a computer that is off when it connects), call it off,
+        // or take a computer that is gone off the list
+        var leave = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+        var connected = agent["connected"]?.GetValue<bool>() == true;
+        var leaving = agent["leaving"]?.GetValue<bool>() == true;
+        var uninstalled = Ui.String(agent["state"]) == "uninstalled";
+        if (leaving)
+        {
+            leave.Children.Add(Ui.Small("Zrušiť odinštalovanie", () => Ask(name, "stay")));
+        }
+        else if (!uninstalled)
+        {
+            leave.Children.Add(Ui.Small("Odinštalovať…", () => Ask(name, "uninstall",
+                $"Odinštalovať IRIS z počítača {Ui.Name(agent)}?\n\nPočítač dokončí rozrobené kolo a potom odstráni službu, program aj kľúč. "
+                + "Ak je vypnutý, urobí to pri najbližšom pripojení. Vrátiť sa to dá len novou inštaláciou."), danger: true));
+        }
+
+        if (!connected)
+        {
+            leave.Children.Add(Ui.Small("Odstrániť zo zoznamu…", () => Forget(name, Ui.Name(agent)), danger: true));
+        }
+
+        doing.Children.Add(leave);
         panel.Children.Add(Ui.Card(doing));
 
         // its own settings (what it does not set comes from its group and from all)
@@ -261,6 +287,18 @@ public sealed class ComputersPage : ConsolePage
         line.Children.Add(button);
         line.Children.Add(field);
         return line;
+    }
+
+    private async void Forget(string name, string shown)
+    {
+        if (MessageBox.Show($"Odstrániť {shown} zo zoznamu?\n\nZmizne meno v konzole, skupina aj vlastné nastavenia tohto počítača; história ostane. "
+                + "Ak sa počítač znova pripojí, objaví sa ako nový.", "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _selected = null;
+        await Configure(new JsonObject { ["forget"] = new JsonObject { ["computer"] = name } });
     }
 
     private async Task<bool> Configure(JsonObject change)

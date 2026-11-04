@@ -113,7 +113,7 @@ public partial class App : Application
         for (var i = 1; i <= 18; i++)
         {
             var name = $"PC-{i:00}";
-            var state = i switch { 4 => "paused", 9 => "gone", 13 => "waiting", _ => "learning" };
+            var state = i switch { 4 => "paused", 9 => "gone", 10 => "uninstalled", 13 => "waiting", 15 => "leaving", _ => "learning" };
             var cpu = 38 + random.NextDouble() * 20;
             var model = i <= 12 ? "Example Desk 3000" : "Example Desk 5000";
             agents.Add((JsonNode)new JsonObject
@@ -128,8 +128,9 @@ public partial class App : Application
                 ["address"] = $"10.0.0.{100 + i}",
                 ["mac"] = $"00-11-22-33-44-{i:X2}",
                 ["woken"] = i % 3 == 0,
-                ["connected"] = state != "gone",
+                ["connected"] = state is not "gone" and not "uninstalled",
                 ["state"] = state,
+                ["leaving"] = state == "leaving",
                 ["seen"] = now.AddSeconds(-random.Next(2, 30)).ToString("o", CultureInfo.InvariantCulture),
                 ["rounds"] = 40 + i,
                 ["lines"] = 120_000 + i * 3_100,

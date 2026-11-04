@@ -50,6 +50,7 @@ static async Task<int> RunConsole(LabArguments a)
         Fonts = Fonts(a.Value("--fonts")),
         Log = line => Console.WriteLine($"{DateTime.Now:HH:mm:ss} {line}"),
         Program = Environment.ProcessPath,
+        Leave = () => Console.WriteLine("the console asked to uninstall: here nothing is installed – end it with Ctrl+C"),
         Restart = () =>
         {
             Console.WriteLine("the program was updated – start it again");
@@ -87,6 +88,7 @@ static int Service()
         Fonts = Fonts(null),
         Log = line => Log(log, line),
         Program = Environment.ProcessPath,
+        Leave = Installer.RemoveLater,
     };
     Lower();
     var started = WindowsService.Run(Installer.ServiceName, token => new LabAgent(options).RunAsync(token));
