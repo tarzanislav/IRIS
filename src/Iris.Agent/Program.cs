@@ -26,6 +26,12 @@ catch (ArgumentException ex)
     Console.Error.WriteLine($"iris-agent: {ex.Message}");
     return 2;
 }
+catch (UnauthorizedAccessException ex) when (args.Length > 0 && args[0] is "install" or "uninstall")
+{
+    Console.Error.WriteLine($"iris-agent: {ex.Message}");
+    Console.Error.WriteLine("iris-agent: spustite príkazový riadok ako správca (Štart → cmd → pravým tlačidlom → Spustiť ako správca) / run the command prompt as administrator");
+    return 1;
+}
 catch (Exception ex) when (ex is IOException or FormatException or UnauthorizedAccessException or InvalidOperationException)
 {
     Console.Error.WriteLine($"iris-agent: {ex.Message}");
