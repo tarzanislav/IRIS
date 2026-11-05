@@ -369,7 +369,12 @@ public sealed class ComputersPage : ConsolePage
             line.Margin = new Thickness(0, 4, 0, 8);
             _live.Children.Add(line);
             var signals = status?["signals"];
-            var facts = Ui.Text($"výkon procesora {Ui.Number(signals?["performance"], "0", " %")} (bežne {Ui.Number(signals?["usual_performance"], "0", " %")}) · strop {Ui.Number(signals?["limit"], "0", " %")} · čakajúce vlákna {Ui.Number(signals?["queue"])} · voľná pamäť {Ui.Number(signals?["free_mb"], "#,0", " MB")} · disk {Ui.Number(signals?["disk"], "0", " %")}", 11.5, brush: "TextMuted");
+            // the speed of the processor says something only while it works (an idle one runs slow on purpose)
+            var working = Ui.Value(machine?["cpu"]) >= 25;
+            var speed = working
+                ? $"výkon pracujúcich jadier {Ui.Number(signals?["performance"], "0", " %")} (bežne {Ui.Number(signals?["usual_performance"], "0", " %")})"
+                : "výkon procesora sa meria pri záťaži";
+            var facts = Ui.Text($"{speed} · strop {Ui.Number(signals?["limit"], "0", " %")} · čakajúce vlákna {Ui.Number(signals?["queue"])} · voľná pamäť {Ui.Number(signals?["free_mb"], "#,0", " MB")} · disk {Ui.Number(signals?["disk"], "0", " %")}", 11.5, brush: "TextMuted");
             facts.Margin = new Thickness(0, 0, 0, 8);
             _live.Children.Add(facts);
         }

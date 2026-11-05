@@ -716,23 +716,61 @@ public static class LabTests
         Assert.True(Last(fine with { Limit = 70 }, Busy()) is { Level: 2 } a && a.Reasons.Any(r => r.Code == "limit"), "the firmware's ceiling");
         Assert.True(Last(fine with { Queue = 12 }, Busy()) is { Level: 1 } b && b.Reasons.Any(r => r.Code == "queue"), "threads wait");
         Assert.True(Last(fine with { FreeMb = 250, PagesIn = 150 }, Busy()) is { Level: 2 } c && c.Reasons.Any(r => r.Code == "memory") && c.Reasons.Any(r => r.Code == "paging"), "memory is short");
-        Assert.True(Last(fine, Busy(cpu: 97, others: 65)) is { Level: 2 } d && d.Reasons.Any(r => r.Code == "others") && d.Reasons.Any(r => r.Code == "full"), "someone else takes it");
+        Assert.Equal(0, Last(fine with { FreeMb = 8600, PagesIn = 500 }, Busy(cpu: 1, others: 1)).Level, "files read with free memory (an idle computer after an update) are no struggle");
+        Assert.True(Last(fine, Busy(cpu: 97, others: 65)) is { Level: 1 } d && d.Reasons.Any(r => r.Code == "others") && d.Reasons.Any(r => r.Code == "full"), "someone else takes it: busy, not struggling");
+
+        // a ceiling the power plan keeps the whole time is this computer's usual one, not a struggle
+        var plan = new StrainJudge();
+        for (var i = 0; i < 20; i++)
+        {
+            plan.Judge(Busy(), fine with { Limit = 85 }, false, true);
+        }
+
+        Assert.Equal(0, plan.Judge(Busy(), fine with { Limit = 85 }, false, true).Level, "the power plan's ceiling");
+        Strain lower = new(0, []);
+        for (var i = 0; i < 4; i++)
+        {
+            lower = plan.Judge(Busy(), fine with { Limit = 55 }, false, true);
+        }
+
+        Assert.True(lower.Level == 2 && lower.Reasons.Any(r => r.Code == "limit"), "but a fall below it is");
+        Assert.Equal(0, new StrainJudge().Judge(Busy(cpu: 2, others: 1), fine with { Limit = 40 }, false, false).Level, "an idle computer is never slow");
+
+        // a computer that just started: one bad sample is no struggle (three of six are needed)
+        var start = new StrainJudge();
+        Assert.Equal(0, start.Judge(Busy(), fine with { FreeMb = 200 }, false, false).Level, "the first sample alone");
 
         // the learning slows down against what this computer usually learns
         var learning = new StrainJudge();
         foreach (var speed in new[] { 10.0, 10.2, 9.9, 10.1 })
         {
-            learning.Round(speed, eco: false);
+            learning.Round(speed, eco: false, threads: 4, duty: 0.5);
         }
 
-        learning.Round(5, eco: false);
+        learning.Round(5, eco: false, threads: 4, duty: 0.5);
         Strain slow = new(0, []);
         for (var i = 0; i < 4; i++)
         {
-            slow = learning.Judge(Busy(), fine, false, learning: true);
+            slow = learning.Judge(Busy(), fine, false, learning: true, threads: 4, duty: 0.5);
         }
 
         Assert.True(slow.Level == 2 && slow.Reasons.Any(r => r.Code == "learning" && r.Value is > 45 and < 55), "half of its usual speed");
+
+        // with more threads (a test at full load) every thread learns slower by nature: compared only with the same
+        var more = new StrainJudge();
+        foreach (var speed in new[] { 10.0, 10.2, 9.9, 10.1 })
+        {
+            more.Round(speed, eco: false, threads: 4, duty: 0.5);
+        }
+
+        more.Round(5.5, eco: false, threads: 8, duty: 1);
+        Strain full = new(0, []);
+        for (var i = 0; i < 4; i++)
+        {
+            full = more.Judge(Busy(), fine, false, learning: true, threads: 8, duty: 1);
+        }
+
+        Assert.Equal(0, full.Level, "a new load has no measure yet, so no struggle");
         Assert.Equal(2, slow.ToJson()["level"]!.GetValue<int>(), "for the console");
     }
 

@@ -27,35 +27,47 @@ public sealed record Strain(int Level, IReadOnlyList<(string Code, double Value)
 
 /// <summary>
 /// Judges the strain of one computer from what it measures every few seconds and from its rounds. Every computer is
-/// its own measure: the speed of its processor and of its learning are compared with what this computer usually
-/// does with the same mode (efficient or not) – so an office computer with a low power limit and a fast desktop are
-/// both judged fairly. One spike changes nothing: a level counts when it held in at least half of the last samples.
+/// its own measure: the speed of its processor, the ceiling of its clock and the speed of its learning are compared
+/// with what this computer usually does in the same mode (efficient or not; for the learning also with the same
+/// threads and share of time) – so an office computer with a low power limit and a fast desktop are both judged
+/// fairly, and a lower load is never taken for a slower computer. A level counts only when it held in at least
+/// three of the last six samples: a spike, or the minute after a start, is no struggle.
 /// </summary>
 public sealed class StrainJudge
 {
     private const int Window = 6;
+    private const int Need = 3;
     private readonly Queue<(int Level, List<(string, double)> Reasons)> _recent = new();
     private readonly Dictionary<bool, List<double>> _performance = new() { [true] = [], [false] = [] };
-    private readonly Dictionary<bool, List<double>> _speed = new() { [true] = [], [false] = [] };
-    private double? _lastSpeedShare;
+    private readonly List<double> _limits = [];
+    private readonly Dictionary<string, List<double>> _speed = new(StringComparer.Ordinal);
+    private (string Key, double Share)? _lastSpeed;
 
-    /// <summary>The usual speed of the processor of this computer while it is busy (90th percentile), or null while unknown.</summary>
+    /// <summary>
+    /// The usual speed of the busy cores of this computer (90th percentile over the last hours), or null while
+    /// unknown – the speed of the processor is judged only against it.
+    /// </summary>
     public double? UsualPerformance(bool eco) => Percentile(_performance[eco], 0.9, 12);
 
-    /// <summary>What a round learned per second and thread (lines), remembered per mode; the last one is compared with the usual.</summary>
-    public void Round(double linesPerThreadSecond, bool eco)
+    /// <summary>What a round learned per second and thread (lines), remembered per mode, threads and share of time.</summary>
+    public void Round(double linesPerThreadSecond, bool eco, int threads, double duty)
     {
         if (!(linesPerThreadSecond > 0) || !double.IsFinite(linesPerThreadSecond))
         {
             return;
         }
 
-        var usual = Percentile(_speed[eco], 0.8, 3);
-        _lastSpeedShare = usual is { } u ? linesPerThreadSecond / u : null;
-        Add(_speed[eco], linesPerThreadSecond, 30);
+        var key = Key(eco, threads, duty);
+        if (!_speed.TryGetValue(key, out var list))
+        {
+            _speed[key] = list = [];
+        }
+
+        _lastSpeed = Percentile(list, 0.8, 3) is { } usual ? (key, linesPerThreadSecond / usual) : null;
+        Add(list, linesPerThreadSecond, 30);
     }
 
-    public Strain Judge(MachineSample sample, StrainSignals signals, bool eco, bool learning)
+    public Strain Judge(MachineSample sample, StrainSignals signals, bool eco, bool learning, int threads = 0, double duty = 0)
     {
         var reasons = new List<(string, double)>();
         var level = 0;
@@ -65,11 +77,18 @@ public sealed class StrainJudge
             reasons.Add((code, value));
         }
 
-        var busy = sample.CpuTotal >= 50;
-        if (signals.Limit is { } limit && limit < 95)
+        // the clock matters only while the processor works (an idle one runs slow on purpose)
+        var busy = sample.CpuTotal >= 25;
+        if (signals.Limit is { } limit)
         {
-            // the firmware lowered the ceiling of the clock: heat or the power supply
-            Reason(limit < 80 ? 2 : 1, "limit", limit);
+            // the ceiling of the clock: a fixed one (the power plan) is the usual one; it counts when it falls below
+            // what this computer had – heat or the power supply
+            var usual = _limits.Count >= 12 ? _limits.Max() : (double?)null;
+            Add(_limits, limit, 1440);
+            if (busy && limit < 95 && (usual is { } most ? limit < most - 10 : limit < 80))
+            {
+                Reason(limit < (usual ?? 100) - 25 ? 2 : 1, "limit", limit);
+            }
         }
 
         if (signals.Performance is { } performance && busy)
@@ -86,14 +105,10 @@ public sealed class StrainJudge
                     Reason(1, "slow", share);
                 }
             }
-            else if (!eco && performance < 60)
-            {
-                Reason(2, "slow", performance); // far below the base clock while not asked to save power
-            }
 
             if (signals.Limit is not < 95)
             {
-                Add(_performance[eco], performance, 720);
+                Add(_performance[eco], performance, 2160);
             }
         }
 
@@ -116,7 +131,8 @@ public sealed class StrainJudge
 
         if (sample.CpuOthers >= 30)
         {
-            Reason(sample.CpuOthers >= 60 ? 2 : 1, "others", sample.CpuOthers);
+            // busy with others (someone works, an update, the antivirus): busy, not a struggle by itself
+            Reason(1, "others", sample.CpuOthers);
         }
 
         var free = signals.FreeMb ?? (sample.MemoryTotalGb > 0 ? sample.MemoryTotalGb * 1024 * (100 - sample.MemoryUsed) / 100 : (double?)null);
@@ -133,7 +149,10 @@ public sealed class StrainJudge
             }
         }
 
-        if (signals.PagesIn is { } pages && pages > 20)
+        // pages read from the disk are a struggle only when memory is short: with free memory they are files being
+        // opened (a program starting, an update, the antivirus) – Windows counts those reads among them too
+        var tight = free is { } left && sample.MemoryTotalGb > 0 && (left < 1024 || left / (sample.MemoryTotalGb * 1024) < 0.15);
+        if (signals.PagesIn is { } pages && pages > 20 && tight)
         {
             Reason(pages > 100 ? 2 : 1, "paging", pages);
         }
@@ -143,9 +162,9 @@ public sealed class StrainJudge
             Reason(1, "disk", disk);
         }
 
-        if (learning && _lastSpeedShare is { } speed && speed < 0.8)
+        if (learning && _lastSpeed is { } speed && speed.Key == Key(eco, threads, duty) && speed.Share < 0.8)
         {
-            Reason(speed < 0.6 ? 2 : 1, "learning", 100 * speed);
+            Reason(speed.Share < 0.6 ? 2 : 1, "learning", 100 * speed.Share);
         }
 
         _recent.Enqueue((level, reasons));
@@ -154,12 +173,13 @@ public sealed class StrainJudge
             _recent.Dequeue();
         }
 
-        // the highest level that held in at least half of the recent samples (a short spike is not a struggle)
-        var need = (_recent.Count + 1) / 2;
-        var held = Enumerable.Range(0, 3).Reverse().First(l => l == 0 || _recent.Count(r => r.Level >= l) >= need);
+        // the highest level that held in at least three of the recent samples (a short spike is not a struggle)
+        var held = Enumerable.Range(0, 3).Reverse().First(l => l == 0 || _recent.Count(r => r.Level >= l) >= Need);
         var why = _recent.Reverse().FirstOrDefault(r => r.Level >= held && held > 0).Reasons ?? [];
         return new Strain(held, held == 0 ? [] : why);
     }
+
+    private static string Key(bool eco, int threads, double duty) => string.Create(CultureInfo.InvariantCulture, $"{eco}|{threads}|{Math.Round(duty * 20) / 20:0.00}");
 
     private static void Add(List<double> list, double value, int keep)
     {
@@ -184,8 +204,9 @@ public sealed class StrainJudge
 
 /// <summary>
 /// Reads the signals of strain. Windows: the plain performance counters (PDH, English names, no administrator
-/// rights, no driver) – "% Processor Performance" and "% Performance Limit" of Processor Information, "Processor
-/// Queue Length", "Available MBytes", "Pages Input/sec" and the idle time of the disks. Linux: /proc and cpufreq.
+/// rights, no driver) – "% Processor Performance" of every logical processor weighted by how busy it is (idle cores
+/// run slow on purpose, so the mean of all would fall with a lower load), "% Performance Limit", "Processor Queue
+/// Length", "Available MBytes", "Pages Input/sec" and the idle time of the disks. Linux: /proc and cpufreq.
 /// </summary>
 internal sealed partial class StrainCounters
 {
@@ -198,6 +219,8 @@ internal sealed partial class StrainCounters
         @"\Memory\Available MBytes",
         @"\Memory\Pages Input/sec",
         @"\PhysicalDisk(_Total)\% Idle Time",
+        @"\Processor Information(*)\% Processor Performance",
+        @"\Processor Information(*)\% Processor Time",
     ];
 
     private nint _query;
@@ -255,8 +278,72 @@ internal sealed partial class StrainCounters
             return double.IsFinite(value.Value) ? value.Value : null;
         }
 
+        // the speed of the cores that work: each core's speed weighted by its busy time
+        var performance = Value(0);
+        var speeds = Instances(6);
+        var times = Instances(7);
+        if (speeds.Count > 0 && times.Count > 0)
+        {
+            double weight = 0, sum = 0;
+            foreach (var (name, speed) in speeds)
+            {
+                if (!name.Contains("_Total", StringComparison.Ordinal) && times.TryGetValue(name, out var time) && time > 0)
+                {
+                    sum += speed * time;
+                    weight += time;
+                }
+            }
+
+            if (weight >= 25)
+            {
+                performance = sum / weight;
+            }
+        }
+
         var idle = Value(5);
-        return new StrainSignals(Value(0), Value(1), Value(2), Value(3), Value(4), idle is { } rest ? Math.Clamp(100 - rest, 0, 100) : null);
+        return new StrainSignals(performance, Value(1), Value(2), Value(3), Value(4), idle is { } rest ? Math.Clamp(100 - rest, 0, 100) : null);
+    }
+
+    // the values of a counter of many instances (name → value)
+    private Dictionary<string, double> Instances(int i)
+    {
+        var result = new Dictionary<string, double>(StringComparer.Ordinal);
+        if (_counters[i] == 0)
+        {
+            return result;
+        }
+
+        uint size = 0;
+        PdhGetFormattedCounterArrayW(_counters[i], Double, ref size, out var count, 0);
+        if (size == 0 || count == 0)
+        {
+            return result;
+        }
+
+        var buffer = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            if (PdhGetFormattedCounterArrayW(_counters[i], Double, ref size, out count, buffer) != 0)
+            {
+                return result;
+            }
+
+            var item = Marshal.SizeOf<CounterItem>();
+            for (var k = 0; k < count; k++)
+            {
+                var value = Marshal.PtrToStructure<CounterItem>(buffer + k * item);
+                if (value.Status == 0 && double.IsFinite(value.Value) && Marshal.PtrToStringUni(value.Name) is { } name)
+                {
+                    result[name] = value.Value;
+                }
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+
+        return result;
     }
 
     private StrainSignals Linux()
@@ -327,6 +414,19 @@ internal sealed partial class StrainCounters
 
     [LibraryImport("pdh.dll")]
     private static partial uint PdhGetFormattedCounterValue(nint counter, uint format, out uint type, out CounterValue value);
+
+    [LibraryImport("pdh.dll")]
+    private static partial uint PdhGetFormattedCounterArrayW(nint counter, uint format, ref uint size, out uint count, nint items);
+
+    // PDH_FMT_COUNTERVALUE_ITEM_W with a double: name pointer, status, padding, value
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CounterItem
+    {
+        public nint Name;
+        public uint Status;
+        public uint Padding;
+        public double Value;
+    }
 
     // PDH_FMT_COUNTERVALUE with a double: status, padding, value
     [StructLayout(LayoutKind.Sequential)]

@@ -176,7 +176,7 @@ public sealed class LabAgent
             {
                 _sample = _machine.Sample();
                 _signals = _counters.Read();
-                _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning");
+                _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? Threads(), _duty);
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);
                 await Task.Delay(TimeSpan.FromSeconds(_options.StatusSeconds), session.Token);
             }
@@ -342,7 +342,7 @@ public sealed class LabAgent
             _last = work;
             if (!work.Stopped && work.Seconds > 0)
             {
-                _judge.Round(work.Lines / (work.Seconds * Math.Max(0.05, _duty) * Math.Max(1, learner.Threads)), _ecoSet ?? _eco);
+                _judge.Round(work.Lines / (work.Seconds * Math.Max(0.05, _duty) * Math.Max(1, learner.Threads)), _ecoSet ?? _eco, learner.Threads, _duty);
             }
             _options.Log?.Invoke($"round {round}: {work.Steps} steps, {work.Lines} lines, loss {work.Loss:F3}, {work.Seconds:F0} s");
             var (layout, data) = TensorPack.Pack(TensorPack.Difference(learner.Weights, start));
