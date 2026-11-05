@@ -94,6 +94,11 @@ Stránka **Server** v konzole – všetko bez prihlásenia na server:
 
 Konzola nemôže na serveri spustiť nič iné než tieto pevné úkony a model berie len z podpísaného vydania.
 
+### Efektivita (od 0.4.7)
+Stránka **Efektivita**: podiel každého počítača a skupiny na učení za 1–60 dní (riadky, hodiny, rýchlosť aj na
+vlákno, záťaž, námaha, ustúpenie). Server ukladá po každom kole jeden riadok na počítač do `efficiency.jsonl`
+(60 dní). **Uložiť denník efektivity…** uloží tabuľku pre Excel – mená z konzoly, typ hardvéru a čísla, bez adries.
+
 ### Testovací režim (od 0.4.4)
 Stránka **Testovací režim** v konzole: zvolené počítače (všetky pripojené, skupina, alebo vybrané) sa **začnú učiť
 hneď**, aj mimo času učenia, so záťažou zvolenou v konzole – predvoľby Jemne 25 %, Bežne 50 %, Naplno 100 %, alebo

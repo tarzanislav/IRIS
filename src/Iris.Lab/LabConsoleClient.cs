@@ -98,6 +98,16 @@ public sealed class LabConsoleClient : IDisposable
     public async Task<IReadOnlyList<string>> ServerLogAsync(string name, int lines, CancellationToken cancel) =>
         [.. (await Server("log", new JsonObject { ["name"] = name, ["lines"] = lines }, cancel))["lines"]?.AsArray().Select(l => l?.GetValue<string>() ?? "") ?? []];
 
+    /// <summary>What every computer and group did over the last days: lines, share, hours, speed, load, strain (hubs from 0.4.7).</summary>
+    public Task<JsonObject> EfficiencyAsync(double days, CancellationToken cancel) => Server("efficiency", new JsonObject { ["days"] = days }, cancel);
+
+    /// <summary>The log of efficiency of the last days as a table for Excel (UTF-8, semicolons) and its number of rows.</summary>
+    public async Task<(byte[] Table, int Rows)> EfficiencyTableAsync(double days, CancellationToken cancel)
+    {
+        var answer = await AskMessage(new LabMessage(MessageKind.Server, new JsonObject { ["what"] = "efficiency-table", ["days"] = days }), cancel);
+        return (answer.Data, answer.Header["rows"]?.GetValue<int>() ?? 0);
+    }
+
     /// <summary>Starts the hub again (a round that runs is lost); its service brings it back in about half a minute.</summary>
     public async Task<bool> RestartServerAsync(CancellationToken cancel) =>
         (await Server("restart", [], cancel))["ok"]?.GetValue<bool>() ?? false;

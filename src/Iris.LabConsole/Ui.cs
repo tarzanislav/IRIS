@@ -322,6 +322,21 @@ internal static class Ui
         _ => name,
     };
 
+    /// <summary>A short name of a reason of strain (for the table of efficiency).</summary>
+    public static string ReasonName(string? code) => code switch
+    {
+        "limit" => "strop výkonu",
+        "slow" => "spomalený procesor",
+        "queue" => "čakajúce vlákna",
+        "full" => "procesor naplno",
+        "others" => "iné programy",
+        "memory" => "málo pamäte",
+        "paging" => "odkladanie na disk",
+        "disk" => "zaneprázdnený disk",
+        "learning" => "pomalšie učenie",
+        _ => code ?? "?",
+    };
+
     private static string Reason(string? code, double value) => code switch
     {
         "limit" => $"firmvér znížil výkon na {value:0} % (teplo alebo napájanie)",

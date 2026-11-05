@@ -92,6 +92,12 @@ public interface IConsoleActions
     /// <summary>The classroom from the learning file of the newest signed release; true when the request was left.</summary>
     Task<bool> ModelFromRelease();
 
+    /// <summary>What every computer and group did over the last days (hubs from 0.4.7); null when it cannot be asked.</summary>
+    Task<JsonObject?> Efficiency(double days);
+
+    /// <summary>The log of efficiency of the last days as a table for Excel; null when it cannot be asked.</summary>
+    Task<(byte[] Table, int Rows)?> EfficiencyTable(double days);
+
     /// <summary>The test mode (hubs from 0.4.4): the hub's answer, or null when it cannot be asked.</summary>
     Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco, bool keepTime = false);
 

@@ -34,6 +34,7 @@ public partial class App : Application
             Directory.CreateDirectory(folder);
             var window = new MainWindow(new ConsoleSettings(), offline: true) { Width = 1320, Height = 860, WindowState = WindowState.Normal };
             Fill(window.Data);
+            window.Efficiency.Fake(FakeEfficiency());
             window.Server.Fake(new JsonObject
             {
                 ["hub_version"] = Iris.Lab.LabUpdates.Version,
@@ -95,6 +96,8 @@ public partial class App : Application
             Picture(window, folder, "server-dark");
             window.Navigate("test");
             Picture(window, folder, "test-dark");
+            window.Navigate("efficiency");
+            Picture(window, folder, "efficiency-dark");
             window.Close();
             return 0;
         }
@@ -135,6 +138,50 @@ public partial class App : Application
     }
 
     // a made-up classroom: names PC-01 … PC-18, two invented models, nothing real
+    // an invented week of efficiency: new computers with many threads, old ones with two
+    private static JsonObject FakeEfficiency()
+    {
+        JsonObject Item(string key, string? name, string model, string cpu, int logical, double share, double lines, double hours, double threads, int struggled, int busy, int stopped, double others) => new()
+        {
+            ["key"] = key,
+            ["name"] = name,
+            ["model"] = model,
+            ["cpu"] = cpu,
+            ["logical"] = logical,
+            ["computers"] = 1,
+            ["share"] = share,
+            ["lines"] = lines,
+            ["hours"] = hours,
+            ["rounds"] = 90,
+            ["used"] = 90 - stopped,
+            ["stopped"] = stopped,
+            ["per_thread"] = lines / (hours * 3600 * threads * 0.5),
+            ["per_second"] = lines / (hours * 3600),
+            ["threads"] = threads,
+            ["duty"] = 0.5,
+            ["cpu_own"] = 48,
+            ["cpu_others"] = others,
+            ["struggled"] = struggled,
+            ["busy"] = busy,
+            ["reasons"] = struggled + busy > 0 ? new JsonArray(new JsonObject { ["code"] = "others", ["rounds"] = busy }) : new JsonArray(),
+        };
+        return new JsonObject
+        {
+            ["lines"] = 9_400_000,
+            ["rounds"] = 540,
+            ["from"] = DateTime.Now.AddDays(-7).ToString("s", CultureInfo.InvariantCulture),
+            ["until"] = DateTime.Now.ToString("s", CultureInfo.InvariantCulture),
+            ["computers"] = new JsonArray(
+                Item("PC-01", "Pri okne", "OptiPlex Micro 7020", "Intel Core i5-14500T", 20, 11.8, 1_110_000, 15, 10, 0, 2, 1, 3),
+                Item("PC-02", null, "OptiPlex Micro 7020", "Intel Core i5-14500T", 20, 11.5, 1_080_000, 15, 10, 0, 4, 2, 4),
+                Item("PC-16", null, "OptiPlex 7010", "Intel Pentium G2020", 2, 0.6, 56_000, 15, 1, 1, 12, 6, 9),
+                Item("PC-17", null, "OptiPlex 7010", "Intel Pentium G2020", 2, 0.4, 38_000, 15, 1, 3, 20, 14, 21)),
+            ["groups"] = new JsonArray(
+                new JsonObject { ["key"] = "OptiPlex Micro 7020", ["name"] = "OptiPlex Micro 7020", ["computers"] = 10, ["share"] = 96.1, ["lines"] = 9_030_000, ["hours"] = 150, ["rounds"] = 900, ["per_second"] = 16.7, ["per_thread"] = 3.3, ["struggled"] = 2, ["stopped"] = 12 },
+                new JsonObject { ["key"] = "OptiPlex 7010", ["name"] = "OptiPlex 7010", ["computers"] = 5, ["share"] = 2.6, ["lines"] = 244_000, ["hours"] = 75, ["rounds"] = 450, ["per_second"] = 0.9, ["per_thread"] = 1.8, ["struggled"] = 9, ["stopped"] = 41 }),
+        };
+    }
+
     private static void Fill(ConsoleData data)
     {
         var random = new Random(3);

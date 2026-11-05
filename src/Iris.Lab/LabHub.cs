@@ -125,6 +125,7 @@ public sealed class LabHub
     private readonly Lazy<int> _fontFiles;
     private CancellationTokenSource? _stop;
     private TestRun? _test;
+    private readonly EfficiencyLog _efficiency;
     private bool _wakeReported = true;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
@@ -137,6 +138,7 @@ public sealed class LabHub
         _state = state;
         _sentences = LineTexts.ReadSentences(options.Sentences);
         _history = new LabHistory(Path.Combine(options.Folder, "history"));
+        _efficiency = new EfficiencyLog(options.Folder, options.Now);
         _config = LabConfig.Load(ConfigPath);
         _tester = new(MakeTester);
         _started = options.Now();
@@ -796,7 +798,9 @@ public sealed class LabHub
             var change = TensorPack.Tensors(_weights).Select(t => new float[t.Values.Length]).ToList();
             TensorPack.Unpack(message.Header["layout"]!.AsArray(), message.Data,
                 TensorPack.Tensors(_weights).Select((t, i) => (t.Name, change[i])));
-            if (change.Any(c => c.Any(v => !float.IsFinite(v))))
+            var broken = change.Any(c => c.Any(v => !float.IsFinite(v)));
+            Account(agent, round, message.Header, used: !broken);
+            if (broken)
             {
                 round.Done.Add(agent.Name);
                 return; // a broken change (a fault on that computer) is left out
@@ -813,6 +817,40 @@ public sealed class LabHub
             agent.Lines += lines;
             agent.State = "idle";
         }
+    }
+
+    // the line of the log of efficiency for this computer and round: what it says of its round (agents from 0.4.7
+    // add their load and strain) with its group and hardware
+    private void Account(AgentEntry agent, Round round, JsonObject header, bool used)
+    {
+        var receipt = header["receipt"] as JsonObject;
+        double? Of(string key) => receipt?[key] is JsonValue v && v.TryGetValue<double>(out var d) ? d : null;
+        var model = Model(agent);
+        _efficiency.Add(new JsonObject
+        {
+            ["round"] = round.Number,
+            ["computer"] = agent.Name,
+            ["name"] = _config.Aliases.GetValueOrDefault(agent.Name),
+            ["group"] = _config.GroupOf(agent.Name, model),
+            ["model"] = model,
+            ["cpu"] = agent.Inventory?["cpu"]?["name"]?.GetValue<string>(),
+            ["logical"] = Of("logical") is { } logical ? (int)logical : null,
+            ["lines"] = header["lines"]?.GetValue<long>() ?? 0,
+            ["seconds"] = header["seconds"]?.GetValue<double>(),
+            ["asked"] = Of("asked"),
+            ["stopped"] = receipt?["stopped"]?.GetValue<bool>(),
+            ["used"] = used,
+            ["threads"] = Of("threads"),
+            ["duty"] = Of("duty"),
+            ["eco"] = receipt?["eco"]?.GetValue<bool>(),
+            ["per_thread"] = Of("per_thread"),
+            ["cpu_own"] = Of("cpu_own"),
+            ["cpu_total"] = Of("cpu_total"),
+            ["cpu_others"] = Of("cpu_others"),
+            ["strain"] = Of("strain"),
+            ["reasons"] = receipt?["reasons"]?.GetValue<string>(),
+            ["loss"] = header["loss"]?.GetValue<double>() is { } loss && double.IsFinite(loss) ? Math.Round(loss, 4) : null,
+        });
     }
 
     private async Task ServeConsole(LabChannel channel, CancellationToken cancel)
@@ -935,6 +973,12 @@ public sealed class LabHub
 
                         await Configure(message.Header, cancel);
                         await channel.SendAsync(new LabMessage(MessageKind.Configure, ConfigJson()), cancel);
+                        break;
+                    case MessageKind.Server when message.Header["what"]?.GetValue<string>() == "efficiency-table":
+                        // the lines of the last days as a table (Excel), to be saved by the console
+                        var days = Math.Clamp(message.Header["days"]?.GetValue<double>() ?? 7, 0.04, EfficiencyLog.Days);
+                        var rows = _efficiency.Since(_options.Now().AddDays(-days));
+                        await channel.SendAsync(new LabMessage(MessageKind.Server, new JsonObject { ["rows"] = rows.Count, ["days"] = days }, EfficiencyLog.Table(rows)), cancel);
                         break;
                     case MessageKind.Server when message.Header["what"]?.GetValue<string>() is "test" or "test-stop":
                         await Test(channel, message.Header, cancel);
@@ -1105,6 +1149,19 @@ public sealed class LabHub
                         ["name"] = name,
                         ["lines"] = new JsonArray([.. HubLog.Tail(_options.Folder, name, count).Select(l => (JsonNode?)l)]),
                     };
+                case "efficiency":
+                    // what every computer and group did over the last days (1–60)
+                    var days = Math.Clamp(header["days"]?.GetValue<double>() ?? 7, 0.04, EfficiencyLog.Days);
+                    var lines = _efficiency.Since(_options.Now().AddDays(-days));
+                    Dictionary<string, string> aliases;
+                    lock (_gate)
+                    {
+                        aliases = new Dictionary<string, string>(_config.Aliases, StringComparer.OrdinalIgnoreCase);
+                    }
+
+                    var summary = EfficiencyLog.Summary(lines, n => aliases.GetValueOrDefault(n));
+                    summary["days"] = days;
+                    return summary;
                 case "restart":
                     RestartAsked = true;
                     Note($"console {console}: restart of the hub");

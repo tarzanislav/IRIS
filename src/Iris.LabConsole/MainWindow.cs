@@ -119,6 +119,7 @@ public sealed class MainWindow : Window, IConsoleActions
         network.Scan = ScanNetwork;
         _pages["network"] = network;
         _pages["service"] = new ServicePage();
+        _pages["efficiency"] = new EfficiencyPage();
         _pages["test"] = new TestPage();
         _pages["server"] = new ServerPage();
         var settingsPage = new SettingsPage(settings);
@@ -164,6 +165,9 @@ public sealed class MainWindow : Window, IConsoleActions
 
     /// <summary>The page of the server (the self-test gives it invented answers).</summary>
     public ServerPage Server => (ServerPage)_pages["server"];
+
+    /// <summary>The page of efficiency (the self-test gives it an invented summary).</summary>
+    public EfficiencyPage Efficiency => (EfficiencyPage)_pages["efficiency"];
 
     public void Navigate(string name)
     {
@@ -271,6 +275,7 @@ public sealed class MainWindow : Window, IConsoleActions
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
                      ("rounds", "Kolá a učenie", "Peach", "PeachDeep", Ui.Icons.Round),
                      ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
+                     ("efficiency", "Efektivita", "Mint", "MintDeep", "M3,17 H17 M5,17 V11 M9,17 V6 M13,17 V9 M17,17 V3"),
                      ("service", "Servis", "Sky", "SkyDeep", "M10,2 V9 M5.5,5 A7,7 0 1 0 14.5,5"),
                      ("test", "Testovací režim", "Peach", "PeachDeep", "M10,2 L12,8 L18,8 L13,12 L15,18 L10,14 L5,18 L7,12 L2,8 L8,8 Z"),
                      ("server", "Server", "Mint", "MintDeep", "M3,3 H17 V8 H3 Z M3,12 H17 V17 H3 Z M6,5.5 H7 M6,14.5 H7 M11,5.5 H14 M11,14.5 H14"),
@@ -578,6 +583,11 @@ public sealed class MainWindow : Window, IConsoleActions
         await Refresh();
         return answer?["stopped"] is not null;
     }
+
+    async Task<JsonObject?> IConsoleActions.Efficiency(double days) => await AskServer<JsonObject>(c => cancel => c.EfficiencyAsync(days, cancel), 60);
+
+    public async Task<(byte[] Table, int Rows)?> EfficiencyTable(double days) =>
+        await AskServer<(byte[] Table, int Rows)?>(c => async cancel => await c.EfficiencyTableAsync(days, cancel), 120);
 
     public async Task<bool> ModelFromRelease() => await AskServer<bool>(c => c.ServerModelFromReleaseAsync, 10);
 

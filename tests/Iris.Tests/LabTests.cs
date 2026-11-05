@@ -165,6 +165,18 @@ public static class LabTests
             using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), default);
             var snapshot = await console.SnapshotAsync(default);
             Assert.Equal(2, snapshot["agents"]!.AsArray().Count, "the hub knows both computers");
+
+            // the log of efficiency: a line per computer and round, with what the computer measured while it learned
+            var efficiency = await console.EfficiencyAsync(1, default);
+            var computers = efficiency["computers"]!.AsArray().OfType<JsonObject>().ToList();
+            Assert.Equal(2, computers.Count, "both computers");
+            Assert.True(efficiency["lines"]!.GetValue<double>() > 0 && Math.Abs(computers.Sum(c => c["share"]!.GetValue<double>()) - 100) < 0.1, "their shares make the whole");
+            Assert.True(computers.All(c => c["per_thread"]?.GetValue<double>() > 0 && c["hours"]!.GetValue<double>() > 0 && c["used"]!.GetValue<int>() > 0), "speed per thread, hours, rounds used");
+            Assert.True(computers.All(c => c["threads"]?.GetValue<double>() >= 1), "with the load they had");
+            var (table, rows) = await console.EfficiencyTableAsync(1, default);
+            var text = System.Text.Encoding.UTF8.GetString(table).TrimStart('\uFEFF').Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(rows + 1, text.Length, "a heading and a row per computer and round");
+            Assert.True(text[0].StartsWith("time;round;computer;", StringComparison.Ordinal) && text[1].Split(';').Length == EfficiencyLog.Columns.Count, "the columns for Excel");
             Assert.True(snapshot["agents"]!.AsArray().All(a => a!["status"]?["machine"]?["cores"] is not null), "with their measurements");
             for (var i = 0; i < 100 && (await console.SnapshotAsync(default))["tests"]!.AsArray().Count == 0; i++)
             {

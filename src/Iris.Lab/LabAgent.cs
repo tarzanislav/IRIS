@@ -5,6 +5,69 @@ using Iris.Vision.Training;
 
 namespace Iris.Lab;
 
+/// <summary>
+/// What a computer measured while it learned one round (every few seconds): the mean load, its own and of the
+/// others, and the highest strain with its reasons – sent with the round's change for the log of efficiency.
+/// </summary>
+internal sealed class RoundLoad
+{
+    private readonly Lock _gate = new();
+    private readonly HashSet<string> _reasons = new(StringComparer.Ordinal);
+    private int _count;
+    private double _own;
+    private double _total;
+    private double _others;
+    private int _strain;
+
+    public void Add(MachineSample sample, Strain? strain)
+    {
+        lock (_gate)
+        {
+            AddLocked(sample, strain);
+        }
+    }
+
+    private void AddLocked(MachineSample sample, Strain? strain)
+    {
+        _count++;
+        _own += sample.CpuOwn;
+        _total += sample.CpuTotal;
+        _others += sample.CpuOthers;
+        if (strain is { Level: > 0 })
+        {
+            _strain = Math.Max(_strain, strain.Level);
+            foreach (var (code, _) in strain.Reasons)
+            {
+                _reasons.Add(code);
+            }
+        }
+    }
+
+    public JsonObject Receipt(RoundWork work, double asked, int threads, double duty, bool eco)
+    {
+        lock (_gate)
+        {
+            return ReceiptLocked(work, asked, threads, duty, eco);
+        }
+    }
+
+    private JsonObject ReceiptLocked(RoundWork work, double asked, int threads, double duty, bool eco) => new()
+    {
+        ["logical"] = Environment.ProcessorCount,
+        ["asked"] = Math.Round(asked, 1),
+        ["stopped"] = work.Stopped,
+        ["threads"] = threads,
+        ["duty"] = Math.Round(duty, 2),
+        ["eco"] = eco,
+        ["per_thread"] = work.Seconds > 0 ? Math.Round(work.Lines / (work.Seconds * Math.Max(0.05, duty) * Math.Max(1, threads)), 3) : null,
+        ["cpu_own"] = _count > 0 ? Math.Round(_own / _count, 1) : null,
+        ["cpu_total"] = _count > 0 ? Math.Round(_total / _count, 1) : null,
+        ["cpu_others"] = _count > 0 ? Math.Round(_others / _count, 1) : null,
+        ["strain"] = _strain,
+        ["reasons"] = string.Join(',', _reasons.Order(StringComparer.Ordinal)),
+    };
+}
+
 /// <summary>A shutdown or restart: at once or after a minute's warning, by force or not.</summary>
 public sealed record PowerRequest(string Command, bool Now = false, bool Force = false)
 {
@@ -86,6 +149,7 @@ public sealed class LabAgent
     private StrainSignals _signals = StrainSignals.None;
     private Strain? _strain;
     private List<(string Name, double Share)> _others = [];
+    private RoundLoad _load = new();
     private bool _lookingAtOthers;
     private readonly Lock _gate = new();
     private Dictionary<string, string[]> _sentences = [];
@@ -182,6 +246,10 @@ public sealed class LabAgent
                 // first look only prepares the next one
                 _others = _sample.CpuOthers >= 15 || _lookingAtOthers ? _machine.Others() : [];
                 _lookingAtOthers = _sample.CpuOthers >= 15;
+                if (_state == "learning")
+                {
+                    _load.Add(_sample, _strain);
+                }
                 _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? Threads(), _duty);
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);
                 await Task.Delay(TimeSpan.FromSeconds(_options.StatusSeconds), session.Token);
@@ -340,6 +408,7 @@ public sealed class LabAgent
         var learning = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         _learning = learning;
         _round = round;
+        _load = new RoundLoad();
         _state = "learning";
         _learningTask = Task.Run(async () =>
         {
@@ -361,6 +430,7 @@ public sealed class LabAgent
                 ["seconds"] = Math.Round(work.Seconds, 1),
                 ["loss"] = double.IsFinite(work.Loss) ? work.Loss : null,
                 ["layout"] = layout,
+                ["receipt"] = _load.Receipt(work, seconds, learner.Threads, _duty, _ecoSet ?? _eco),
             };
             _state = "idle";
             try
