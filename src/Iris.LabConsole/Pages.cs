@@ -92,6 +92,12 @@ public interface IConsoleActions
     /// <summary>The classroom from the learning file of the newest signed release; true when the request was left.</summary>
     Task<bool> ModelFromRelease();
 
+    /// <summary>The test mode (hubs from 0.4.4): the hub's answer, or null when it cannot be asked.</summary>
+    Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco);
+
+    /// <summary>Ends the test mode; true when the hub took it.</summary>
+    Task<bool> StopTest();
+
     /// <summary>Opens a computer on the page of computers.</summary>
     void Open(string computer);
 }

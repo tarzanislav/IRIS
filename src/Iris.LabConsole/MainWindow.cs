@@ -90,11 +90,18 @@ public sealed class MainWindow : Window, IConsoleActions
         }
 
         Title = "IRIS – učebňa";
-        Width = 1360;
-        Height = 880;
-        MinWidth = 1080;
-        MinHeight = 640;
+        // never larger than the screen (with a scaling of 150 % a notebook has about 830 points of height): the title
+        // bar with minimize, maximize and close must stay on the screen; a small screen starts maximized
+        var area = SystemParameters.WorkArea;
+        Width = Math.Min(1360, area.Width);
+        Height = Math.Min(880, area.Height);
+        MinWidth = Math.Min(1080, area.Width);
+        MinHeight = Math.Min(640, area.Height);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        if (area.Width < 1360 || area.Height < 880)
+        {
+            WindowState = WindowState.Maximized;
+        }
         ApplyTheme(settings.Theme);
 
         _pages["overview"] = new OverviewPage();
@@ -111,6 +118,7 @@ public sealed class MainWindow : Window, IConsoleActions
         var network = new NetworkPage();
         network.Scan = ScanNetwork;
         _pages["network"] = network;
+        _pages["test"] = new TestPage();
         _pages["server"] = new ServerPage();
         var settingsPage = new SettingsPage(settings);
         settingsPage.Saved = () =>
@@ -262,6 +270,7 @@ public sealed class MainWindow : Window, IConsoleActions
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
                      ("rounds", "Kolá a učenie", "Peach", "PeachDeep", Ui.Icons.Round),
                      ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
+                     ("test", "Testovací režim", "Peach", "PeachDeep", "M10,2 L12,8 L18,8 L13,12 L15,18 L10,14 L5,18 L7,12 L2,8 L8,8 Z"),
                      ("server", "Server", "Mint", "MintDeep", "M3,3 H17 V8 H3 Z M3,12 H17 V17 H3 Z M6,5.5 H7 M6,14.5 H7 M11,5.5 H14 M11,14.5 H14"),
                      ("settings", "Nastavenia", "Lilac", "LilacDeep", "M10,6 A4,4 0 1 1 10,14 A4,4 0 1 1 10,6 Z M10,1 V4 M10,16 V19 M1,10 H4 M16,10 H19"),
                  })
@@ -552,6 +561,20 @@ public sealed class MainWindow : Window, IConsoleActions
         var done = await AskServer<bool>(c => c.RestartServerAsync, 10);
         _connection.Text = done ? "server sa reštartuje – o pol minúty sa konzola pripojí znova" : _connection.Text;
         return done;
+    }
+
+    public async Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco)
+    {
+        var answer = await AskServer<JsonObject>(c => cancel => c.StartTestAsync(computers, minutes, duty, cores, eco, cancel), 15);
+        await Refresh();
+        return answer;
+    }
+
+    public async Task<bool> StopTest()
+    {
+        var answer = await AskServer<JsonObject>(c => c.StopTestAsync, 15);
+        await Refresh();
+        return answer?["stopped"] is not null;
     }
 
     public async Task<bool> ModelFromRelease() => await AskServer<bool>(c => c.ServerModelFromReleaseAsync, 10);

@@ -109,6 +109,23 @@ public sealed class LabConsoleClient : IDisposable
     public async Task<bool> ServerModelFromReleaseAsync(CancellationToken cancel) =>
         (await Server("model", [], cancel))["requested"]?.GetValue<bool>() ?? false;
 
+    /// <summary>
+    /// The test mode: the chosen computers (null = all) learn now for some minutes with this load (shares of the time
+    /// and of the cores, the efficiency mode of Windows), also outside the time of learning – hubs from 0.4.4.
+    /// </summary>
+    public Task<JsonObject> StartTestAsync(IEnumerable<string>? computers, double minutes, double duty, double cores, bool eco, CancellationToken cancel) =>
+        Server("test", new JsonObject
+        {
+            ["computers"] = computers is null ? null : new JsonArray([.. computers.Select(c => (JsonNode?)c)]),
+            ["minutes"] = minutes,
+            ["duty"] = duty,
+            ["cores"] = cores,
+            ["eco"] = eco,
+        }, cancel);
+
+    /// <summary>Ends the test mode at once.</summary>
+    public Task<JsonObject> StopTestAsync(CancellationToken cancel) => Server("test-stop", [], cancel);
+
     private Task<JsonObject> Server(string what, JsonObject header, CancellationToken cancel)
     {
         header["what"] = what;

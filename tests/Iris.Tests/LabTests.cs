@@ -527,6 +527,104 @@ public static class LabTests
     }
 
     [Test]
+    public static async Task TheTestModeLetsTheChosenComputersLearnNow()
+    {
+        var fonts = new[] { "/usr/share/fonts/truetype/dejavu", @"C:\Windows\Fonts" }.Where(Directory.Exists).ToArray();
+        if (fonts.Length == 0)
+        {
+            throw new SkipException("no fonts on this computer");
+        }
+
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-testmode-{Environment.ProcessId}");
+        try
+        {
+            // a Wednesday morning: outside the time of learning (15:00–06:00, no weekends)
+            var t0 = DateTime.Now;
+            var log = new List<string>();
+            var options = new LabHubOptions
+            {
+                Folder = folder,
+                Port = 0,
+                RoundMinutes = 0.06,
+                GraceMinutes = 0.1,
+                BatchSize = 8,
+                Schedule = new LabSchedule(new TimeOnly(15, 0), new TimeOnly(6, 0), false),
+                AutoWake = false,
+                Now = () => new DateTime(2026, 11, 4, 10, 0, 0) + (DateTime.Now - t0),
+                Log = line => { lock (log) { log.Add(line); } },
+            };
+            var hub = new LabHub(options, OcrWeights.Create(OcrTrainingTests.Tiny(8, 8), 5), new OcrLearningState { PlanStart = 0, PlanEnd = 50, PlanRate = 1e-3 });
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var hubTask = hub.RunAsync(stop.Token);
+            while (hub.Port == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            var key = LabKeys.Read(Path.Combine(folder, "agent.key"));
+            var agents = new[] { "PC-01", "PC-02" }.Select(name => new LabAgent(new LabAgentOptions
+            {
+                Hub = "127.0.0.1",
+                Port = hub.Port,
+                Name = name,
+                Key = key,
+                Fonts = fonts,
+                StatusSeconds = 1,
+                OthersLimit = 101,
+            }).RunAsync(stop.Token)).ToArray();
+            using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), stop.Token);
+            JsonObject Agent(JsonObject snapshot, string name) => snapshot["agents"]!.AsArray().OfType<JsonObject>().First(a => a["name"]!.GetValue<string>() == name);
+            while (!stop.IsCancellationRequested && (await console.SnapshotAsync(stop.Token))["agents"]!.AsArray().Count(a => a!["state"]!.GetValue<string>() == "waiting") < 2)
+            {
+                await Task.Delay(200);
+            }
+
+            await Task.Delay(1500);
+            Assert.Equal(0, hub.Version, "outside the time of learning nothing is learned");
+
+            var answer = await console.StartTestAsync(["PC-01", "PC-99"], 0.25, 1, 0.5, eco: false, stop.Token);
+            Assert.Equal(1, answer["computers"]!.GetValue<int>(), "only the known computer that was chosen");
+            var snapshot = await console.SnapshotAsync(stop.Token);
+            Assert.True(snapshot["test"] is JsonObject, "the console sees the test");
+            Assert.True(Agent(snapshot, "PC-01")["test"]!.GetValue<bool>() && !Agent(snapshot, "PC-02")["test"]!.GetValue<bool>(), "and on which computer");
+            while (hub.Version < 1 && !stop.IsCancellationRequested)
+            {
+                await Task.Delay(200);
+            }
+
+            Assert.True(hub.Version >= 1, "the chosen computer learned now, and it is kept");
+            Assert.True(File.ReadAllLines(Path.Combine(folder, "rounds.jsonl")).All(l => JsonNode.Parse(l)!["computers"]!.GetValue<int>() == 1), "alone");
+            var status = Agent(await console.SnapshotAsync(stop.Token), "PC-01")["status"]!;
+            Assert.Equal(1.0, status["duty"]!.GetValue<double>(), "with the load of the test");
+
+            // the time of the test runs out by itself; the other computer never took part
+            while (!stop.IsCancellationRequested && (await console.SnapshotAsync(stop.Token))["test"] is JsonObject)
+            {
+                await Task.Delay(200);
+            }
+
+            snapshot = await console.SnapshotAsync(stop.Token);
+            Assert.Equal(0, Agent(snapshot, "PC-02")["rounds"]!.GetValue<int>(), "the computer that was not chosen waited");
+            lock (log)
+            {
+                Assert.True(log.Any(l => l.Contains("started a test", StringComparison.Ordinal)) && log.Any(l => l.Contains("is over", StringComparison.Ordinal)), "the log has the test");
+            }
+
+            // a test of all, stopped at once
+            Assert.Equal(2, (await console.StartTestAsync(null, 30, 0.25, 0.25, eco: true, stop.Token))["computers"]!.GetValue<int>(), "all connected");
+            Assert.True((await console.StopTestAsync(stop.Token))["stopped"]!.GetValue<bool>(), "stopped");
+            Assert.True((await console.SnapshotAsync(stop.Token))["test"] is null, "no test any more");
+            stop.Cancel();
+            await hubTask;
+            await Task.WhenAll(agents);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Test]
     public static void TheHubStartsFromTheLearningFileTheUpdaterLeft()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-start-{Environment.ProcessId}");

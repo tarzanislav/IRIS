@@ -32,7 +32,7 @@ public partial class App : Application
         try
         {
             Directory.CreateDirectory(folder);
-            var window = new MainWindow(new ConsoleSettings(), offline: true) { Width = 1320, Height = 860 };
+            var window = new MainWindow(new ConsoleSettings(), offline: true) { Width = 1320, Height = 860, WindowState = WindowState.Normal };
             Fill(window.Data);
             window.Server.Fake(new JsonObject
             {
@@ -93,6 +93,8 @@ public partial class App : Application
             Picture(window, folder, "computers-dark");
             window.Navigate("server");
             Picture(window, folder, "server-dark");
+            window.Navigate("test");
+            Picture(window, folder, "test-dark");
             window.Close();
             return 0;
         }
@@ -157,6 +159,7 @@ public partial class App : Application
                 ["address"] = $"10.0.0.{100 + i}",
                 ["mac"] = $"00-11-22-33-44-{i:X2}",
                 ["woken"] = i % 3 == 0,
+                ["test"] = i <= 6,
                 ["connected"] = state is not "gone" and not "uninstalled",
                 ["state"] = state,
                 ["leaving"] = state == "leaving",
@@ -215,6 +218,16 @@ public partial class App : Application
         {
             ["version"] = 1060,
             ["open"] = true,
+            ["test"] = new JsonObject
+            {
+                ["started"] = now.AddMinutes(-4).ToString("o", CultureInfo.InvariantCulture),
+                ["until"] = now.AddMinutes(16).ToString("o", CultureInfo.InvariantCulture),
+                ["computers"] = new JsonArray([.. Enumerable.Range(1, 6).Select(i => (JsonNode?)$"PC-{i:00}")]),
+                ["duty"] = 1.0,
+                ["cores"] = 1.0,
+                ["eco"] = false,
+                ["console"] = "notebook-skola",
+            },
             ["auto_wake"] = true,
             ["schedule"] = new JsonObject { ["from"] = "15:00", ["until"] = "06:00", ["weekends"] = true },
             ["round"] = new JsonObject { ["number"] = 61, ["deadline"] = now.AddMinutes(7).ToString("o", CultureInfo.InvariantCulture), ["taking_part"] = 16, ["done"] = 3 },

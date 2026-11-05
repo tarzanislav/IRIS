@@ -94,6 +94,14 @@ Stránka **Server** v konzole – všetko bez prihlásenia na server:
 
 Konzola nemôže na serveri spustiť nič iné než tieto pevné úkony a model berie len z podpísaného vydania.
 
+### Testovací režim (od 0.4.4)
+Stránka **Testovací režim** v konzole: zvolené počítače (všetky pripojené, skupina, alebo vybrané) sa **začnú učiť
+hneď**, aj mimo času učenia, so záťažou zvolenou v konzole – predvoľby Jemne 25 %, Bežne 50 %, Naplno 100 %, alebo
+posuvníky podielu času a jadier a úsporný režim Windows – na 10 minút až 2 hodiny. Vidno pri tom procesor, podiel
+učenia, teplotu, vlákna a riadky za sekundu každého počítača. Čo sa naučia, sa ponechá. Po skončení času sa počítače
+samy vrátia k svojim nastaveniam (kolo, ktoré beží, dobehne); **Zastaviť test** ich mimo času učenia zastaví hneď.
+Reštart servera test ukončí. Ochrana pred prehriatím (`hot`) platí aj počas testu.
+
 ### Aktualizácie (podpísané)
 - **Server sa raz denne okolo poludnia pozrie na GitHub**, či vyšla nová verzia IRIS (`iris-hub-update.timer`).
 - **Inštaluje len programy podpísané kľúčom vydaní IRIS.** Súkromná časť kľúča je len tajomstvom vo vydávacom procese

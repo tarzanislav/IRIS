@@ -112,6 +112,7 @@ public sealed class LabHub
     private readonly DateTime _started;
     private readonly Lazy<int> _fontFiles;
     private CancellationTokenSource? _stop;
+    private TestRun? _test;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -250,6 +251,7 @@ public sealed class LabHub
                     ["address"] = a.Address,
                     ["mac"] = a.Mac,
                     ["woken"] = _woken.Contains(a.Name),
+                    ["test"] = InTest(a, now),
                     ["connected"] = a.Channel is not null,
                     ["state"] = a.Uninstalled && a.Channel is null ? "uninstalled" : a.State,
                     ["leaving"] = a.Leaving,
@@ -274,6 +276,7 @@ public sealed class LabHub
                 ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
                 ["hub_version"] = LabUpdates.Version,
+                ["test"] = _test is { } t && now < t.Until ? t.ToJson() : null,
                 ["consoles"] = new JsonArray([.. _consoles.Values.Select(c => c.Name.StartsWith('@') ? c.Name[1..] : "").Order(StringComparer.OrdinalIgnoreCase).Select(n => (JsonNode?)n)]),
                 ["config"] = ConfigJson(),
                 ["update"] = _update is { } u ? new JsonObject
@@ -325,8 +328,17 @@ public sealed class LabHub
         List<string> toWake = [];
         List<AgentEntry> toReturn = [];
         List<AgentEntry> toUpdate = [];
+        List<AgentEntry> testOver = [];
         lock (_gate)
         {
+            if (_test is { } test && now >= test.Until)
+            {
+                // the test is over: the computers get their own settings again and wait for the time of learning
+                testOver.AddRange(_agents.Values.Where(a => a.Channel is not null && test.Includes(a.Name)));
+                _test = null;
+                Note($"the test of {test.Console} is over");
+            }
+
             if (now - _lastUpdateLook > TimeSpan.FromMinutes(5))
             {
                 _lastUpdateLook = now;
@@ -385,8 +397,8 @@ public sealed class LabHub
                 Close(round, now);
             }
 
-            var idle = _agents.Values.Where(a => a.Channel is not null && a.State is "idle" or "waiting" && Switch(a, "learn")).ToList();
-            if (open && _round is null && idle.Count > 0)
+            var idle = _agents.Values.Where(a => a.Channel is not null && a.State is "idle" or "waiting" && (Switch(a, "learn") || InTest(a, now))).ToList();
+            if (_round is null && idle.Any(a => open || InTest(a, now)))
             {
                 var number = (_rounds.LastOrDefault()?["round"]?.GetValue<int>() ?? 0) + 1;
                 var phase = Math.Clamp((_state.Step - _state.PlanStart) / Math.Max(1, _state.PlanEnd - _state.PlanStart), 0, 1);
@@ -398,13 +410,13 @@ public sealed class LabHub
             foreach (var a in idle)
             {
                 // a computer joins the round (or, after a new connection, joins it again) while a third of it is left
-                if (open && _round is { } r && !r.Done.Contains(a.Name) && r.Deadline - now > TimeSpan.FromMinutes(_options.RoundMinutes / 3))
+                if ((open || InTest(a, now)) && _round is { } r && !r.Done.Contains(a.Name) && r.Deadline - now > TimeSpan.FromMinutes(_options.RoundMinutes / 3))
                 {
                     r.Participants.Add(a.Name);
                     a.State = "learning";
                     toStart.Add(a);
                 }
-                else if (!open && a.State != "waiting")
+                else if (!open && !InTest(a, now) && a.State != "waiting")
                 {
                     a.State = "waiting";
                     toWait.Add(a);
@@ -415,6 +427,11 @@ public sealed class LabHub
         foreach (var mac in toWake)
         {
             await WakeQuietly(mac, cancel);
+        }
+
+        foreach (var a in testOver)
+        {
+            await Send(a, new LabMessage(MessageKind.Settings, Settings(a)), cancel);
         }
 
         foreach (var a in toUpdate)
@@ -809,6 +826,9 @@ public sealed class LabHub
                         await Configure(message.Header, cancel);
                         await channel.SendAsync(new LabMessage(MessageKind.Configure, ConfigJson()), cancel);
                         break;
+                    case MessageKind.Server when message.Header["what"]?.GetValue<string>() is "test" or "test-stop":
+                        await Test(channel, message.Header, cancel);
+                        break;
                     case MessageKind.Server:
                         var what = message.Header["what"]?.GetValue<string>() ?? "";
                         await channel.SendAsync(new LabMessage(MessageKind.Server, ServerRequest(what, message.Header, ConsoleName(channel))), cancel);
@@ -1076,6 +1096,73 @@ public sealed class LabHub
         return count;
     }
 
+    private bool InTest(AgentEntry agent, DateTime now) => _test is { } t && now < t.Until && t.Includes(agent.Name);
+
+    // the test mode from the console: the chosen computers learn now (also outside the time of learning) with the
+    // chosen load, for a few minutes; what they learn is kept. "test-stop" ends it at once.
+    private async Task Test(LabChannel channel, JsonObject header, CancellationToken cancel)
+    {
+        var console = ConsoleName(channel);
+        var now = _options.Now();
+        List<AgentEntry> affected;
+        List<AgentEntry> stopped = [];
+        JsonObject answer;
+        lock (_gate)
+        {
+            var before = _test;
+            if (header["what"]!.GetValue<string>() == "test-stop")
+            {
+                _test = null;
+                affected = [.. _agents.Values.Where(a => a.Channel is not null && before is not null && before.Includes(a.Name))];
+                if (!_options.Schedule.IsOpen(now))
+                {
+                    // outside the time of learning they stop at once (their part of the round is left out)
+                    foreach (var a in affected.Where(a => a.State == "learning"))
+                    {
+                        a.State = "waiting";
+                        stopped.Add(a);
+                    }
+                }
+
+                Note($"console {console} stopped the test");
+                answer = new JsonObject { ["stopped"] = before is not null };
+            }
+            else
+            {
+                var minutes = Math.Clamp(header["minutes"]?.GetValue<double>() ?? 20, 0.1, 240);
+                HashSet<string>? computers = header["computers"] is JsonArray list
+                    ? new HashSet<string>(list.Select(n => n?.GetValue<string>() ?? "").Where(n => _agents.ContainsKey(n)), StringComparer.OrdinalIgnoreCase)
+                    : null;
+                if (computers is { Count: 0 })
+                {
+                    answer = new JsonObject { ["error"] = "no known computer was chosen" };
+                    affected = [];
+                }
+                else
+                {
+                    _test = new TestRun(now, now.AddMinutes(minutes), computers,
+                        Math.Clamp(header["duty"]?.GetValue<double>() ?? 0.5, 0.05, 1), Math.Clamp(header["cores"]?.GetValue<double>() ?? 0.5, 0.05, 1),
+                        header["eco"]?.GetValue<bool>() ?? true, console);
+                    affected = [.. _agents.Values.Where(a => a.Channel is not null && ((before?.Includes(a.Name) ?? false) || _test.Includes(a.Name)))];
+                    Note($"console {console} started a test of {minutes:0} min on {(computers is null ? "all computers" : string.Join(", ", computers.Order(StringComparer.OrdinalIgnoreCase)))}: " +
+                         $"{_test.Duty:P0} of the time on {_test.Cores:P0} of the cores, efficiency mode {(_test.Eco ? "on" : "off")}");
+                    answer = new JsonObject { ["test"] = _test.ToJson(), ["computers"] = affected.Count(a => _test.Includes(a.Name)) };
+                }
+            }
+        }
+
+        await channel.SendAsync(new LabMessage(MessageKind.Server, answer), cancel);
+        foreach (var a in affected)
+        {
+            await Send(a, new LabMessage(MessageKind.Settings, Settings(a)), cancel);
+        }
+
+        foreach (var a in stopped)
+        {
+            await Send(a, new LabMessage(MessageKind.Wait, new JsonObject { ["seconds"] = Math.Round(_options.Schedule.UntilChange(now).TotalSeconds) }), cancel);
+        }
+    }
+
     private void Note(string text) => _options.Log?.Invoke(text);
 
     private static string ConsoleName(LabChannel channel) => channel.PeerName.StartsWith('@') ? channel.PeerName[1..] : "(main key)";
@@ -1244,6 +1331,15 @@ public sealed class LabHub
     private JsonObject Settings(AgentEntry agent)
     {
         var settings = SettingsOf(agent);
+        if (_test is { } test && InTest(agent, _options.Now()))
+        {
+            // the test mode: the load the console chose, for the time of the test
+            settings["duty"] = test.Duty;
+            settings["cores"] = test.Cores;
+            settings["eco"] = test.Eco;
+            settings["learn"] = true;
+        }
+
         settings["batch"] = _options.BatchSize;
         settings["schedule"] = _options.Schedule.ToJson();
         return settings;
@@ -1350,6 +1446,22 @@ public sealed class LabHub
 
         /// <summary>It said it removes itself (until it connects again, e.g. installed anew).</summary>
         public bool Uninstalled { get; set; }
+    }
+
+    private sealed record TestRun(DateTime Started, DateTime Until, HashSet<string>? Computers, double Duty, double Cores, bool Eco, string Console)
+    {
+        public bool Includes(string name) => Computers is null || Computers.Contains(name);
+
+        public JsonObject ToJson() => new()
+        {
+            ["started"] = Started.ToString("o", CultureInfo.InvariantCulture),
+            ["until"] = Until.ToString("o", CultureInfo.InvariantCulture),
+            ["computers"] = Computers is null ? null : new JsonArray([.. Computers.Order(StringComparer.OrdinalIgnoreCase).Select(c => (JsonNode?)c)]),
+            ["duty"] = Duty,
+            ["cores"] = Cores,
+            ["eco"] = Eco,
+            ["console"] = Console,
+        };
     }
 
     private sealed record AvailableUpdate(UpdateManifest Manifest, byte[] Json, byte[] Signature, string Folder);
