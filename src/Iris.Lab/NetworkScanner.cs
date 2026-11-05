@@ -331,6 +331,11 @@ public static class NetworkScanner
     /// <summary>The MAC of the network card that has the given local address (what the agent tells the hub, to be woken later).</summary>
     public static string? MacOf(IPAddress local)
     {
+        if (local.IsIPv4MappedToIPv6)
+        {
+            local = local.MapToIPv4(); // a socket of both families gives ::ffff:a.b.c.d – the card has a.b.c.d
+        }
+
         foreach (var face in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (face.GetIPProperties().UnicastAddresses.Any(u => u.Address.Equals(local)))

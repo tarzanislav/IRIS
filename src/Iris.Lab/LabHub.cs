@@ -645,7 +645,8 @@ public sealed class LabHub
                 return;
             }
 
-            var address = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "";
+            var remote = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+            var address = (remote is { IsIPv4MappedToIPv6: true } ? remote.MapToIPv4() : remote)?.ToString() ?? "";
             var agent = _agents.AddOrUpdate(channel.PeerName, name => new AgentEntry(name), (_, existing) => existing);
             lock (_gate)
             {
@@ -657,6 +658,17 @@ public sealed class LabHub
             }
 
             Note($"{agent.Name} connected from {address}");
+            if (agent.Mac is null && NetworkScanner.ArpTable().TryGetValue(address, out var seen))
+            {
+                // the computer did not tell its card (an older agent): the hub sees it in its ARP table
+                lock (_gate)
+                {
+                    agent.Mac = seen;
+                    SaveKnown();
+                }
+
+                Note($"{agent.Name}: card {seen} from the ARP table of the server");
+            }
 
             try
             {
