@@ -5,6 +5,12 @@ using Iris.Vision.Training;
 
 namespace Iris.Lab;
 
+/// <summary>A shutdown or restart: at once or after a minute's warning, by force or not.</summary>
+public sealed record PowerRequest(string Command, bool Now = false, bool Force = false)
+{
+    public override string ToString() => Command + (Now ? " now" : "") + (Force ? " force" : "");
+}
+
 /// <summary>How a computer of the classroom takes part.</summary>
 public sealed record LabAgentOptions
 {
@@ -35,7 +41,7 @@ public sealed record LabAgentOptions
     public Action Leave { get; init; } = () => { };
 
     /// <summary>What shutdown and restart do (tests replace it; by default the system's shutdown command).</summary>
-    public Action<string> Power { get; init; } = DefaultPower;
+    public Action<PowerRequest> Power { get; init; } = DefaultPower;
 
     /// <summary>Lines of progress (the service writes them to its log).</summary>
     public Action<string>? Log { get; init; }
@@ -51,12 +57,14 @@ public sealed record LabAgentOptions
     /// </summary>
     public Action Restart { get; init; } = () => Environment.Exit(3);
 
-    private static void DefaultPower(string command)
+    // Windows: a minute's warning to the user (with it Windows closes the programs itself), or at once; by force the
+    // programs that hold the shutdown up are closed without asking (unsaved work is lost)
+    private static void DefaultPower(PowerRequest request)
     {
-        var restart = command == LabCommands.Restart;
+        var restart = request.Command == LabCommands.Restart;
         var start = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("shutdown.exe", restart ? "/r /t 60 /c \"IRIS\"" : "/s /t 60 /c \"IRIS\"")
-            : new ProcessStartInfo("systemctl", restart ? "reboot" : "poweroff");
+            ? new ProcessStartInfo("shutdown.exe", $"{(restart ? "/r" : "/s")} /t {(request.Now ? 0 : 60)}{(request.Force ? " /f" : "")} /c \"IRIS\"")
+            : new ProcessStartInfo("systemctl", (restart ? "reboot" : "poweroff") + (request.Force ? " --force" : ""));
         start.UseShellExecute = false;
         start.CreateNoWindow = true;
         using var _ = Process.Start(start);
@@ -191,7 +199,8 @@ public sealed class LabAgent
                         await StartRound(channel, message, session.Token);
                         break;
                     case MessageKind.Command:
-                        await Command(channel, message.Header["command"]?.GetValue<string>() ?? "", session.Token);
+                        await Command(channel, message.Header["command"]?.GetValue<string>() ?? "", session.Token,
+                            message.Header["now"]?.GetValue<bool>() == true, message.Header["force"]?.GetValue<bool>() == true);
                         break;
                     case MessageKind.Update:
                         Update(message);
@@ -416,9 +425,9 @@ public sealed class LabAgent
         }
     }
 
-    private async Task Command(LabChannel channel, string command, CancellationToken cancel)
+    private async Task Command(LabChannel channel, string command, CancellationToken cancel, bool now = false, bool force = false)
     {
-        _options.Log?.Invoke($"command: {command}");
+        _options.Log?.Invoke($"command: {command}{(now ? " now" : "")}{(force ? " by force" : "")}");
         switch (command)
         {
             case LabCommands.Uninstall when !_left:
@@ -441,7 +450,7 @@ public sealed class LabAgent
                 break;
             case LabCommands.Shutdown or LabCommands.Restart:
                 StopLearning();
-                _options.Power(command);
+                _options.Power(new PowerRequest(command, now, force));
                 break;
             default:
                 break; // anything else is not a command of IRIS

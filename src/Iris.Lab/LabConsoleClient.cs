@@ -54,9 +54,9 @@ public sealed class LabConsoleClient : IDisposable
     public Task<int> WakeAsync(string target, CancellationToken cancel) => CommandAsync(target, "wake", cancel);
 
     /// <summary>Sends one of <see cref="LabCommands"/> to a computer ("*" = all); returns to how many it went.</summary>
-    public async Task<int> CommandAsync(string target, string command, CancellationToken cancel)
+    public async Task<int> CommandAsync(string target, string command, CancellationToken cancel, bool now = false, bool force = false)
     {
-        var answer = await Ask(new LabMessage(MessageKind.Command, new JsonObject { ["target"] = target, ["command"] = command }), cancel);
+        var answer = await Ask(new LabMessage(MessageKind.Command, new JsonObject { ["target"] = target, ["command"] = command, ["now"] = now, ["force"] = force }), cancel);
         return answer["sent"]?.GetValue<int>() ?? 0;
     }
 

@@ -69,7 +69,7 @@ public sealed class ConsoleData
 public interface IConsoleActions
 {
     /// <summary>One of the fixed commands for a computer ("*" = all).</summary>
-    Task Command(string target, string command);
+    Task Command(string target, string command, bool now = false, bool force = false);
 
     /// <summary>A change of names, groups or settings; true when the hub took it.</summary>
     Task<bool> Configure(JsonObject change);

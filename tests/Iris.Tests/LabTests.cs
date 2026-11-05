@@ -183,6 +183,13 @@ public static class LabTests
             }
 
             Assert.Sequence(["PC-02 shutdown"], powered, "the computer was told to shut down");
+            Assert.Equal(1, await console.CommandAsync("PC-02", LabCommands.Restart, default, now: true, force: true), "a restart at once, by force");
+            for (var i = 0; i < 50 && powered.Count < 2; i++)
+            {
+                await Task.Delay(100);
+            }
+
+            Assert.Sequence(["PC-02 shutdown", "PC-02 restart now force"], powered, "with the console's choice");
 
             // uninstall: never to all at once; one computer finishes its round, says so and removes itself
             Assert.Equal(0, await console.CommandAsync("*", LabCommands.Uninstall, default), "uninstall is never sent to all");

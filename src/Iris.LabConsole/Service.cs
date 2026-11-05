@@ -18,6 +18,8 @@ public sealed class ServicePage : ConsolePage
     private readonly Border _onHost = new();
     private readonly Border _removeHost = new();
     private string? _removeChoice;
+    private bool _now;
+    private bool _force;
     private readonly HashSet<string> _offPicked = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _onPicked = new(StringComparer.OrdinalIgnoreCase);
     private string _offMode = "picked";
@@ -73,10 +75,20 @@ public sealed class ServicePage : ConsolePage
         var connected = data.Agents.Where(a => a["connected"]?.GetValue<bool>() == true).ToList();
         _offPicked.RemoveWhere(n => !connected.Any(a => Same(a, n)));
         var panel = new StackPanel();
-        panel.Children.Add(Ui.Heading("Vypnúť alebo reštartovať", $"{connected.Count} pripojených počítačov; Windows na počítači upozorní a vypne ho o minútu"));
+        panel.Children.Add(Ui.Heading("Vypnúť alebo reštartovať", $"{connected.Count} pripojených počítačov; bez voľieb Windows na počítači upozorní a vypne ho o minútu"));
         panel.Children.Add(Mode("service-off", _offMode, mode => { _offMode = mode; Redraw(data, _offHost); }));
         var chosen = Choose(data, connected, _offMode, _offPicked, () => Redraw(data, _offHost));
         panel.Children.Add(chosen.Panel);
+        var now = new CheckBox { Content = "ihneď (bez minútovej lehoty)", IsChecked = _now, Margin = new Thickness(0, 8, 24, 0), Foreground = Ui.Brush("Text") };
+        now.Checked += (_, _) => _now = true;
+        now.Unchecked += (_, _) => _now = false;
+        var force = new CheckBox { Content = "nasilu (zavrie aj programy, ktoré vypnutie brzdia – neuložená práca sa stratí)", IsChecked = _force, Margin = new Thickness(0, 8, 0, 0), Foreground = Ui.Brush("Text") };
+        force.Checked += (_, _) => _force = true;
+        force.Unchecked += (_, _) => _force = false;
+        var options = new WrapPanel();
+        options.Children.Add(now);
+        options.Children.Add(force);
+        panel.Children.Add(options);
         var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         buttons.Children.Add(Ui.Button($"Vypnúť ({chosen.Names().Count})", () => _ = Power(data, chosen.Names(), LabCommands.Shutdown), danger: true));
         buttons.Children.Add(Ui.Button($"Reštartovať ({chosen.Names().Count})", () => _ = Power(data, chosen.Names(), LabCommands.Restart)));
@@ -265,7 +277,9 @@ public sealed class ServicePage : ConsolePage
         }
 
         var what = command == LabCommands.Restart ? "reštartovať" : "vypnúť";
-        if (MessageBox.Show($"Naozaj {what} {Count(names.Count)}?\n\n{string.Join(", ", names.Select(n => Display(data, n)))}\n\nWindows používateľa upozorní a urobí to o 60 sekúnd.",
+        var how = (_now ? "Hneď, bez lehoty." : "Windows používateľa upozorní a urobí to o 60 sekúnd.") +
+                  (_force ? " Nasilu: programy sa zavrú bez pýtania, neuložená práca sa stratí." : "");
+        if (MessageBox.Show($"Naozaj {what} {Count(names.Count)}?\n\n{string.Join(", ", names.Select(n => Display(data, n)))}\n\n{how}",
                 "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
         {
             return;
@@ -273,10 +287,10 @@ public sealed class ServicePage : ConsolePage
 
         foreach (var name in names)
         {
-            await Actions.Command(name, command);
+            await Actions.Command(name, command, _now, _force);
         }
 
-        _note = $"Príkaz „{what}“ odoslaný na {Count(names.Count)}.";
+        _note = $"Príkaz „{what}“{(_now ? " ihneď" : "")}{(_force ? " nasilu" : "")} odoslaný na {Count(names.Count)}.";
         Redraw(data, _offHost);
     }
 

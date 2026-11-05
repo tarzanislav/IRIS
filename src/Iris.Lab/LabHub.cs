@@ -866,9 +866,20 @@ public sealed class LabHub
                         }
                         else if (LabCommands.All.Contains(command))
                         {
+                            // shutdown and restart: at once and by force only when the console asks for it
+                            var power = command is LabCommands.Shutdown or LabCommands.Restart;
+                            var atOnce = power && message.Header["now"]?.GetValue<bool>() == true;
+                            var force = power && message.Header["force"]?.GetValue<bool>() == true;
                             foreach (var a in _agents.Values.Where(a => a.Channel is not null && (target == "*" || string.Equals(a.Name, target, StringComparison.OrdinalIgnoreCase))))
                             {
-                                await Send(a, new LabMessage(MessageKind.Command, new JsonObject { ["command"] = command }), cancel);
+                                var order = new JsonObject { ["command"] = command };
+                                if (power)
+                                {
+                                    order["now"] = atOnce;
+                                    order["force"] = force;
+                                }
+
+                                await Send(a, new LabMessage(MessageKind.Command, order), cancel);
                                 sent++;
                             }
                         }

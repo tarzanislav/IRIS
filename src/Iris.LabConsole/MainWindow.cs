@@ -438,7 +438,7 @@ public sealed class MainWindow : Window, IConsoleActions
         }
     }
 
-    public async Task Command(string target, string command)
+    public async Task Command(string target, string command, bool now = false, bool force = false)
     {
         if (_client is null)
         {
@@ -449,7 +449,7 @@ public sealed class MainWindow : Window, IConsoleActions
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var sent = command == "wake" ? await _client.WakeAsync(target, timeout.Token) : await _client.CommandAsync(target, command, timeout.Token);
+            var sent = command == "wake" ? await _client.WakeAsync(target, timeout.Token) : await _client.CommandAsync(target, command, timeout.Token, now, force);
             _connection.Text = $"príkaz „{command}“ poslaný na {sent} {(sent == 1 ? "počítač" : "počítačov")}";
         }
         catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException)
