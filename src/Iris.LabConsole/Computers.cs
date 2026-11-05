@@ -226,7 +226,12 @@ public sealed class ComputersPage : ConsolePage
             await Configure(new JsonObject { ["alias"] = new JsonObject { ["computer"] = name, ["name"] = alias.Text.Trim() } }))));
         var groups = data.Groups.Select(g => g.Group).Where(g => g.Length > 0).ToList();
         var group = new ComboBox { IsEditable = true, ItemsSource = groups, Text = Ui.String(data.Config["groups"]?[name]) ?? "", MinWidth = 200 };
-        head.Children.Add(Ui.Caption($"Skupina (prázdna = podľa modelu{(Ui.String(agent["model"]) is { } model ? ": " + model : "")})"));
+        // the group it is in now: set by hand, or by its hardware model when the field is empty
+        var own = Ui.String(data.Config["groups"]?[name]);
+        var now = Ui.String(agent["group"]);
+        head.Children.Add(Ui.Caption(own is { Length: > 0 }
+            ? $"Skupina: {own} (zvolená ručne; prázdne pole = podľa modelu{(Ui.String(agent["model"]) is { } m ? " " + m : "")})"
+            : $"Skupina: {(now is { Length: > 0 } ? now : "žiadna")} – automaticky podľa modelu; inú vyberte alebo napíšte"));
         head.Children.Add(Line(group, Ui.Small("Uložiť skupinu", async () =>
             await Configure(new JsonObject { ["group"] = new JsonObject { ["computer"] = name, ["name"] = group.Text.Trim() } }))));
         panel.Children.Add(Ui.Card(head));
