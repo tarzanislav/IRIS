@@ -111,6 +111,7 @@ public sealed class MainWindow : Window, IConsoleActions
         var network = new NetworkPage();
         network.Scan = ScanNetwork;
         _pages["network"] = network;
+        _pages["server"] = new ServerPage();
         var settingsPage = new SettingsPage(settings);
         settingsPage.Saved = () =>
         {
@@ -151,6 +152,9 @@ public sealed class MainWindow : Window, IConsoleActions
 
     /// <summary>The network page (the self-test gives it a scan to show).</summary>
     public NetworkPage Network => (NetworkPage)_pages["network"];
+
+    /// <summary>The page of the server (the self-test gives it invented answers).</summary>
+    public ServerPage Server => (ServerPage)_pages["server"];
 
     public void Navigate(string name)
     {
@@ -258,6 +262,7 @@ public sealed class MainWindow : Window, IConsoleActions
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
                      ("rounds", "Kolá a učenie", "Peach", "PeachDeep", Ui.Icons.Round),
                      ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
+                     ("server", "Server", "Mint", "MintDeep", "M3,3 H17 V8 H3 Z M3,12 H17 V17 H3 Z M6,5.5 H7 M6,14.5 H7 M11,5.5 H14 M11,14.5 H14"),
                      ("settings", "Nastavenia", "Lilac", "LilacDeep", "M10,6 A4,4 0 1 1 10,14 A4,4 0 1 1 10,6 Z M10,1 V4 M10,16 V19 M1,10 H4 M16,10 H19"),
                  })
         {
@@ -535,6 +540,39 @@ public sealed class MainWindow : Window, IConsoleActions
         catch (Exception e) when (e is SocketException or LabProtocolException or OperationCanceledException)
         {
             Disconnect();
+        }
+    }
+
+    public async Task<JsonObject?> ServerStatus() => await Server(c => c.ServerStatusAsync, 20);
+
+    public async Task<IReadOnlyList<string>?> ServerLog(string name, int lines) => await Server(c => cancel => c.ServerLogAsync(name, lines, cancel), 30);
+
+    public async Task<bool> RestartServer()
+    {
+        var done = await Server(c => c.RestartServerAsync, 10);
+        _connection.Text = done ? "server sa reštartuje – o pol minúty sa konzola pripojí znova" : _connection.Text;
+        return done;
+    }
+
+    public async Task<bool> ModelFromRelease() => await Server(c => c.ServerModelFromReleaseAsync, 10);
+
+    // one question to the server itself; on a broken connection the console connects again with the next refresh
+    private async Task<T?> Server<T>(Func<LabConsoleClient, Func<CancellationToken, Task<T>>> ask, int seconds)
+    {
+        if (_client is null)
+        {
+            return default;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+            return await ask(_client)(timeout.Token);
+        }
+        catch (Exception e) when (e is IOException or SocketException or LabProtocolException or OperationCanceledException or ObjectDisposedException)
+        {
+            Disconnect();
+            return default;
         }
     }
 

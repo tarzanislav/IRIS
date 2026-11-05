@@ -56,6 +56,12 @@ public enum MessageKind : byte
 
     /// <summary>Console → hub: names, groups and settings of the computers; hub → console: the configuration as it is now.</summary>
     Configure = 13,
+
+    /// <summary>
+    /// Console → hub: the server itself – its state, the end of a log, a restart, or the model of the classroom from
+    /// the learning file of the newest signed release; hub → console: the answer (JSON). Hubs before 0.4.3 do not know it.
+    /// </summary>
+    Server = 14,
 }
 
 /// <summary>A message: its kind, a small JSON header and binary data (tensors), possibly empty.</summary>

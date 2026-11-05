@@ -468,6 +468,137 @@ public static class LabTests
         }
     }
 
+    [Test]
+    public static async Task TheConsoleSeesTheServerItsLogAndCanRestartIt()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-server-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var log = new HubLog(folder, "hub");
+            var options = new LabHubOptions
+            {
+                Folder = folder,
+                Port = 0,
+                Schedule = new LabSchedule(new TimeOnly(10, 0), new TimeOnly(10, 0), false),
+                AutoWake = false,
+                Fonts = [],
+                Log = log.Write,
+                ModelSource = "a test",
+            };
+            var hub = new LabHub(options, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState { Step = 7 });
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var hubTask = hub.RunAsync(stop.Token);
+            while (hub.Port == 0)
+            {
+                await Task.Delay(50);
+            }
+
+            using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), stop.Token);
+            File.WriteAllText(LabHub.UpdateResultPath(folder), """{"ok":false,"message":"GitHub did not answer"}""");
+            var state = await console.ServerStatusAsync(stop.Token);
+            Assert.Equal(LabUpdates.Version, state["hub_version"]!.GetValue<string>(), "the program");
+            Assert.Equal(7, state["model"]!["version"]!.GetValue<int>(), "the model");
+            Assert.Equal("a test", state["model"]!["source"]!.GetValue<string>(), "where it came from");
+            Assert.Equal(0, state["fonts"]!.GetValue<int>(), "no fonts: no measuring (the console says so)");
+            Assert.True(DateTimeOffset.Parse(state["now"]!.GetValue<string>(), System.Globalization.CultureInfo.InvariantCulture) > DateTimeOffset.Now.AddMinutes(-1), "the server's clock");
+            Assert.True(state["disk"]?["free_mb"]?.GetValue<long>() > 0, "free space");
+            Assert.Equal("GitHub did not answer", state["last_update"]!["message"]!.GetValue<string>(), "the updater's last result");
+
+            await console.ConfigureAsync(new JsonObject { ["alias"] = new JsonObject { ["computer"] = "PC-02", ["name"] = "Pri okne" } }, stop.Token);
+            var lines = await console.ServerLogAsync("hub", 100, stop.Token);
+            Assert.True(lines.Any(l => l.Contains("console (main key) connected", StringComparison.Ordinal)), "the log has the console");
+            Assert.True(lines.Any(l => l.Contains("changed the configuration", StringComparison.Ordinal) && l.Contains("Pri okne", StringComparison.Ordinal)), "and what it changed");
+            Assert.Equal(0, (await console.ServerLogAsync("../console.key", 10, stop.Token)).Count, "only the hub's own logs");
+
+            // the model from the release: a request for the updater (root), which the hub never runs itself
+            Assert.True(await console.ServerModelFromReleaseAsync(stop.Token), "the request is left");
+            Assert.True(JsonNode.Parse(File.ReadAllText(LabHub.UpdateRequestPath(folder)))!["model"]!.GetValue<bool>(), "for the updater");
+            Assert.True((await console.ServerStatusAsync(stop.Token))["update_waiting"]!.GetValue<bool>(), "the console sees it waiting");
+
+            Assert.True(await console.RestartServerAsync(stop.Token), "a restart");
+            await hubTask.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.True(hub.RestartAsked && !stop.IsCancellationRequested, "the hub ended by itself (its service starts it again)");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Test]
+    public static void TheHubStartsFromTheLearningFileTheUpdaterLeft()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-start-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var said = new List<string>();
+            LabHub.TakeStartModel(folder, said.Add);
+            Assert.Equal(0, said.Count, "nothing left: nothing changes");
+
+            var lab = OcrWeights.Create(OcrTrainingTests.Tiny(), 1);
+            OcrFiles.SaveTraining(LabHub.ModelPath(folder), lab, new AdamW(), new OcrLearningState { Step = 40 }, new JsonObject { ["source"] = "IRIS lab: learned on the computers of a classroom" });
+            var release = OcrWeights.Create(OcrTrainingTests.Tiny(), 2);
+            OcrFiles.SaveTraining(LabHub.StartModelPath(folder), release, new AdamW(), new OcrLearningState { Step = 83080 }, new JsonObject { ["source"] = "tools/ocr/train.py checkpoint, step 83080" });
+            LabHub.TakeStartModel(folder, said.Add);
+            Assert.Equal(83080, OcrFiles.LoadTraining(LabHub.ModelPath(folder)).State.Step, "the model is the release's");
+            Assert.True(!File.Exists(LabHub.StartModelPath(folder)), "taken");
+            var before = Directory.GetFiles(folder, "lab-model-before-*.iris");
+            Assert.Equal(1, before.Length, "the model before is kept");
+            Assert.Equal(40, OcrFiles.LoadTraining(before[0]).State.Step, "as it was");
+
+            // a broken file is put aside, the model stays
+            File.WriteAllText(LabHub.StartModelPath(folder), "not a model");
+            LabHub.TakeStartModel(folder, said.Add);
+            Assert.Equal(83080, OcrFiles.LoadTraining(LabHub.ModelPath(folder)).State.Step, "the model stays");
+            Assert.True(File.Exists(Path.Combine(folder, "start-model.bad.iris")), "the broken file aside");
+            Assert.True(said[^1].Contains("cannot be read", StringComparison.Ordinal), "and said");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Test]
+    public static void TheLogStaysSmallAndItsEndIsRead()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-log-{Environment.ProcessId}");
+        try
+        {
+            var log = new HubLog(folder, "update");
+            var line = new string('x', 1000);
+            for (var i = 0; i < 2200; i++)
+            {
+                log.Write($"{i} {line}");
+            }
+
+            Assert.True(File.Exists(Path.Combine(folder, "logs", "update.1.log")), "an older part");
+            Assert.True(new FileInfo(log.FilePath).Length < HubLog.Limit, "a small new part");
+            var tail = HubLog.Tail(folder, "update", 3);
+            Assert.Equal(3, tail.Count, "three lines");
+            Assert.True(tail[^1].Contains("2199 ", StringComparison.Ordinal), "the newest last");
+            Assert.True(tail[0].Contains("2197 ", StringComparison.Ordinal), "in order");
+
+            var writer = new StringWriter();
+            var tee = log.Tee(writer);
+            tee.WriteLine("the updater says\nin two lines");
+            tee.Write("and a last one");
+            tee.Flush();
+            Assert.True(writer.ToString().StartsWith("the updater says", StringComparison.Ordinal), "the output goes on");
+            Assert.Equal("and a last one", log.Last, "the last line for the result");
+            Assert.True(HubLog.Tail(folder, "update", 3)[0].EndsWith("  the updater says", StringComparison.Ordinal), "every line with the time");
+        }
+        finally
+        {
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+    }
+
     private static string? Ui(JsonObject? agent) => agent?["status"]?["state"]?.GetValue<string>();
 
     private static async Task AssertFails<T>(Func<Task<T>> action, string what)

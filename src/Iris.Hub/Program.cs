@@ -35,29 +35,43 @@ catch (Exception ex) when (ex is IOException or FormatException or UnauthorizedA
 static async Task<int> Run(LabArguments a)
 {
     var folder = a.Required("--folder");
+    var log = new HubLog(folder, "hub");
+    void Say(string text)
+    {
+        Console.WriteLine(text);
+        log.Write(text);
+    }
+
     var model = LabHub.ModelPath(folder);
+    LabHub.TakeStartModel(folder, Say);
     OcrWeights weights;
     OcrLearningState state;
+    string source;
     if (File.Exists(model))
     {
         (weights, _, state) = OcrFiles.LoadTraining(model);
+        source = Source(model);
     }
     else if (a.Value("--start") is { } start)
     {
         (weights, _, state) = OcrFiles.LoadTraining(start);
+        source = Source(start);
     }
     else
     {
         weights = OcrWeights.Create(OcrShape.Default, seed: 1);
         state = new OcrLearningState();
+        source = "random (learning from the beginning)";
     }
 
     var rate = a.Number("--rate");
     var planRounds = (int)(a.Number("--plan-rounds") ?? 600);
-    if (rate is not null || state.PlanEnd <= state.Step + 0.5)
+    var fromLab = source.StartsWith("IRIS lab", StringComparison.Ordinal);
+    if (rate is not null || state.PlanEnd <= state.Step + 0.5 || (!fromLab && state.Step > 0))
     {
-        // a new plan of the rate, counted in rounds from here
-        state = state with { PlanStart = state.Step, PlanEnd = state.Step + planRounds, PlanRate = rate ?? 3e-4 };
+        // a new plan of the rate, counted in rounds from here; a model learned elsewhere (its plan counts steps of
+        // another learning, not rounds) gets a gentler one – it can already read
+        state = state with { PlanStart = state.Step, PlanEnd = state.Step + planRounds, PlanRate = rate ?? (!fromLab && state.Step > 0 ? 1e-4 : 3e-4) };
     }
 
     var schedule = new LabSchedule(
@@ -80,6 +94,8 @@ static async Task<int> Run(LabArguments a)
         AutoWake = (a.Value("--wake") ?? "yes") != "no",
         AutoUpdate = (a.Value("--auto-update") ?? "yes") != "no",
         Fonts = a.Value("--fonts")?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? ["/usr/share/fonts", "/usr/local/share/fonts"],
+        Log = log.Write,
+        ModelSource = source,
     };
     var hub = new LabHub(options, weights, state);
     using var cancel = new CancellationTokenSource();
@@ -89,26 +105,102 @@ static async Task<int> Run(LabArguments a)
         cancel.Cancel();
     };
     AppDomain.CurrentDomain.ProcessExit += (_, _) => cancel.Cancel();
-    Console.WriteLine($"IRIS hub on port {options.Port}, model version {state.Step}, rounds of {options.RoundMinutes} min, " +
-                      $"learning {schedule.From:HH\\:mm}–{schedule.Until:HH\\:mm}{(schedule.Weekends ? ", weekends all day" : "")}; keys in {folder}");
+    Say($"IRIS hub {LabUpdates.Version} on port {options.Port}, model version {state.Step} ({source}), rate {state.PlanRate:0.###e0} over {state.PlanEnd - state.PlanStart:0} rounds, " +
+        $"rounds of {options.RoundMinutes} min, learning {schedule.From:HH\\:mm}–{schedule.Until:HH\\:mm}{(schedule.Weekends ? ", weekends all day" : "")}; keys in {folder}");
     await hub.RunAsync(cancel.Token);
+    if (hub.RestartAsked)
+    {
+        // not 0, so that systemd (Restart=on-failure) starts it again
+        Say("the hub ends for a restart (asked by the console); its service starts it again");
+        return 75;
+    }
+
+    Say("the hub ended");
     return 0;
 }
 
+// where a model file came from (its provenance)
+static string Source(string path)
+{
+    using var file = Iris.Model.ModelFile.Load(path);
+    return file.Provenance["source"]?.GetValue<string>() ?? Path.GetFileName(path);
+}
+
+
 // the updater (run by systemd as root once a day, or when the console asks): the newest release on GitHub, when it
 // brings newer signed classroom programs – the server's own program goes in place and the service starts again, the
-// programs of the computers and the console wait in the folder of the hub for them
+// programs of the computers and the console wait in the folder of the hub for them. When the console asked for it,
+// also the learning file of that release (checked against the signed manifest) is left for the hub to start from.
+// Everything it says goes also into logs/update.log, and its result into update-result.json (the console shows both).
 static async Task<int> Update(LabArguments a, bool check)
 {
     var folder = a.Value("--folder") ?? "/var/lib/iris-hub";
+    var log = new HubLog(folder, "update");
+    var console = Console.Out;
+    var errors = Console.Error;
+    Console.SetOut(log.Tee(console));
+    Console.SetError(log.Tee(errors));
+    var result = new System.Text.Json.Nodes.JsonObject
+    {
+        ["time"] = DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture),
+        ["from"] = LabUpdates.Version,
+    };
+    try
+    {
+        var code = await UpdateCore(a, folder, check, result);
+        result["ok"] = true;
+        return code;
+    }
+    catch (Exception e)
+    {
+        Console.Error.WriteLine($"iris-hub update: {e.Message}");
+        result["ok"] = false;
+        throw;
+    }
+    finally
+    {
+        Console.Out.Flush();
+        Console.Error.Flush();
+        result["message"] = log.Last;
+        if (!check)
+        {
+            try
+            {
+                File.WriteAllText(LabHub.UpdateResultPath(folder), result.ToJsonString());
+                HubFiles.GiveToHub(log.Folder, "iris-hub");
+                HubFiles.GiveToHub(log.FilePath, "iris-hub");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        Console.SetOut(console);
+        Console.SetError(errors);
+    }
+}
+
+static async Task<int> UpdateCore(LabArguments a, string folder, bool check, System.Text.Json.Nodes.JsonObject result)
+{
     var install = a.Value("--install") ?? Path.GetDirectoryName(Environment.ProcessPath) ?? "/opt/iris-hub";
     var service = a.Value("--service") ?? "iris-hub";
-    var request = Path.Combine(folder, "update-request");
+    var request = LabHub.UpdateRequestPath(folder);
+    var wantModel = false;
     if (File.Exists(request))
     {
+        try
+        {
+            wantModel = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(request))?["model"]?.GetValue<bool>() == true;
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException)
+        {
+            // an older hub wrote only the time
+        }
+
         File.Delete(request);
     }
 
+    result["model_asked"] = wantModel;
     if (!LabUpdates.CanVerify)
     {
         Console.WriteLine("this build has no key of the IRIS releases: it never updates itself");
@@ -125,7 +217,9 @@ static async Task<int> Update(LabArguments a, bool check)
     }
 
     var version = found.Manifest.Version;
-    if (!LabUpdates.IsNewer(version, LabUpdates.Version))
+    result["newest"] = version;
+    var newer = LabUpdates.IsNewer(version, LabUpdates.Version);
+    if (!newer && !wantModel)
     {
         Console.WriteLine($"{LabUpdates.Version}: up to date");
         return 0;
@@ -133,81 +227,124 @@ static async Task<int> Update(LabArguments a, bool check)
 
     if (check)
     {
-        Console.WriteLine($"{LabUpdates.Version}: version {version} is ready (iris-hub update installs it)");
+        Console.WriteLine(newer ? $"{LabUpdates.Version}: version {version} is ready (iris-hub update installs it)" : $"{LabUpdates.Version}: up to date");
         return 0;
     }
 
     // every file checked against the signed manifest before anything is put in place
-    var target = Path.Combine(folder, "updates", version);
-    Directory.CreateDirectory(target);
-    foreach (var name in new[] { UpdateManifest.Hub, UpdateManifest.Agent, UpdateManifest.Console })
+    byte[]? program = null;
+    if (newer)
     {
-        if (found.Manifest.File(name) is not { } file || !found.Files.TryGetValue(name, out var uri))
+        var target = Path.Combine(folder, "updates", version);
+        Directory.CreateDirectory(target);
+        foreach (var name in new[] { UpdateManifest.Hub, UpdateManifest.Agent, UpdateManifest.Console })
         {
-            continue;
+            if (found.Manifest.File(name) is not { } file || !found.Files.TryGetValue(name, out var uri))
+            {
+                continue;
+            }
+
+            var data = await http.GetByteArrayAsync(uri, timeout.Token);
+            if (!LabUpdates.Matches(file, data))
+            {
+                throw new IOException($"{name} of {version} does not match its signed manifest – nothing installed");
+            }
+
+            if (name == UpdateManifest.Hub)
+            {
+                program = data;
+            }
+            else
+            {
+                await File.WriteAllBytesAsync(Path.Combine(target, name), data, timeout.Token);
+            }
         }
 
-        var data = await http.GetByteArrayAsync(uri, timeout.Token);
-        if (!LabUpdates.Matches(file, data))
+        await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.ManifestName), found.Json, timeout.Token);
+        await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.SignatureName), found.Signature, timeout.Token);
+        foreach (var old in Directory.EnumerateDirectories(Path.Combine(folder, "updates"))
+            .Where(d => LabUpdates.ParseVersion(Path.GetFileName(d)) is not null)
+            .OrderByDescending(d => LabUpdates.ParseVersion(Path.GetFileName(d))).Skip(2))
         {
-            throw new IOException($"{name} of {version} does not match its signed manifest – nothing installed");
+            Directory.Delete(old, recursive: true); // the two newest sets stay
         }
 
-        await File.WriteAllBytesAsync(Path.Combine(target, name), data, timeout.Token);
+        Console.WriteLine($"the programs of the computers and the console of {version} wait in {target}");
     }
 
-    await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.ManifestName), found.Json, timeout.Token);
-    await File.WriteAllBytesAsync(Path.Combine(target, UpdateManifest.SignatureName), found.Signature, timeout.Token);
-    foreach (var old in Directory.EnumerateDirectories(Path.Combine(folder, "updates"))
-        .Where(d => LabUpdates.ParseVersion(Path.GetFileName(d)) is not null)
-        .OrderByDescending(d => LabUpdates.ParseVersion(Path.GetFileName(d))).Skip(2))
+    byte[]? model = null;
+    if (wantModel)
     {
-        Directory.Delete(old, recursive: true); // the two newest sets stay
-    }
-
-    var hub = Path.Combine(target, UpdateManifest.Hub);
-    if (File.Exists(hub))
-    {
-        var program = await File.ReadAllBytesAsync(hub, timeout.Token);
-        // The restart is started before the program is replaced: this program is one bundle file, and the runtime
-        // reads parts of it (e.g. what starting a process needs) by its path only when they are first used – after
-        // the replacement that path is the new program, and 0.4.1 failed there. So the shell waits for one line on
-        // its input and restarts the hub after it; everything a process needs is loaded already.
-        System.Diagnostics.Process? restart = null;
-        if (OperatingSystem.IsLinux() && Environment.UserName == "root")
+        if (found.Manifest.File(UpdateManifest.Training) is not { } file || !found.Files.TryGetValue(UpdateManifest.Training, out var uri))
         {
-            restart = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "read go && exec systemctl restart \"$0\"", service])
+            Console.WriteLine($"the release {version} has no signed learning file ({UpdateManifest.Training}) – the model of the classroom stays");
+        }
+        else
+        {
+            model = await http.GetByteArrayAsync(uri, timeout.Token);
+            if (!LabUpdates.Matches(file, model))
             {
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-            });
-        }
-
-        try
-        {
-            LabUpdates.ReplaceProgram(Path.Combine(install, "iris-hub"), program);
-        }
-        catch
-        {
-            restart?.Kill();
-            restart?.Dispose();
-            throw;
-        }
-
-        File.Delete(hub);
-        Console.WriteLine($"{LabUpdates.Version} → {version}: the server's program is in {install}");
-        if (restart is not null)
-        {
-            using (restart)
-            {
-                restart.StandardInput.WriteLine("go");
-                restart.StandardInput.Close();
-                await restart.WaitForExitAsync(timeout.Token);
+                throw new IOException($"{UpdateManifest.Training} of {version} does not match its signed manifest – the model stays");
             }
         }
     }
 
-    Console.WriteLine($"the programs of the computers and the console of {version} wait in {target}");
+    if (program is null && model is null)
+    {
+        return 0;
+    }
+
+    // The restart is started before anything is replaced: this program is one bundle file, and the runtime reads parts
+    // of it (e.g. what starting a process needs) by its path only when they are first used – after the replacement
+    // that path is the new program, and 0.4.1 failed there. So the shell waits for one line on its input and restarts
+    // the hub after it; everything a process needs is loaded already.
+    System.Diagnostics.Process? restart = null;
+    if (OperatingSystem.IsLinux() && Environment.UserName == "root")
+    {
+        restart = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "read go && exec systemctl restart \"$0\"", service])
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+        });
+    }
+
+    try
+    {
+        if (model is not null)
+        {
+            var pending = LabHub.StartModelPath(folder);
+            await File.WriteAllBytesAsync(pending + ".new", model, timeout.Token);
+            HubFiles.GiveToHub(pending + ".new", "iris-hub");
+            File.Move(pending + ".new", pending, overwrite: true);
+            result["model"] = version;
+            Console.WriteLine($"the learning file of {version} is ready: the hub starts from it (the model before is kept beside it)");
+        }
+
+        if (program is not null)
+        {
+            LabUpdates.ReplaceProgram(Path.Combine(install, "iris-hub"), program);
+            result["installed"] = version;
+            Console.WriteLine($"{LabUpdates.Version} → {version}: the server's program is in {install}");
+        }
+    }
+    catch
+    {
+        restart?.Kill();
+        restart?.Dispose();
+        throw;
+    }
+
+    if (restart is not null)
+    {
+        using (restart)
+        {
+            restart.StandardInput.WriteLine("go");
+            restart.StandardInput.Close();
+            await restart.WaitForExitAsync(timeout.Token);
+            Console.WriteLine(restart.ExitCode == 0 ? "the hub started again" : $"the restart of the hub ended with {restart.ExitCode}");
+        }
+    }
+
     return 0;
 }
 

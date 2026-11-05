@@ -34,6 +34,33 @@ public partial class App : Application
             Directory.CreateDirectory(folder);
             var window = new MainWindow(new ConsoleSettings(), offline: true) { Width = 1320, Height = 860 };
             Fill(window.Data);
+            window.Server.Fake(new JsonObject
+            {
+                ["hub_version"] = Iris.Lab.LabUpdates.Version,
+                ["system"] = "Debian GNU/Linux 13",
+                ["started"] = DateTime.Now.AddHours(-26).ToString("o", CultureInfo.InvariantCulture),
+                ["now"] = DateTimeOffset.Now.AddMinutes(129).ToString("o", CultureInfo.InvariantCulture),
+                ["uptime_minutes"] = 26 * 60 + 14,
+                ["model"] = new JsonObject { ["version"] = 83142, ["minutes"] = 26300, ["rate"] = 1e-4, ["plan_rounds"] = 600, ["plan_done"] = 62, ["source"] = "IRIS lab: learned on the computers of a classroom", ["file_mb"] = 29.7 },
+                ["disk"] = new JsonObject { ["free_mb"] = 81234, ["total_mb"] = 117000 },
+                ["memory_mb"] = 412,
+                ["processors"] = 4,
+                ["fonts"] = 0,
+                ["update_waiting"] = false,
+                ["last_update"] = new JsonObject
+                {
+                    ["time"] = DateTimeOffset.Now.AddHours(-3).ToString("o", CultureInfo.InvariantCulture),
+                    ["from"] = "0.4.2",
+                    ["newest"] = "0.4.3",
+                    ["installed"] = "0.4.3",
+                    ["model_asked"] = true,
+                    ["model"] = "0.4.3",
+                    ["ok"] = true,
+                    ["message"] = "the hub started again",
+                },
+            }, Enumerable.Range(0, 60).Select(i => $"{DateTime.Now.AddMinutes(i - 60):yyyy-MM-dd HH:mm:ss}  " + (i % 10 == 0
+                ? $"round {i / 10 + 40} closed: 8 computers, 190000 lines, loss 0.2{i % 7}31, model version {83100 + i / 10}"
+                : i % 10 == 1 ? $"round {i / 10 + 41} opened (model version {83100 + i / 10}, rate 9.8e-5)" : $"PC-{i % 18 + 1:00} connected from 10.0.0.{100 + i % 18}")));
             window.Network.Found = new JsonObject
             {
                 ["time"] = DateTime.Now.ToString("o", CultureInfo.InvariantCulture),
@@ -64,6 +91,8 @@ public partial class App : Application
             Picture(window, folder, "overview-dark");
             window.Open("PC-03");
             Picture(window, folder, "computers-dark");
+            window.Navigate("server");
+            Picture(window, folder, "server-dark");
             window.Close();
             return 0;
         }
@@ -193,7 +222,7 @@ public partial class App : Application
             ["rounds"] = rounds,
             ["tests"] = tests,
             ["minutes"] = 6600,
-            ["hub_version"] = "0.4.0",
+            ["hub_version"] = Iris.Lab.LabUpdates.Version,
             ["consoles"] = new JsonArray("notebook-skola", "notebook-praca"),
             ["update"] = new JsonObject { ["version"] = "0.4.1", ["auto"] = true, ["agent"] = true, ["console"] = true },
             ["config"] = new JsonObject

@@ -141,6 +141,8 @@ jobs:
           cp out/agent/iris-agent.exe out/lab/iris-agent-win-x64.exe
           dotnet publish src/Iris.LabConsole -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o out/console
           cp out/console/iris-console.exe out/lab/iris-console-win-x64.exe
+          # the learning file of the OCR model is signed too: the console can ask the server to start the classroom from it
+          if [ -f out/assets/iris-ocr-train.iris ]; then cp out/assets/iris-ocr-train.iris out/lab/; fi
           python3 - "$VERSION" out/lab > "$RUNNER_TEMP/iris-lab-manifest.json" <<'PY'
           import hashlib, json, os, sys
           version, folder = sys.argv[1], sys.argv[2]

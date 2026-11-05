@@ -20,6 +20,9 @@ public sealed record UpdateManifest(string Version, IReadOnlyList<UpdateFile> Fi
     public const string Agent = "iris-agent-win-x64.exe";
     public const string Console = "iris-console-win-x64.exe";
 
+    /// <summary>The learning file of the OCR model of the release: the classroom can start from it (asked by the console).</summary>
+    public const string Training = "iris-ocr-train.iris";
+
     /// <summary>The hub for the processor it runs on (iris-hub-linux-x64 or iris-hub-linux-arm64).</summary>
     public static string Hub => "iris-hub-linux-" + (RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "x64");
 

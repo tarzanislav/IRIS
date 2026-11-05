@@ -91,6 +91,30 @@ public sealed class LabConsoleClient : IDisposable
     /// </summary>
     public Task<JsonObject> ConfigureAsync(JsonObject change, CancellationToken cancel) => Ask(new LabMessage(MessageKind.Configure, change), cancel);
 
+    /// <summary>What the server is like now (program, time, model, disk, memory, fonts, the updater's last result) – hubs from 0.4.3.</summary>
+    public Task<JsonObject> ServerStatusAsync(CancellationToken cancel) => Server("status", [], cancel);
+
+    /// <summary>The last lines of the log of the hub ("hub") or of its updater ("update") – hubs from 0.4.3.</summary>
+    public async Task<IReadOnlyList<string>> ServerLogAsync(string name, int lines, CancellationToken cancel) =>
+        [.. (await Server("log", new JsonObject { ["name"] = name, ["lines"] = lines }, cancel))["lines"]?.AsArray().Select(l => l?.GetValue<string>() ?? "") ?? []];
+
+    /// <summary>Starts the hub again (a round that runs is lost); its service brings it back in about half a minute.</summary>
+    public async Task<bool> RestartServerAsync(CancellationToken cancel) =>
+        (await Server("restart", [], cancel))["ok"]?.GetValue<bool>() ?? false;
+
+    /// <summary>
+    /// Asks the server to start the classroom from the learning file of the newest signed release (its updater takes
+    /// it, checks it and restarts the hub; the model before is kept beside it); returns whether the request was left.
+    /// </summary>
+    public async Task<bool> ServerModelFromReleaseAsync(CancellationToken cancel) =>
+        (await Server("model", [], cancel))["requested"]?.GetValue<bool>() ?? false;
+
+    private Task<JsonObject> Server(string what, JsonObject header, CancellationToken cancel)
+    {
+        header["what"] = what;
+        return Ask(new LabMessage(MessageKind.Server, header), cancel);
+    }
+
     public void Dispose()
     {
         _channel.Dispose();

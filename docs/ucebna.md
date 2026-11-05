@@ -70,7 +70,8 @@ pravidlo pre port 47620.
 - **Zdieľaný priečinok:** ak ho skript vytvára, patrí serveru. Ak už existuje, server dostane len právo doň zapisovať
   (ACL, balík `acl`). Vlastník ani ostatné práva sa nemenia. Súbory, ktoré server zapíše, sú čitateľné pre všetkých
   (aj cez Sambu).
-- **Denník:** `journalctl -u iris-hub -f`.
+- **Denník:** v konzole na stránke **Server** (denník servera aj aktualizácie, s hľadaním). Server ho píše do
+  `/var/lib/iris-hub/logs/` (najviac 2 × 2 MB), nič ďalšie netreba inštalovať. Aj `journalctl -u iris-hub -f`.
 - **Zmena nastavení:** upravte `/etc/default/iris-hub` a spustite `sudo systemctl restart iris-hub`.
 - **Predvolené nastavenia:**
   - kolo trvá 10 minút;
@@ -79,12 +80,27 @@ pravidlo pre port 47620.
   - port je 47620.
 - **Súbory:** model v `lab-model.iris`, čítačka pre IRIS v `iris-ocr.iris`, kolá v `rounds.jsonl`.
 
+### Server z konzoly (od 0.4.3)
+Stránka **Server** v konzole – všetko bez prihlásenia na server:
+- **stav:** verzia programu, ako dlho beží, **čas servera oproti počítaču s konzolou** (zlý čas posúva čas učenia),
+  model učebne (verzia, odkiaľ je, plán učenia), voľné miesto na disku, pamäť, či sú písma na meranie čítačky;
+- **Aktualizovať server teraz** a výsledok poslednej aktualizácie;
+- **Model z vydania…:** učebňa bude ďalej učiť od učiaceho súboru (`iris-ocr-train.iris`) najnovšieho podpísaného
+  vydania. Stiahne ho aktualizátor servera, overí podpis a SHA‑256, doterajší model odloží ako
+  `lab-model-before-<dátum>.iris` (tri posledné ostávajú) a server reštartuje. Model, ktorý sa neučil v učebni,
+  dostane nový, jemnejší plán (najvyššia rýchlosť 1e-4, ak nie je zadané `--rate`);
+- **Reštartovať server…** (kolo, ktoré beží, sa preruší; počítače sa pripoja samy);
+- **denník** servera a aktualizácie.
+
+Konzola nemôže na serveri spustiť nič iné než tieto pevné úkony a model berie len z podpísaného vydania.
+
 ### Aktualizácie (podpísané)
 - **Server sa raz denne okolo poludnia pozrie na GitHub**, či vyšla nová verzia IRIS (`iris-hub-update.timer`).
 - **Inštaluje len programy podpísané kľúčom vydaní IRIS.** Súkromná časť kľúča je len tajomstvom vo vydávacom procese
   na GitHube. Každý súbor má v podpísanom zozname svoj SHA‑256. Inak nenainštaluje nič.
 - **Po stiahnutí:**
-  - nový program servera dá na miesto a reštartuje službu;
+  - nový program servera dá na miesto a reštartuje službu (pri prechode z 0.4.1 alebo 0.4.2 sa služba sama
+    nereštartuje – raz `sudo systemctl restart iris-hub`, od 0.4.3 už áno);
   - programy pre počítače a konzolu uloží k sebe.
 - **Počítače učebne** dostanú nový program od servera, nikdy nie z internetu. Server im ho dáva sám medzi kolami
   (`--auto-update no` to vypne). Konzola to vie aj hneď a hromadne. Počítač podpis overí znova, vymení svoj program
@@ -92,7 +108,7 @@ pravidlo pre port 47620.
 - **Konzola** ukáže, že je nová verzia, a jedným tlačidlom sa aktualizuje.
 - **Hneď (nečakať do poludnia):**
   - `sudo systemctl start iris-hub-update`;
-  - alebo tlačidlo „Aktualizovať server“ v konzole.
+  - alebo tlačidlo „Aktualizovať server teraz“ v konzole (Nastavenia alebo Server).
 - **Kontrola bez inštalácie:** `sudo /opt/iris-hub/iris-hub update --check`.
 - Nová verzia vzniká len vydaním, ktoré schvaľuje vlastník (GitHub → Actions → Release → Review deployments).
 

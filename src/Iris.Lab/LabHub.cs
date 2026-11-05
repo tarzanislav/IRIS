@@ -70,6 +70,12 @@ public sealed record LabHubOptions
 
     /// <summary>The clock (tests set their own).</summary>
     public Func<DateTime> Now { get; init; } = () => DateTime.Now;
+
+    /// <summary>Where the hub writes what happens (its log, see <see cref="HubLog"/>); null = nowhere.</summary>
+    public Action<string>? Log { get; init; }
+
+    /// <summary>Where the model of the classroom came from when the hub started (for the console), or null.</summary>
+    public string? ModelSource { get; init; }
 }
 
 /// <summary>
@@ -103,6 +109,9 @@ public sealed class LabHub
     private DateTime _lastUpdateLook = DateTime.MinValue;
     private AvailableUpdate? _update;
     private readonly LabConfig _config;
+    private readonly DateTime _started;
+    private readonly Lazy<int> _fontFiles;
+    private CancellationTokenSource? _stop;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -116,6 +125,8 @@ public sealed class LabHub
         _history = new LabHistory(Path.Combine(options.Folder, "history"));
         _config = LabConfig.Load(ConfigPath);
         _tester = new(MakeTester);
+        _started = options.Now();
+        _fontFiles = new(CountFonts);
         var tests = Path.Combine(options.Folder, "tests.jsonl");
         if (File.Exists(tests))
         {
@@ -142,9 +153,61 @@ public sealed class LabHub
 
     public OcrWeights Weights => _weights;
 
-    /// <summary>Starts listening; returns when cancelled.</summary>
-    public async Task RunAsync(CancellationToken cancel)
+    /// <summary>Whether a console asked the hub to start again (it then ends; its service starts it again).</summary>
+    public bool RestartAsked { get; private set; }
+
+    /// <summary>The file the server's updater leaves for the hub: the learning file of a release to start from.</summary>
+    public static string StartModelPath(string folder) => Path.Combine(folder, "start-model.iris");
+
+    /// <summary>What the console asks the server's updater for (systemd watches for this file and runs it as root).</summary>
+    public static string UpdateRequestPath(string folder) => Path.Combine(folder, "update-request");
+
+    /// <summary>What the updater did last time (written by it, shown by the console).</summary>
+    public static string UpdateResultPath(string folder) => Path.Combine(folder, "update-result.json");
+
+    /// <summary>The learning file the updater left (asked by the console): checked, the model before kept beside it (the
+    /// three newest), then in place. Called by the hub before it loads its model.</summary>
+    public static void TakeStartModel(string folder, Action<string> say)
     {
+        var pending = StartModelPath(folder);
+        if (!File.Exists(pending))
+        {
+            return;
+        }
+
+        try
+        {
+            OcrFiles.LoadTraining(pending);
+        }
+        catch (Exception e) when (e is IOException or FormatException or InvalidDataException or ArgumentException)
+        {
+            File.Move(pending, Path.ChangeExtension(pending, ".bad.iris"), overwrite: true);
+            say($"the learning file from the release cannot be read ({e.Message}) – the model stays");
+            return;
+        }
+
+        var model = ModelPath(folder);
+        if (File.Exists(model))
+        {
+            var before = Path.Combine(folder, $"lab-model-before-{DateTime.Now:yyyyMMdd-HHmm}.iris");
+            File.Move(model, before, overwrite: true);
+            say($"the model before is kept as {Path.GetFileName(before)}");
+            foreach (var old in Directory.EnumerateFiles(folder, "lab-model-before-*.iris").Order(StringComparer.Ordinal).SkipLast(3))
+            {
+                File.Delete(old); // the three newest stay
+            }
+        }
+
+        File.Move(pending, model);
+        say("the model of the classroom starts from the learning file of the release");
+    }
+
+    /// <summary>Starts listening; returns when cancelled, or when a console asked for a restart.</summary>
+    public async Task RunAsync(CancellationToken outer)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        _stop = stop;
+        var cancel = stop.Token;
         _listener = new TcpListener(IPAddress.Any, _options.Port);
         _listener.Start();
         var timer = Task.Run(() => Tick(cancel), cancel);
@@ -247,6 +310,7 @@ public sealed class LabHub
             catch (Exception e) when (e is IOException or LabProtocolException or ObjectDisposedException)
             {
                 // one computer failing does not stop the hub
+                Note($"a step of the rounds failed: {e.Message}");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(Math.Min(2, _options.RoundMinutes * 60 / 10)), cancel);
@@ -328,6 +392,7 @@ public sealed class LabHub
                 var phase = Math.Clamp((_state.Step - _state.PlanStart) / Math.Max(1, _state.PlanEnd - _state.PlanStart), 0, 1);
                 var rate = _state.PlanRate * (0.02 + 0.98 * 0.5 * (1 + Math.Cos(Math.PI * phase)));
                 _round = new Round(number, now.AddMinutes(_options.RoundMinutes), rate, TensorPack.Pack(_weights), new RoundAverage(_weights));
+                Note($"round {number} opened (model version {_state.Step}, rate {rate:0.###e0})");
             }
 
             foreach (var a in idle)
@@ -422,6 +487,8 @@ public sealed class LabHub
             ["applied"] = applied,
         };
         _rounds.Add(entry);
+        Note($"round {round.Number} closed: {round.Average.Parts} computers, {round.Average.Lines} lines" +
+             (round.Losses.Count > 0 ? $", loss {round.Losses.Average():0.####}" : "") + (applied ? $", model version {_state.Step}" : ", nothing learned"));
         File.AppendAllText(Path.Combine(_options.Folder, "rounds.jsonl"), entry.ToJsonString() + "\n");
         foreach (var name in round.Participants)
         {
@@ -450,6 +517,7 @@ public sealed class LabHub
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
                 // the backup is a copy; the model is safe in the hub's folder
+                Note($"the backup into {backup} failed: {e.Message}");
             }
         }
     }
@@ -468,6 +536,11 @@ public sealed class LabHub
         }
         catch (Exception e) when (e is IOException or LabProtocolException or OperationCanceledException or JsonException)
         {
+            if (e is LabProtocolException && !cancel.IsCancellationRequested)
+            {
+                Note($"a connection from {(client.Client.RemoteEndPoint as IPEndPoint)?.Address} was refused: {e.Message}");
+            }
+
             return;
         }
 
@@ -476,6 +549,7 @@ public sealed class LabHub
             if (channel.PeerRole == LabRole.Console)
             {
                 _consoles[channel] = (channel.PeerName, LabKeys.ConsoleKey(_options.Folder, _consoleKey, channel.PeerName) ?? []);
+                Note($"console {ConsoleName(channel)} connected from {(client.Client.RemoteEndPoint as IPEndPoint)?.Address}");
                 try
                 {
                     await ServeConsole(channel, cancel);
@@ -483,6 +557,7 @@ public sealed class LabHub
                 finally
                 {
                     _consoles.TryRemove(channel, out var _);
+                    Note($"console {ConsoleName(channel)} left");
                 }
 
                 return;
@@ -498,6 +573,8 @@ public sealed class LabHub
                 agent.State = "idle";
                 agent.Uninstalled = false; // it is here again (installed anew, or it could not remove itself)
             }
+
+            Note($"{agent.Name} connected from {address}");
 
             try
             {
@@ -582,6 +659,7 @@ public sealed class LabHub
                     {
                         agent.Channel = null;
                         agent.State = "gone";
+                        Note($"{agent.Name} left");
                     }
                 }
             }
@@ -711,14 +789,36 @@ public sealed class LabHub
                             }
                         }
 
+                        Note($"console {ConsoleName(channel)}: {command} for {(target == "*" ? "all" : target)} – {sent} computers");
                         await channel.SendAsync(new LabMessage(MessageKind.Note, new JsonObject { ["sent"] = sent, ["command"] = command }), cancel);
                         break;
                     case MessageKind.Update:
+                        if (message.Header["what"]?.GetValue<string>() is "agents" or "hub")
+                        {
+                            Note($"console {ConsoleName(channel)}: update of {(message.Header["what"]!.GetValue<string>() == "hub" ? "the server" : "the computers")}");
+                        }
+
                         await channel.SendAsync(UpdateRequest(message.Header), cancel);
                         break;
                     case MessageKind.Configure:
+                        if (message.Header.Count > 0)
+                        {
+                            Note($"console {ConsoleName(channel)} changed the configuration: {Shorten(message.Header.ToJsonString())}");
+                        }
+
                         await Configure(message.Header, cancel);
                         await channel.SendAsync(new LabMessage(MessageKind.Configure, ConfigJson()), cancel);
+                        break;
+                    case MessageKind.Server:
+                        var what = message.Header["what"]?.GetValue<string>() ?? "";
+                        await channel.SendAsync(new LabMessage(MessageKind.Server, ServerRequest(what, message.Header, ConsoleName(channel))), cancel);
+                        if (what == "restart" && RestartAsked)
+                        {
+                            // the answer is out; the service starts the hub again (Restart=on-failure, the end code is 75)
+                            await Task.Delay(300, CancellationToken.None);
+                            _stop?.Cancel();
+                        }
+
                         break;
                     default:
                         break;
@@ -736,6 +836,7 @@ public sealed class LabHub
         try
         {
             var root = Path.Combine(_options.Folder, "updates");
+            var previous = _update;
             _update = null;
             if (!Directory.Exists(root))
             {
@@ -750,6 +851,11 @@ public sealed class LabHub
                 if (File.Exists(json) && File.Exists(signature) && LabUpdates.Open(File.ReadAllBytes(json), File.ReadAllBytes(signature)) is { } manifest &&
                     manifest.Version == Path.GetFileName(folder))
                 {
+                    if (previous?.Manifest.Version != manifest.Version)
+                    {
+                        Note($"signed programs of {manifest.Version} are ready for the computers and the console");
+                    }
+
                     _update = new AvailableUpdate(manifest, File.ReadAllBytes(json), File.ReadAllBytes(signature), folder);
                     return;
                 }
@@ -835,7 +941,7 @@ public sealed class LabHub
                 try
                 {
                     // the updater of the server (systemd, as root) watches for this file, checks GitHub and installs
-                    File.WriteAllText(Path.Combine(_options.Folder, "update-request"), _options.Now().ToString("o", CultureInfo.InvariantCulture));
+                    File.WriteAllText(UpdateRequestPath(_options.Folder), new JsonObject { ["time"] = _options.Now().ToString("o", CultureInfo.InvariantCulture) }.ToJsonString());
                     return new LabMessage(MessageKind.Note, new JsonObject { ["requested"] = true });
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -851,6 +957,130 @@ public sealed class LabHub
                 return new LabMessage(MessageKind.Note, new JsonObject { ["error"] = $"unknown request '{what}'" });
         }
     }
+
+    // what the console asks of the server itself
+    private JsonObject ServerRequest(string what, JsonObject header, string console)
+    {
+        try
+        {
+            switch (what)
+            {
+                case "status":
+                    return ServerState();
+                case "log":
+                    var name = header["name"]?.GetValue<string>() ?? "hub";
+                    var count = header["lines"]?.GetValue<int>() ?? 500;
+                    return new JsonObject
+                    {
+                        ["name"] = name,
+                        ["lines"] = new JsonArray([.. HubLog.Tail(_options.Folder, name, count).Select(l => (JsonNode?)l)]),
+                    };
+                case "restart":
+                    RestartAsked = true;
+                    Note($"console {console}: restart of the hub");
+                    return new JsonObject { ["ok"] = true };
+                case "model":
+                    // the updater (root) takes the learning file of the newest signed release, checks it and leaves it
+                    // for the hub, which starts from it (the model before is kept beside it)
+                    File.WriteAllText(UpdateRequestPath(_options.Folder), new JsonObject
+                    {
+                        ["time"] = _options.Now().ToString("o", CultureInfo.InvariantCulture),
+                        ["model"] = true,
+                        ["console"] = console,
+                    }.ToJsonString());
+                    Note($"console {console}: the model of the classroom from the learning file of the newest release");
+                    return new JsonObject { ["requested"] = true };
+                default:
+                    return new JsonObject { ["error"] = $"unknown request '{what}'" };
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new JsonObject { ["error"] = e.Message };
+        }
+    }
+
+    /// <summary>What the server is like now: program, time, model, disk, memory, fonts, the updater's last result.</summary>
+    public JsonObject ServerState()
+    {
+        var now = _options.Now();
+        var folder = Path.GetFullPath(_options.Folder);
+        JsonObject? disk = null;
+        try
+        {
+            var drive = new DriveInfo(folder);
+            disk = new JsonObject { ["free_mb"] = drive.AvailableFreeSpace / (1024 * 1024), ["total_mb"] = drive.TotalSize / (1024 * 1024) };
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+        }
+
+        JsonNode? lastUpdate = null;
+        try
+        {
+            var result = UpdateResultPath(folder);
+            lastUpdate = File.Exists(result) ? JsonNode.Parse(File.ReadAllText(result)) : null;
+        }
+        catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
+        {
+        }
+
+        var model = ModelPath(folder);
+        lock (_gate)
+        {
+            return new JsonObject
+            {
+                ["hub_version"] = LabUpdates.Version,
+                ["system"] = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                ["started"] = _started.ToString("o", CultureInfo.InvariantCulture),
+                ["now"] = DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture),
+                ["uptime_minutes"] = Math.Round((now - _started).TotalMinutes),
+                ["model"] = new JsonObject
+                {
+                    ["version"] = _state.Step,
+                    ["minutes"] = Math.Round(_state.Minutes),
+                    ["rate"] = _state.PlanRate,
+                    ["plan_rounds"] = Math.Round(_state.PlanEnd - _state.PlanStart),
+                    ["plan_done"] = Math.Round(_state.Step - _state.PlanStart),
+                    ["source"] = _options.ModelSource,
+                    ["file_mb"] = File.Exists(model) ? Math.Round(new FileInfo(model).Length / 1048576.0, 1) : null,
+                },
+                ["disk"] = disk,
+                ["memory_mb"] = Environment.WorkingSet / (1024 * 1024),
+                ["processors"] = Environment.ProcessorCount,
+                ["fonts"] = _fontFiles.Value,
+                ["update_waiting"] = File.Exists(UpdateRequestPath(folder)),
+                ["last_update"] = lastUpdate,
+            };
+        }
+    }
+
+    private int CountFonts()
+    {
+        var count = 0;
+        foreach (var dir in _options.Fonts ?? [])
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                {
+                    count += Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                        .Count(f => f.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".otf", StringComparison.OrdinalIgnoreCase));
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return count;
+    }
+
+    private void Note(string text) => _options.Log?.Invoke(text);
+
+    private static string ConsoleName(LabChannel channel) => channel.PeerName.StartsWith('@') ? channel.PeerName[1..] : "(main key)";
+
+    private static string Shorten(string text) => text.Length <= 300 ? text : text[..300] + "…";
 
     private async Task WakeQuietly(string mac, CancellationToken cancel)
     {
@@ -981,11 +1211,14 @@ public sealed class LabHub
                     _tests.Add(entry);
                 }
 
+                Note($"test of model version {version}: CER {entry["cer"]} %" + (entry["cer_unseen"] is { } u ? $", unseen font {u} %" : ""));
+
                 File.AppendAllText(Path.Combine(_options.Folder, "tests.jsonl"), entry.ToJsonString() + "\n");
             }
         }
         catch (Exception e) when (e is IOException or InvalidOperationException or ArgumentException)
         {
+            Note($"the test of model version {version} failed: {e.Message}");
         }
     }
 

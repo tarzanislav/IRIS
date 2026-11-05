@@ -80,6 +80,18 @@ public interface IConsoleActions
 
     Task UpdateConsole();
 
+    /// <summary>What the server is like now (hubs from 0.4.3); null when it cannot be asked.</summary>
+    Task<JsonObject?> ServerStatus();
+
+    /// <summary>The end of the hub's log ("hub") or its updater's ("update"); null when it cannot be asked.</summary>
+    Task<IReadOnlyList<string>?> ServerLog(string name, int lines);
+
+    /// <summary>Starts the hub again; true when it took the request.</summary>
+    Task<bool> RestartServer();
+
+    /// <summary>The classroom from the learning file of the newest signed release; true when the request was left.</summary>
+    Task<bool> ModelFromRelease();
+
     /// <summary>Opens a computer on the page of computers.</summary>
     void Open(string computer);
 }
