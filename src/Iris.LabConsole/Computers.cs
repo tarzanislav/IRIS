@@ -243,7 +243,22 @@ public sealed class ComputersPage : ConsolePage
         var commands = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
         commands.Children.Add(Ui.Small("Pozastaviť", () => Ask(name, "pause")));
         commands.Children.Add(Ui.Small("Pokračovať", () => Ask(name, "resume")));
-        commands.Children.Add(Ui.Small("Zobudiť", () => Ask(name, "wake")));
+        // waking needs the card of the computer (it tells it itself while it is on and connected)
+        var wake = Ui.Small("Zobudiť", () => Ask(name, "wake"));
+        if (Ui.String(agent["mac"]) is null)
+        {
+            wake.IsEnabled = false;
+            wake.ToolTip = "Server ešte nepozná sieťovú kartu (MAC) tohto počítača – nemá kam poslať zobudenie. Počítač ju pošle sám, keď je zapnutý a pripojený.";
+            ToolTipService.SetShowOnDisabled(wake, true);
+        }
+        else if (agent["connected"]?.GetValue<bool>() == true)
+        {
+            wake.IsEnabled = false;
+            wake.ToolTip = "Počítač je zapnutý a pripojený.";
+            ToolTipService.SetShowOnDisabled(wake, true);
+        }
+
+        commands.Children.Add(wake);
         commands.Children.Add(Ui.Small("Aktualizovať", () => _ = Actions?.UpdateComputers(name)));
         commands.Children.Add(Ui.Small("Reštartovať", () => Ask(name, "restart", $"Reštartovať {Ui.Name(agent)}? (o minútu)")));
         commands.Children.Add(Ui.Small("Vypnúť", () => Ask(name, "shutdown", $"Vypnúť {Ui.Name(agent)}? (o minútu)"), danger: true));
