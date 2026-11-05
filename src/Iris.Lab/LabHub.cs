@@ -71,6 +71,12 @@ public sealed record LabHubOptions
     /// <summary>The clock (tests set their own).</summary>
     public Func<DateTime> Now { get; init; } = () => DateTime.Now;
 
+    /// <summary>
+    /// Whether a computer that is not connected is on (at its last address): then IRIS does not run there or cannot
+    /// connect, and something needs to be fixed. By default a ping, and the ARP answer when pings are dropped.
+    /// </summary>
+    public Func<string, CancellationToken, Task<bool>> IsOn { get; init; } = NetworkScanner.IsOnAsync;
+
     /// <summary>Where the hub writes what happens (its log, see <see cref="HubLog"/>); null = nowhere.</summary>
     public Action<string>? Log { get; init; }
 
@@ -254,6 +260,7 @@ public sealed class LabHub
                     ["woken"] = _woken.Contains(a.Name),
                     ["test"] = InTest(a, now),
                     ["connected"] = a.Channel is not null,
+                    ["on"] = a.Channel is not null ? true : a.On,
                     ["state"] = a.Uninstalled && a.Channel is null ? "uninstalled" : a.State,
                     ["leaving"] = a.Leaving,
                     ["seen"] = a.Seen.ToString("o", CultureInfo.InvariantCulture),
@@ -330,8 +337,17 @@ public sealed class LabHub
         List<AgentEntry> toReturn = [];
         List<AgentEntry> toUpdate = [];
         List<AgentEntry> testOver = [];
+        List<AgentEntry> toLook = [];
         lock (_gate)
         {
+            // the computers that are not connected: on (IRIS does not run) or off – a look at a few every step
+            toLook.AddRange(_agents.Values.Where(a => a.Channel is null && a.Address.Length > 0 && !a.Looking && now - a.Looked > TimeSpan.FromMinutes(1))
+                .OrderBy(a => a.Looked).Take(8));
+            foreach (var a in toLook)
+            {
+                a.Looking = true;
+            }
+
             if (_test is { } test && now >= test.Until)
             {
                 // the test is over: the computers get their own settings again and wait for the time of learning
@@ -442,6 +458,40 @@ public sealed class LabHub
         foreach (var mac in toWake)
         {
             await WakeQuietly(mac, cancel);
+        }
+
+        foreach (var a in toLook)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var on = await _options.IsOn(a.Address, cancel);
+                    lock (_gate)
+                    {
+                        if (a.Channel is null)
+                        {
+                            if (on && a.On != true)
+                            {
+                                Note($"{a.Name} is on at {a.Address}, but IRIS does not connect (is the service IRIS-Lab running?)");
+                            }
+
+                            a.On = on;
+                        }
+                    }
+                }
+                catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException)
+                {
+                }
+                finally
+                {
+                    lock (_gate)
+                    {
+                        a.Looking = false;
+                        a.Looked = _options.Now();
+                    }
+                }
+            }, cancel);
         }
 
         foreach (var a in testOver)
@@ -691,6 +741,8 @@ public sealed class LabHub
                     {
                         agent.Channel = null;
                         agent.State = "gone";
+                        agent.On = null; // looked at in a minute: a computer that shuts down is still on for a while
+                        agent.Looked = _options.Now();
                         Note($"{agent.Name} left");
                     }
                 }
@@ -1418,6 +1470,13 @@ public sealed class LabHub
         public string Name { get; } = name;
 
         public LabChannel? Channel { get; set; }
+
+        /// <summary>While not connected: whether the computer is on (null: not looked at yet).</summary>
+        public bool? On { get; set; }
+
+        public bool Looking { get; set; }
+
+        public DateTime Looked { get; set; } = DateTime.MinValue;
 
         public string Address { get; set; } = "";
 

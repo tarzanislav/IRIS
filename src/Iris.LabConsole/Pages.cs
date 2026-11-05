@@ -194,6 +194,13 @@ public sealed class ChartsPage : ConsolePage
             _root.Children.Add(Ui.Card(Chart("Teplota", "temperature", " °C", 20, null)));
         }
 
+        // how hard the computers work (agents from 0.4.5): the level of strain and the speed of the processor
+        if (Lines("strain").Any(s => s.Points.Count > 0))
+        {
+            _root.Children.Add(Ui.Card(Chart("Námaha (0 v pohode · 1 vyťažený · 2 trápi sa)", "strain", "", 0, 2)));
+            _root.Children.Add(Ui.Card(Chart("Výkon procesora (% základnej frekvencie; klesá pri teple)", "performance", " %", 0, null)));
+        }
+
         // the speed of the whole classroom: the sum over computers in each bucket
         var total = series.SelectMany(p => p.Value!.AsArray().OfType<JsonObject>()).GroupBy(Time)
             .Select(g => (g.Key, g.Sum(p => Ui.Value(p["lps"]) is var v && double.IsFinite(v) ? v : 0))).OrderBy(p => p.Key).ToList();

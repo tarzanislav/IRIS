@@ -118,6 +118,7 @@ public sealed class MainWindow : Window, IConsoleActions
         var network = new NetworkPage();
         network.Scan = ScanNetwork;
         _pages["network"] = network;
+        _pages["service"] = new ServicePage();
         _pages["test"] = new TestPage();
         _pages["server"] = new ServerPage();
         var settingsPage = new SettingsPage(settings);
@@ -270,6 +271,7 @@ public sealed class MainWindow : Window, IConsoleActions
                      ("charts", "Grafy", "Mint", "MintDeep", "M3,17 V3 M3,17 H17 M5,13 L9,8 L12,11 L17,5"),
                      ("rounds", "Kolá a učenie", "Peach", "PeachDeep", Ui.Icons.Round),
                      ("network", "Sieť", "Pink", "PinkDeep", "M10,3 V7 M4,17 V13 H16 V17 M10,7 V13 M7,3 H13 V7 H7 Z M2,17 H6 V20 H2 Z M14,17 H18 V20 H14 Z"),
+                     ("service", "Servis", "Sky", "SkyDeep", "M10,2 V9 M5.5,5 A7,7 0 1 0 14.5,5"),
                      ("test", "Testovací režim", "Peach", "PeachDeep", "M10,2 L12,8 L18,8 L13,12 L15,18 L10,14 L5,18 L7,12 L2,8 L8,8 Z"),
                      ("server", "Server", "Mint", "MintDeep", "M3,3 H17 V8 H3 Z M3,12 H17 V17 H3 Z M6,5.5 H7 M6,14.5 H7 M11,5.5 H14 M11,14.5 H14"),
                      ("settings", "Nastavenia", "Lilac", "LilacDeep", "M10,6 A4,4 0 1 1 10,14 A4,4 0 1 1 10,6 Z M10,1 V4 M10,16 V19 M1,10 H4 M16,10 H19"),

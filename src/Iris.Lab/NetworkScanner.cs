@@ -222,6 +222,26 @@ public static class NetworkScanner
         return name is null ? null : (name, group);
     }
 
+    /// <summary>
+    /// Whether a computer is on at this address: it answers a ping, or – when its firewall drops pings, as Windows does
+    /// by default – its card answers the ARP question that the ping caused (a card of a computer that is off does not).
+    /// </summary>
+    public static async Task<bool> IsOnAsync(string address, CancellationToken cancel)
+    {
+        if (!IPAddress.TryParse(address, out var ip))
+        {
+            return false;
+        }
+
+        if (await Ping(ip) is not null)
+        {
+            return true;
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(3), cancel); // the kernel asks a few times before it gives up
+        return ArpTable().ContainsKey(address);
+    }
+
     /// <summary>IPv4 address → MAC from the system's ARP table (Linux /proc/net/arp, Windows "arp -a").</summary>
     public static Dictionary<string, string> ArpTable()
     {

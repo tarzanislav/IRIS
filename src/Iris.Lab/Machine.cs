@@ -34,6 +34,14 @@ public sealed partial class Machine
     private readonly Process _self = Process.GetCurrentProcess();
     private (long Idle, long Total)? _lastSystem;
     private (TimeSpan Cpu, long Ticks)? _lastOwn;
+    private readonly List<(double Temperature, double Cpu)> _temperatures = [];
+    private bool _fixedTemperature;
+
+    /// <summary>
+    /// Whether the firmware gives one number that never moves (some desktop boards fill their ACPI zone with e.g.
+    /// 30 °C): then there is no temperature, rather than a wrong one.
+    /// </summary>
+    public bool FixedTemperature => _fixedTemperature;
 
     public MachineSample Sample()
     {
@@ -51,7 +59,30 @@ public sealed partial class Machine
 
         _lastOwn = (cpu, now);
         var (used, totalGb) = Memory();
-        return new MachineSample(total, Math.Min(own, total > 0 ? total : own), used, totalGb, Temperature(), IdleSeconds(), cores);
+        return new MachineSample(total, Math.Min(own, total > 0 ? total : own), used, totalGb, Checked(Temperature(), total), IdleSeconds(), cores);
+    }
+
+    // a temperature that stays exactly the same over many samples while the load goes up and down is not measured
+    private double? Checked(double? temperature, double cpu)
+    {
+        if (temperature is not { } t || _fixedTemperature)
+        {
+            return _fixedTemperature ? null : temperature;
+        }
+
+        _temperatures.Add((t, cpu));
+        if (_temperatures.Count > 60)
+        {
+            _temperatures.RemoveAt(0);
+        }
+
+        if (_temperatures.Count >= 30 && _temperatures.All(x => x.Temperature == t) && _temperatures.Max(x => x.Cpu) - _temperatures.Min(x => x.Cpu) >= 30)
+        {
+            _fixedTemperature = true;
+            return null;
+        }
+
+        return temperature;
     }
 
     // share of all cores busy since the last sample (%)

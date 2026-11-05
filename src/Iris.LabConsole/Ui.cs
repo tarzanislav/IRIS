@@ -227,6 +227,10 @@ internal static class Ui
         }
     }
 
+    /// <summary>The temperature, or why there is none (the firmware gives a fixed number, or none at all).</summary>
+    public static string Temperature(JsonObject agent) =>
+        agent["status"]?["signals"]?["temperature_fixed"]?.GetValue<bool>() == true ? "teplota nedostupná" : Number(agent["status"]?["machine"]?["temperature"], "0", " °C");
+
     public static string Number(JsonNode? node, string format = "0", string unit = "") =>
         Value(node) is var d && double.IsFinite(d) ? d.ToString(format, CultureInfo.InvariantCulture) + unit : "–";
 
@@ -254,7 +258,9 @@ internal static class Ui
         {
             return String(agent["state"]) == "uninstalled" ? ("odinštalovaný", "SurfaceAlt", "TextMuted")
                 : agent["leaving"]?.GetValue<bool>() == true ? ("odinštaluje sa po pripojení", "WarnSoft", "Warn")
-                : ("odpojený", "SurfaceAlt", "TextMuted");
+                : agent["on"]?.GetValue<bool>() == true ? ("zapnutý, IRIS nebeží", "WarnSoft", "Danger")
+                : agent["on"]?.GetValue<bool>() == false ? ("vypnutý", "SurfaceAlt", "TextMuted")
+                : ("nepripojený", "SurfaceAlt", "TextMuted");
         }
 
         if (agent["status"]?["too_hot"]?.GetValue<bool>() == true)
@@ -277,6 +283,41 @@ internal static class Ui
 
     /// <summary>The color of the stripe of a tile: the state's deeper tone.</summary>
     public static string StateColor(JsonObject agent) => State(agent).Foreground;
+
+    /// <summary>
+    /// How hard a computer works (agents from 0.4.5): "v pohode", "vyťažený" or "trápi sa" with the reasons in words,
+    /// the color, and the level (null when the agent does not tell).
+    /// </summary>
+    public static (string Text, string Reasons, string Brush, int? Level) Strain(JsonObject agent)
+    {
+        if (agent["connected"]?.GetValue<bool>() != true || agent["status"]?["strain"] is not JsonObject strain)
+        {
+            return ("", "", "TextMuted", null);
+        }
+
+        var level = strain["level"]?.GetValue<int>() ?? 0;
+        var reasons = string.Join(", ", strain["reasons"]?.AsArray().OfType<JsonObject>().Select(r => Reason(String(r["code"]), Value(r["value"]))) ?? []);
+        return level switch
+        {
+            >= 2 => ("trápi sa", reasons, "Danger", 2),
+            1 => ("vyťažený", reasons, "Warn", 1),
+            _ => ("v pohode", "", "Good", 0),
+        };
+    }
+
+    private static string Reason(string? code, double value) => code switch
+    {
+        "limit" => $"firmvér znížil výkon na {value:0} % (teplo alebo napájanie)",
+        "slow" => $"procesor spomalil na {value:0} % svojej bežnej rýchlosti – pravdepodobne teplo",
+        "queue" => $"na procesor čaká {value:0} vlákien",
+        "full" => $"procesor naplno ({value:0} %)",
+        "others" => $"iné programy berú {value:0} % procesora",
+        "memory" => $"málo voľnej pamäte ({value:0} MB)",
+        "paging" => $"Windows odkladá pamäť na disk ({value:0} strán/s)",
+        "disk" => $"disk stále zaneprázdnený ({value:0} %)",
+        "learning" => $"učenie ide na {value:0} % obvyklej rýchlosti",
+        _ => code ?? "",
+    };
 
     public static string Ago(JsonNode? time)
     {

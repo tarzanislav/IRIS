@@ -1,0 +1,339 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
+
+namespace Iris.Lab;
+
+/// <summary>
+/// What tells whether a computer struggles, read without any driver: how fast the processor runs against its base
+/// clock (it falls when the processor gets hot or meets its power limit), the ceiling the firmware sets (100 % =
+/// none), the threads waiting for a processor, the free memory, the pages read back from the disk because memory
+/// is short, and how busy the disk is. A value the system does not give is null.
+/// </summary>
+public sealed record StrainSignals(double? Performance, double? Limit, double? Queue, double? FreeMb, double? PagesIn, double? DiskBusy)
+{
+    public static StrainSignals None { get; } = new(null, null, null, null, null, null);
+}
+
+/// <summary>How a computer is doing: 0 fine, 1 busy, 2 struggling – with the reasons (a code and its value).</summary>
+public sealed record Strain(int Level, IReadOnlyList<(string Code, double Value)> Reasons)
+{
+    public JsonObject ToJson() => new()
+    {
+        ["level"] = Level,
+        ["reasons"] = new JsonArray([.. Reasons.Select(r => (JsonNode?)new JsonObject { ["code"] = r.Code, ["value"] = Math.Round(r.Value, 1) })]),
+    };
+}
+
+/// <summary>
+/// Judges the strain of one computer from what it measures every few seconds and from its rounds. Every computer is
+/// its own measure: the speed of its processor and of its learning are compared with what this computer usually
+/// does with the same mode (efficient or not) – so an office computer with a low power limit and a fast desktop are
+/// both judged fairly. One spike changes nothing: a level counts when it held in at least half of the last samples.
+/// </summary>
+public sealed class StrainJudge
+{
+    private const int Window = 6;
+    private readonly Queue<(int Level, List<(string, double)> Reasons)> _recent = new();
+    private readonly Dictionary<bool, List<double>> _performance = new() { [true] = [], [false] = [] };
+    private readonly Dictionary<bool, List<double>> _speed = new() { [true] = [], [false] = [] };
+    private double? _lastSpeedShare;
+
+    /// <summary>The usual speed of the processor of this computer while it is busy (90th percentile), or null while unknown.</summary>
+    public double? UsualPerformance(bool eco) => Percentile(_performance[eco], 0.9, 12);
+
+    /// <summary>What a round learned per second and thread (lines), remembered per mode; the last one is compared with the usual.</summary>
+    public void Round(double linesPerThreadSecond, bool eco)
+    {
+        if (!(linesPerThreadSecond > 0) || !double.IsFinite(linesPerThreadSecond))
+        {
+            return;
+        }
+
+        var usual = Percentile(_speed[eco], 0.8, 3);
+        _lastSpeedShare = usual is { } u ? linesPerThreadSecond / u : null;
+        Add(_speed[eco], linesPerThreadSecond, 30);
+    }
+
+    public Strain Judge(MachineSample sample, StrainSignals signals, bool eco, bool learning)
+    {
+        var reasons = new List<(string, double)>();
+        var level = 0;
+        void Reason(int at, string code, double value)
+        {
+            level = Math.Max(level, at);
+            reasons.Add((code, value));
+        }
+
+        var busy = sample.CpuTotal >= 50;
+        if (signals.Limit is { } limit && limit < 95)
+        {
+            // the firmware lowered the ceiling of the clock: heat or the power supply
+            Reason(limit < 80 ? 2 : 1, "limit", limit);
+        }
+
+        if (signals.Performance is { } performance && busy)
+        {
+            if (UsualPerformance(eco) is { } usual && usual > 0)
+            {
+                var share = 100 * performance / usual;
+                if (share < 80)
+                {
+                    Reason(2, "slow", share);
+                }
+                else if (share < 90)
+                {
+                    Reason(1, "slow", share);
+                }
+            }
+            else if (!eco && performance < 60)
+            {
+                Reason(2, "slow", performance); // far below the base clock while not asked to save power
+            }
+
+            if (signals.Limit is not < 95)
+            {
+                Add(_performance[eco], performance, 720);
+            }
+        }
+
+        if (signals.Queue is { } queue && sample.Cores > 0)
+        {
+            if (queue > 2 * sample.Cores)
+            {
+                Reason(2, "queue", queue);
+            }
+            else if (queue > sample.Cores)
+            {
+                Reason(1, "queue", queue);
+            }
+        }
+
+        if (sample.CpuTotal >= 95)
+        {
+            Reason(1, "full", sample.CpuTotal);
+        }
+
+        if (sample.CpuOthers >= 30)
+        {
+            Reason(sample.CpuOthers >= 60 ? 2 : 1, "others", sample.CpuOthers);
+        }
+
+        var free = signals.FreeMb ?? (sample.MemoryTotalGb > 0 ? sample.MemoryTotalGb * 1024 * (100 - sample.MemoryUsed) / 100 : (double?)null);
+        if (free is { } mb && sample.MemoryTotalGb > 0)
+        {
+            var share = mb / (sample.MemoryTotalGb * 1024);
+            if (mb < 300 || share < 0.05)
+            {
+                Reason(2, "memory", mb);
+            }
+            else if (share < 0.10)
+            {
+                Reason(1, "memory", mb);
+            }
+        }
+
+        if (signals.PagesIn is { } pages && pages > 20)
+        {
+            Reason(pages > 100 ? 2 : 1, "paging", pages);
+        }
+
+        if (signals.DiskBusy is { } disk && disk > 90)
+        {
+            Reason(1, "disk", disk);
+        }
+
+        if (learning && _lastSpeedShare is { } speed && speed < 0.8)
+        {
+            Reason(speed < 0.6 ? 2 : 1, "learning", 100 * speed);
+        }
+
+        _recent.Enqueue((level, reasons));
+        while (_recent.Count > Window)
+        {
+            _recent.Dequeue();
+        }
+
+        // the highest level that held in at least half of the recent samples (a short spike is not a struggle)
+        var need = (_recent.Count + 1) / 2;
+        var held = Enumerable.Range(0, 3).Reverse().First(l => l == 0 || _recent.Count(r => r.Level >= l) >= need);
+        var why = _recent.Reverse().FirstOrDefault(r => r.Level >= held && held > 0).Reasons ?? [];
+        return new Strain(held, held == 0 ? [] : why);
+    }
+
+    private static void Add(List<double> list, double value, int keep)
+    {
+        list.Add(value);
+        if (list.Count > keep)
+        {
+            list.RemoveAt(0);
+        }
+    }
+
+    private static double? Percentile(List<double> values, double p, int least)
+    {
+        if (values.Count < least)
+        {
+            return null;
+        }
+
+        var sorted = values.Order().ToList();
+        return sorted[(int)Math.Min(sorted.Count - 1, Math.Floor(p * (sorted.Count - 1) + 0.5))];
+    }
+}
+
+/// <summary>
+/// Reads the signals of strain. Windows: the plain performance counters (PDH, English names, no administrator
+/// rights, no driver) – "% Processor Performance" and "% Performance Limit" of Processor Information, "Processor
+/// Queue Length", "Available MBytes", "Pages Input/sec" and the idle time of the disks. Linux: /proc and cpufreq.
+/// </summary>
+internal sealed partial class StrainCounters
+{
+    private const uint Double = 0x00000200;
+    private static readonly string[] Paths =
+    [
+        @"\Processor Information(_Total)\% Processor Performance",
+        @"\Processor Information(_Total)\% Performance Limit",
+        @"\System\Processor Queue Length",
+        @"\Memory\Available MBytes",
+        @"\Memory\Pages Input/sec",
+        @"\PhysicalDisk(_Total)\% Idle Time",
+    ];
+
+    private nint _query;
+    private readonly nint[] _counters = new nint[Paths.Length];
+    private bool _failed;
+    private long? _lastMajorFaults;
+    private long _lastTicks;
+
+    public StrainSignals Read()
+    {
+        try
+        {
+            return OperatingSystem.IsWindows() ? Windows() : OperatingSystem.IsLinux() ? Linux() : StrainSignals.None;
+        }
+        catch (Exception e) when (e is IOException or FormatException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException or IndexOutOfRangeException)
+        {
+            return StrainSignals.None;
+        }
+    }
+
+    private StrainSignals Windows()
+    {
+        if (_failed)
+        {
+            return StrainSignals.None;
+        }
+
+        if (_query == 0)
+        {
+            if (PdhOpenQueryW(null, 0, out _query) != 0)
+            {
+                _failed = true;
+                return StrainSignals.None;
+            }
+
+            for (var i = 0; i < Paths.Length; i++)
+            {
+                // a counter this Windows does not have stays 0 and gives null
+                _ = PdhAddEnglishCounterW(_query, Paths[i], 0, out _counters[i]);
+            }
+        }
+
+        if (PdhCollectQueryData(_query) != 0)
+        {
+            return StrainSignals.None;
+        }
+
+        double? Value(int i)
+        {
+            if (_counters[i] == 0 || PdhGetFormattedCounterValue(_counters[i], Double, out _, out var value) != 0 || value.Status != 0)
+            {
+                return null; // also the first reading of a rate, which needs two
+            }
+
+            return double.IsFinite(value.Value) ? value.Value : null;
+        }
+
+        var idle = Value(5);
+        return new StrainSignals(Value(0), Value(1), Value(2), Value(3), Value(4), idle is { } rest ? Math.Clamp(100 - rest, 0, 100) : null);
+    }
+
+    private StrainSignals Linux()
+    {
+        double? queue = null;
+        foreach (var line in File.ReadLines("/proc/stat"))
+        {
+            if (line.StartsWith("procs_running ", StringComparison.Ordinal))
+            {
+                queue = Math.Max(0, double.Parse(line[14..], CultureInfo.InvariantCulture) - Environment.ProcessorCount);
+            }
+        }
+
+        double? free = null;
+        foreach (var line in File.ReadLines("/proc/meminfo"))
+        {
+            if (line.StartsWith("MemAvailable:", StringComparison.Ordinal))
+            {
+                free = double.Parse(line[13..].Trim().Split(' ')[0], CultureInfo.InvariantCulture) / 1024;
+            }
+        }
+
+        double? pages = null;
+        var now = Environment.TickCount64;
+        foreach (var line in File.ReadLines("/proc/vmstat"))
+        {
+            if (line.StartsWith("pgmajfault ", StringComparison.Ordinal))
+            {
+                var faults = long.Parse(line[11..], CultureInfo.InvariantCulture);
+                if (_lastMajorFaults is { } last && now > _lastTicks)
+                {
+                    pages = (faults - last) * 1000.0 / (now - _lastTicks);
+                }
+
+                _lastMajorFaults = faults;
+                _lastTicks = now;
+            }
+        }
+
+        // the clock against the highest one, and the ceiling against it (cpufreq, where the system has it)
+        double? performance = null, limit = null;
+        const string Cpu = "/sys/devices/system/cpu/cpu0/cpufreq";
+        if (File.Exists(Path.Combine(Cpu, "cpuinfo_max_freq")))
+        {
+            var max = double.Parse(File.ReadAllText(Path.Combine(Cpu, "cpuinfo_max_freq")).Trim(), CultureInfo.InvariantCulture);
+            if (max > 0)
+            {
+                var current = Directory.EnumerateDirectories("/sys/devices/system/cpu", "cpu*")
+                    .Select(d => Path.Combine(d, "cpufreq", "scaling_cur_freq")).Where(File.Exists)
+                    .Select(f => double.Parse(File.ReadAllText(f).Trim(), CultureInfo.InvariantCulture)).DefaultIfEmpty(0).Average();
+                performance = current > 0 ? 100 * current / max : null;
+                var ceiling = Path.Combine(Cpu, "scaling_max_freq");
+                limit = File.Exists(ceiling) ? 100 * double.Parse(File.ReadAllText(ceiling).Trim(), CultureInfo.InvariantCulture) / max : null;
+            }
+        }
+
+        return new StrainSignals(performance, limit, queue, free, pages, null);
+    }
+
+    [LibraryImport("pdh.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial uint PdhOpenQueryW(string? source, nint user, out nint query);
+
+    [LibraryImport("pdh.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial uint PdhAddEnglishCounterW(nint query, string path, nint user, out nint counter);
+
+    [LibraryImport("pdh.dll")]
+    private static partial uint PdhCollectQueryData(nint query);
+
+    [LibraryImport("pdh.dll")]
+    private static partial uint PdhGetFormattedCounterValue(nint counter, uint format, out uint type, out CounterValue value);
+
+    // PDH_FMT_COUNTERVALUE with a double: status, padding, value
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CounterValue
+    {
+        public uint Status;
+        public uint Padding;
+        public double Value;
+    }
+}

@@ -160,6 +160,7 @@ public partial class App : Application
                 ["mac"] = $"00-11-22-33-44-{i:X2}",
                 ["woken"] = i % 3 == 0,
                 ["test"] = i <= 6,
+                ["on"] = i == 9 ? true : null,
                 ["connected"] = state is not "gone" and not "uninstalled",
                 ["state"] = state,
                 ["leaving"] = state == "leaving",
@@ -174,6 +175,19 @@ public partial class App : Application
                     ["too_hot"] = i == 16,
                     ["machine"] = new JsonObject { ["cpu"] = Math.Round(cpu), ["cpu_own"] = Math.Round(cpu - 4), ["memory"] = 41, ["temperature"] = i == 16 ? 91 : 46 + i % 7 * 3, ["cores"] = 20 },
                     ["last"] = new JsonObject { ["lines_per_second"] = Math.Round(11 + random.NextDouble() * 4, 1) },
+                    ["strain"] = new JsonObject
+                    {
+                        ["level"] = i is 5 or 16 ? 2 : i is 2 or 11 ? 1 : 0,
+                        ["reasons"] = i switch
+                        {
+                            5 => new JsonArray((JsonNode)new JsonObject { ["code"] = "slow", ["value"] = 64 }, new JsonObject { ["code"] = "learning", ["value"] = 58 }),
+                            16 => new JsonArray((JsonNode)new JsonObject { ["code"] = "limit", ["value"] = 71 }),
+                            2 => new JsonArray((JsonNode)new JsonObject { ["code"] = "others", ["value"] = 42 }),
+                            11 => new JsonArray((JsonNode)new JsonObject { ["code"] = "queue", ["value"] = 26 }),
+                            _ => new JsonArray(),
+                        },
+                    },
+                    ["signals"] = new JsonObject { ["performance"] = i == 5 ? 68 : 104, ["usual_performance"] = 106, ["limit"] = i == 16 ? 71 : 100, ["queue"] = i == 11 ? 26 : 1, ["free_mb"] = 9200, ["disk"] = 3, ["temperature_fixed"] = i <= 4 },
                 },
             });
             var points = new JsonArray();
@@ -188,6 +202,8 @@ public partial class App : Application
                     ["own"] = night ? 36 + random.NextDouble() * 12 : 0,
                     ["temperature"] = night ? 52 + i % 7 * 2 + random.NextDouble() * 4 : 38 + random.NextDouble() * 3,
                     ["lps"] = night ? 11 + random.NextDouble() * 4 : 0,
+                    ["strain"] = night && i == 5 && t.Hour is >= 1 and < 4 ? 2 : night && i % 4 == 0 ? random.NextDouble() : 0,
+                    ["performance"] = night ? (i == 5 && t.Hour is >= 1 and < 4 ? 66 : 100 + random.NextDouble() * 6) : 99,
                 });
             }
 

@@ -47,6 +47,8 @@ public sealed class LabHistory
             open.Add("own", machine?["cpu_own"]);
             open.Add("memory", machine?["memory"]);
             open.Add("temperature", machine?["temperature"]);
+            open.Add("strain", status["strain"]?["level"]);
+            open.Add("performance", status["signals"]?["performance"]);
             open.Add("lps", status["state"]?.GetValue<string>() == "learning" ? last?["lines_per_second"] : JsonValue.Create(0));
             open.State = status["state"]?.GetValue<string>() ?? open.State;
         }
@@ -68,7 +70,7 @@ public sealed class LabHistory
 
     /// <summary>
     /// The rows between two moments (one computer, or all when agent is null), averaged into buckets of the given
-    /// minutes: {"series": {"PC-01": [{"t", "cpu", "own", "memory", "temperature", "lps"}, …], …}}.
+    /// minutes: {"series": {"PC-01": [{"t", "cpu", "own", "memory", "temperature", "lps", "strain", "performance"}, …], …}}.
     /// </summary>
     public JsonObject Query(DateTime from, DateTime to, string? agent, int bucketMinutes)
     {
@@ -153,7 +155,7 @@ public sealed class LabHistory
     // the sums of one minute (or one bucket) of one computer
     private sealed class Minute(DateTime time)
     {
-        public static readonly string[] Keys = ["cpu", "own", "memory", "temperature", "lps"];
+        public static readonly string[] Keys = ["cpu", "own", "memory", "temperature", "lps", "strain", "performance"];
 
         private readonly Dictionary<string, (double Sum, int Count)> _values = new(StringComparer.Ordinal);
 

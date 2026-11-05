@@ -170,7 +170,16 @@ public sealed class OverviewPage : ConsolePage
         panel.Children.Add(badge);
         panel.Children.Add(Ui.Text($"procesor {Ui.Number(machine?["cpu"], "0", " %")} · učenie {Ui.Number(machine?["cpu_own"], "0", " %")}", 12, brush: "TextMuted"));
         panel.Children.Add(Ui.Bar(double.IsFinite(cpu) ? cpu : 0, double.IsFinite(own) ? own : 0));
-        panel.Children.Add(Ui.Text($"{Ui.Number(machine?["temperature"], "0", " °C")} · {Ui.Number(status?["last"]?["lines_per_second"], "0.0")} riadkov/s", 12, brush: "TextMuted"));
+        panel.Children.Add(Ui.Text($"{Ui.Temperature(agent)} · {Ui.Number(status?["last"]?["lines_per_second"], "0.0")} riadkov/s", 12, brush: "TextMuted"));
+        var (strainText, strainWhy, strainBrush, strainLevel) = Ui.Strain(agent);
+        if (strainLevel is not null)
+        {
+            var line = Ui.Text("● " + strainText, 12, bold: strainLevel > 0, brush: strainBrush);
+            line.ToolTip = strainWhy.Length > 0 ? strainWhy : null;
+            line.TextTrimming = TextTrimming.CharacterEllipsis;
+            line.TextWrapping = TextWrapping.NoWrap;
+            panel.Children.Add(line);
+        }
 
         var stripe = new Border { Width = 4, CornerRadius = new CornerRadius(2), Background = Ui.Brush(stateFore), Margin = new Thickness(0, 2, 12, 2) };
         var row = new DockPanel();
@@ -228,9 +237,14 @@ public sealed class OverviewPage : ConsolePage
             var hot = Ui.Value(agent["settings"]?["hot"]);
             if (agent["connected"]?.GetValue<bool>() != true)
             {
-                if (open && agent["settings"]?["learn"]?.GetValue<bool>() != false)
+                if (agent["on"]?.GetValue<bool>() == true)
                 {
-                    notes.Add(($"{shown} je odpojený v čase učenia", "SurfaceAlt", "TextMuted", name));
+                    // on, but its agent does not connect: something to fix (the service, the key, the network)
+                    notes.Add(($"{shown} je zapnutý, ale IRIS sa nepripája – skontrolujte službu IRIS-Lab na ňom", "WarnSoft", "Warn", name));
+                }
+                else if (open && agent["settings"]?["learn"]?.GetValue<bool>() != false)
+                {
+                    notes.Add(($"{shown} je v čase učenia {(agent["on"]?.GetValue<bool>() == false ? "vypnutý" : "nepripojený")}", "SurfaceAlt", "TextMuted", name));
                 }
 
                 continue;
@@ -239,6 +253,12 @@ public sealed class OverviewPage : ConsolePage
             if (agent["status"]?["too_hot"]?.GetValue<bool>() == true || (double.IsFinite(temperature) && double.IsFinite(hot) && temperature >= hot - 3))
             {
                 notes.Add(($"{shown}: {temperature:0} °C – učenie čaká, kým sa ochladí", "WarnSoft", "Warn", name));
+            }
+
+            var struggles = Ui.Strain(agent);
+            if (struggles.Level == 2)
+            {
+                notes.Add(($"{shown} sa trápi: {struggles.Reasons}", "WarnSoft", "Warn", name));
             }
 
             if (Ui.String(agent["status"]?["state"]) == "no fonts")

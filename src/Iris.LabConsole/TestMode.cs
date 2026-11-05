@@ -242,7 +242,7 @@ public sealed class TestPage : ConsolePage
         var panel = new StackPanel();
         panel.Children.Add(Ui.Heading(test is null ? "Počítače teraz" : "Počítače v teste", "obnovuje sa každých 5 sekúnd; teplotu hlási len počítač, ktorého firmvér ju dáva"));
         var grid = new Grid();
-        string[] headers = ["Počítač", "Stav", "Procesor", "z toho učenie", "Teplota", "Vlákna", "Riadky/s", "Loss"];
+        string[] headers = ["Počítač", "Stav", "Procesor", "z toho učenie", "Teplota", "Vlákna", "Riadky/s", "Loss", "Námaha"];
         foreach (var _ in headers)
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -267,10 +267,14 @@ public sealed class TestPage : ConsolePage
             Place(grid, Ui.Text(Ui.Number(machine?["cpu"], "0", " %"), 13), row, 2);
             Place(grid, Ui.Text(Ui.Number(machine?["cpu_own"], "0", " %"), 13, bold: true), row, 3);
             var temperature = Ui.Value(machine?["temperature"]);
-            Place(grid, Ui.Text(Ui.Number(machine?["temperature"], "0", " °C"), 13, bold: temperature >= 80, brush: temperature >= 80 ? "Danger" : "Text"), row, 4);
+            Place(grid, Ui.Text(Ui.Temperature(agent), 13, bold: temperature >= 80, brush: temperature >= 80 ? "Danger" : "Text"), row, 4);
             Place(grid, Ui.Text(Ui.Number(status?["threads"]), 13), row, 5);
             Place(grid, Ui.Text(Ui.Number(status?["last"]?["lines_per_second"], "0.0"), 13), row, 6);
             Place(grid, Ui.Text(Ui.Number(status?["last"]?["loss"], "0.000"), 13, brush: "TextMuted"), row, 7);
+            var strain = Ui.Strain(agent);
+            var strainText = Ui.Text(strain.Level is null ? "–" : strain.Text + (strain.Reasons.Length > 0 ? " – " + strain.Reasons : ""), 13, bold: strain.Level > 0, brush: strain.Brush);
+            strainText.MaxWidth = 420;
+            Place(grid, strainText, row, 8);
             row++;
         }
 

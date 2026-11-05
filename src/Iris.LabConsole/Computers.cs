@@ -99,7 +99,7 @@ public sealed class ComputersPage : ConsolePage
                 Ui.String(agent["group"]) is { Length: > 0 } g ? g : "–",
                 null,
                 Ui.Number(machine?["cpu"], "0", " %"),
-                Ui.Number(machine?["temperature"], "0", " °C"),
+                Ui.Temperature(agent),
                 Ui.Number(agent["status"]?["last"]?["lines_per_second"], "0.0"),
                 version is null ? "–" : old ? version + " ↑" : version
             ], header: false, compact, badge: Ui.Badge(state, back, fore));
@@ -347,11 +347,22 @@ public sealed class ComputersPage : ConsolePage
         }
 
         _live.Children.Add(badges);
+        var strain = Ui.Strain(agent);
+        if (strain.Level is not null)
+        {
+            var line = Ui.Text($"námaha: {strain.Text}{(strain.Reasons.Length > 0 ? " – " + strain.Reasons : "")}", 13, bold: strain.Level > 0, brush: strain.Brush);
+            line.Margin = new Thickness(0, 4, 0, 8);
+            _live.Children.Add(line);
+            var signals = status?["signals"];
+            var facts = Ui.Text($"výkon procesora {Ui.Number(signals?["performance"], "0", " %")} (bežne {Ui.Number(signals?["usual_performance"], "0", " %")}) · strop {Ui.Number(signals?["limit"], "0", " %")} · čakajúce vlákna {Ui.Number(signals?["queue"])} · voľná pamäť {Ui.Number(signals?["free_mb"], "#,0", " MB")} · disk {Ui.Number(signals?["disk"], "0", " %")}", 11.5, brush: "TextMuted");
+            facts.Margin = new Thickness(0, 0, 0, 8);
+            _live.Children.Add(facts);
+        }
         var grid = new System.Windows.Controls.Primitives.UniformGrid { Columns = 4 };
         foreach (var (label, value) in new[]
                  {
                      ("procesor", Ui.Number(machine?["cpu"], "0", " %")), ("učenie", Ui.Number(machine?["cpu_own"], "0", " %")),
-                     ("pamäť", Ui.Number(machine?["memory"], "0", " %")), ("teplota", Ui.Number(machine?["temperature"], "0", " °C")),
+                     ("pamäť", Ui.Number(machine?["memory"], "0", " %")), ("teplota", Ui.Temperature(agent)),
                      ("riadky/s", Ui.Number(status?["last"]?["lines_per_second"], "0.0")), ("vlákna", Ui.Number(status?["threads"])),
                      ("kolá", Ui.Number(agent["rounds"])), ("naposledy", Ui.Ago(agent["seen"])),
                  })

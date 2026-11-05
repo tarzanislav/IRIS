@@ -436,6 +436,7 @@ public static class LabTests
                 Port = 0,
                 Schedule = new LabSchedule(new TimeOnly(10, 0), new TimeOnly(10, 0), false),
                 AutoWake = false,
+                IsOn = (address, _) => Task.FromResult(address == "10.0.0.101"), // PC-01 is on, but its IRIS does not connect
             };
             var hub = new LabHub(options, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState());
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -446,6 +447,16 @@ public static class LabTests
             }
 
             using var console = await LabConsoleClient.ConnectAsync("127.0.0.1", hub.Port, LabKeys.Read(Path.Combine(folder, "console.key")), stop.Token);
+            JsonNode? On(JsonObject snapshot, string name) => snapshot["agents"]!.AsArray().First(a => a!["name"]!.GetValue<string>() == name)!["on"];
+            var looked = await console.SnapshotAsync(stop.Token);
+            for (var i = 0; i < 50 && (On(looked, "PC-01") is null || On(looked, "PC-02") is null); i++)
+            {
+                await Task.Delay(100);
+                looked = await console.SnapshotAsync(stop.Token);
+            }
+
+            Assert.True(On(looked, "PC-01")?.GetValue<bool>() == true, "on, but IRIS does not run there");
+            Assert.True(On(looked, "PC-02")?.GetValue<bool>() == false, "off");
             await console.ConfigureAsync(new JsonObject { ["alias"] = new JsonObject { ["computer"] = "PC-02", ["name"] = "Pri okne" } }, stop.Token);
             Assert.Equal(1, await console.CommandAsync("PC-01", LabCommands.Uninstall, stop.Token), "an uninstall waits for a computer that is off");
             var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(folder, "computers.json")))!["computers"]!.AsArray();
@@ -647,6 +658,75 @@ public static class LabTests
                 // a file still held by a computer that is ending; the temporary folder goes with the next cleanup
             }
         }
+    }
+
+    [Test]
+    public static void TheStrainOfAComputerIsJudgedByItsOwnMeasure()
+    {
+        var judge = new StrainJudge();
+        MachineSample Busy(double cpu = 70, double others = 5, double memoryUsed = 50) => new(cpu, cpu - others, memoryUsed, 16, null, null, 8);
+        var fine = new StrainSignals(Performance: 104, Limit: 100, Queue: 1, FreeMb: 8000, PagesIn: 0, DiskBusy: 5);
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.Equal(0, judge.Judge(Busy(), fine, eco: false, learning: true).Level, "a computer that copes");
+        }
+
+        Assert.True(judge.UsualPerformance(false) is > 100 and < 110, "its usual speed is learned");
+
+        // the processor slows down to 70 % of its usual speed (heat): one sample is no struggle, a few are
+        var hot = fine with { Performance = 73 };
+        Assert.Equal(0, judge.Judge(Busy(), hot, false, true).Level, "one sample is not enough");
+        Assert.Equal(0, judge.Judge(Busy(), hot, false, true).Level, "two neither");
+        var strain = judge.Judge(Busy(), hot, false, true);
+        Assert.Equal(2, strain.Level, "it struggles");
+        Assert.True(strain.Reasons.Any(r => r.Code == "slow" && r.Value is > 65 and < 75), "because it is slow (share of the usual)");
+        for (var i = 0; i < 6; i++)
+        {
+            judge.Judge(Busy(), fine, false, true);
+        }
+
+        Assert.Equal(0, judge.Judge(Busy(), fine, false, true).Level, "and it recovers");
+
+        // the efficient mode has its own measure: a slower clock there is the purpose, not a struggle
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.Equal(0, judge.Judge(Busy(), fine with { Performance = 55 }, eco: true, learning: true).Level, "eco is slower on purpose");
+        }
+
+        // the firmware lowers the ceiling, threads wait, memory runs out, others take the processor
+        var other = new StrainJudge();
+        Strain Last(StrainSignals signals, MachineSample sample)
+        {
+            Strain result = new(0, []);
+            for (var i = 0; i < 6; i++)
+            {
+                result = other.Judge(sample, signals, false, true);
+            }
+
+            return result;
+        }
+
+        Assert.True(Last(fine with { Limit = 70 }, Busy()) is { Level: 2 } a && a.Reasons.Any(r => r.Code == "limit"), "the firmware's ceiling");
+        Assert.True(Last(fine with { Queue = 12 }, Busy()) is { Level: 1 } b && b.Reasons.Any(r => r.Code == "queue"), "threads wait");
+        Assert.True(Last(fine with { FreeMb = 250, PagesIn = 150 }, Busy()) is { Level: 2 } c && c.Reasons.Any(r => r.Code == "memory") && c.Reasons.Any(r => r.Code == "paging"), "memory is short");
+        Assert.True(Last(fine, Busy(cpu: 97, others: 65)) is { Level: 2 } d && d.Reasons.Any(r => r.Code == "others") && d.Reasons.Any(r => r.Code == "full"), "someone else takes it");
+
+        // the learning slows down against what this computer usually learns
+        var learning = new StrainJudge();
+        foreach (var speed in new[] { 10.0, 10.2, 9.9, 10.1 })
+        {
+            learning.Round(speed, eco: false);
+        }
+
+        learning.Round(5, eco: false);
+        Strain slow = new(0, []);
+        for (var i = 0; i < 4; i++)
+        {
+            slow = learning.Judge(Busy(), fine, false, learning: true);
+        }
+
+        Assert.True(slow.Level == 2 && slow.Reasons.Any(r => r.Code == "learning" && r.Value is > 45 and < 55), "half of its usual speed");
+        Assert.Equal(2, slow.ToJson()["level"]!.GetValue<int>(), "for the console");
     }
 
     [Test]

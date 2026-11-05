@@ -73,6 +73,10 @@ public sealed class LabAgent
 {
     private readonly LabAgentOptions _options;
     private readonly Machine _machine = new();
+    private readonly StrainCounters _counters = new();
+    private readonly StrainJudge _judge = new();
+    private StrainSignals _signals = StrainSignals.None;
+    private Strain? _strain;
     private readonly Lock _gate = new();
     private Dictionary<string, string[]> _sentences = [];
     private LabLearner? _learner;
@@ -163,6 +167,8 @@ public sealed class LabAgent
             while (!session.IsCancellationRequested)
             {
                 _sample = _machine.Sample();
+                _signals = _counters.Read();
+                _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning");
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);
                 await Task.Delay(TimeSpan.FromSeconds(_options.StatusSeconds), session.Token);
             }
@@ -216,6 +222,18 @@ public sealed class LabAgent
             ["state"] = _left ? "uninstalling" : _leaving ? "leaving" : _paused ? "paused" : _state,
             ["round"] = _round,
             ["machine"] = _sample?.ToJson(),
+            ["strain"] = _strain?.ToJson(),
+            ["signals"] = new JsonObject
+            {
+                ["performance"] = Round(_signals.Performance),
+                ["limit"] = Round(_signals.Limit),
+                ["queue"] = Round(_signals.Queue),
+                ["free_mb"] = Round(_signals.FreeMb),
+                ["pages_in"] = Round(_signals.PagesIn),
+                ["disk"] = Round(_signals.DiskBusy),
+                ["usual_performance"] = Round(_judge.UsualPerformance(_ecoSet ?? _eco)),
+                ["temperature_fixed"] = _machine.FixedTemperature,
+            },
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
             ["eco"] = _ecoSet,
@@ -258,6 +276,8 @@ public sealed class LabAgent
             learner.Threads = Threads();
         }
     }
+
+    private static double? Round(double? value) => value is { } v ? Math.Round(v, 1) : null;
 
     private int Threads() => Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * _cores));
 
@@ -311,6 +331,10 @@ public sealed class LabAgent
             Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
             var work = learner.Learn(TimeSpan.FromSeconds(seconds), rate, MayGoOn, learning.Token);
             _last = work;
+            if (!work.Stopped && work.Seconds > 0)
+            {
+                _judge.Round(work.Lines / (work.Seconds * Math.Max(0.05, _duty) * Math.Max(1, learner.Threads)), _ecoSet ?? _eco);
+            }
             _options.Log?.Invoke($"round {round}: {work.Steps} steps, {work.Lines} lines, loss {work.Loss:F3}, {work.Seconds:F0} s");
             var (layout, data) = TensorPack.Pack(TensorPack.Difference(learner.Weights, start));
             var header = new JsonObject
