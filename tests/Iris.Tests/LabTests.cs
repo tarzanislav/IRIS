@@ -503,6 +503,7 @@ public static class LabTests
                 Fonts = [],
                 Log = log.Write,
                 ModelSource = "a test",
+                AgentSilence = TimeSpan.FromSeconds(1),
             };
             var hub = new LabHub(options, OcrWeights.Create(OcrTrainingTests.Tiny(), 1), new OcrLearningState { Step = 7 });
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -533,6 +534,24 @@ public static class LabTests
             Assert.True(await console.ServerModelFromReleaseAsync(stop.Token), "the request is left");
             Assert.True(JsonNode.Parse(File.ReadAllText(LabHub.UpdateRequestPath(folder)))!["model"]!.GetValue<bool>(), "for the updater");
             Assert.True((await console.ServerStatusAsync(stop.Token))["update_waiting"]!.GetValue<bool>(), "the console sees it waiting");
+
+            // a computer switched off without closing its connection: silent, so after a while gone
+            using (var raw = new TcpClient())
+            {
+                await raw.ConnectAsync(IPAddress.Loopback, hub.Port, stop.Token);
+                using var quiet = await LabChannel.ConnectAsync(raw.GetStream(), LabRole.Agent, "PC-77", LabKeys.Read(Path.Combine(folder, "agent.key")), stop.Token);
+                JsonNode? Connected(JsonObject snapshot) => snapshot["agents"]!.AsArray().FirstOrDefault(a => a!["name"]!.GetValue<string>() == "PC-77")?["connected"];
+                var seen = await console.SnapshotAsync(stop.Token);
+                for (var i = 0; i < 20 && Connected(seen)?.GetValue<bool>() != true; i++)
+                {
+                    await Task.Delay(50);
+                    seen = await console.SnapshotAsync(stop.Token);
+                }
+
+                Assert.True(Connected(seen)?.GetValue<bool>() == true, "it came");
+                await Task.Delay(2500);
+                Assert.True(Connected(await console.SnapshotAsync(stop.Token))?.GetValue<bool>() == false, "silent: gone, although its connection is open");
+            }
 
             Assert.True(await console.RestartServerAsync(stop.Token), "a restart");
             await hubTask.WaitAsync(TimeSpan.FromSeconds(20));

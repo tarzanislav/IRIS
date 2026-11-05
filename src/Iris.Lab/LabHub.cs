@@ -77,6 +77,12 @@ public sealed record LabHubOptions
     /// </summary>
     public Func<string, CancellationToken, Task<bool>> IsOn { get; init; } = NetworkScanner.IsOnAsync;
 
+    /// <summary>
+    /// How long a connected computer may be silent before it counts as gone (it sends its state every 10 s; a computer
+    /// switched off at the button leaves its connection open without a word).
+    /// </summary>
+    public TimeSpan AgentSilence { get; init; } = TimeSpan.FromSeconds(60);
+
     /// <summary>Where the hub writes what happens (its log, see <see cref="HubLog"/>); null = nowhere.</summary>
     public Action<string>? Log { get; init; }
 
@@ -692,7 +698,21 @@ public sealed class LabHub
 
                 while (!cancel.IsCancellationRequested)
                 {
-                    var message = await channel.ReceiveAsync(cancel);
+                    // a computer tells how it is every few seconds; one that is silent much longer is gone, even
+                    // when its connection was never closed (switched off at the button, the cable pulled)
+                    using var silence = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                    silence.CancelAfter(_options.AgentSilence);
+                    LabMessage message;
+                    try
+                    {
+                        message = await channel.ReceiveAsync(silence.Token);
+                    }
+                    catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+                    {
+                        Note($"{agent.Name} was silent for {_options.AgentSilence.TotalSeconds:0} s: taken as gone");
+                        break;
+                    }
+
                     lock (_gate)
                     {
                         agent.Seen = _options.Now();
