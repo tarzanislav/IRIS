@@ -603,6 +603,20 @@ public static class LabTests
                 await Task.Delay(200);
             }
 
+            // the hub's next step notes the end
+            for (var i = 0; i < 50 && !stop.IsCancellationRequested; i++)
+            {
+                lock (log)
+                {
+                    if (log.Any(l => l.Contains("is over", StringComparison.Ordinal)))
+                    {
+                        break;
+                    }
+                }
+
+                await Task.Delay(100);
+            }
+
             snapshot = await console.SnapshotAsync(stop.Token);
             Assert.Equal(0, Agent(snapshot, "PC-02")["rounds"]!.GetValue<int>(), "the computer that was not chosen waited");
             lock (log)
