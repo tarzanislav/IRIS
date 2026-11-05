@@ -172,6 +172,49 @@ public sealed partial class Machine
         return best;
     }
 
+    /// <summary>
+    /// The programs that use the processor besides IRIS (name and share of the whole processor, %), the busiest
+    /// first – read only when others use much, from the times of the processes (no driver; the service may read
+    /// them all, also the protected antivirus).
+    /// </summary>
+    public List<(string Name, double Share)> Others(int count = 3)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var times = new Dictionary<int, (string Name, TimeSpan Cpu)>();
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.Id != _self.Id && process.Id != 0)
+                    {
+                        times[process.Id] = (process.ProcessName, process.TotalProcessorTime);
+                    }
+                }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+                {
+                    // a process that ended meanwhile, or one even the service may not look at
+                }
+            }
+        }
+
+        var result = new List<(string Name, double Share)>();
+        if (_lastProcesses is var (last, ticks) && now > ticks && now - ticks < Stopwatch.Frequency * 60)
+        {
+            var seconds = (now - ticks) / (double)Stopwatch.Frequency * Environment.ProcessorCount;
+            result = [.. times.Where(t => last.ContainsKey(t.Key))
+                .Select(t => (t.Value.Name, Share: 100 * (t.Value.Cpu - last[t.Key].Cpu).TotalSeconds / seconds))
+                .GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase).Select(g => (g.Key, g.Sum(t => t.Share)))
+                .Where(t => t.Item2 >= 2).OrderByDescending(t => t.Item2).Take(count)];
+        }
+
+        _lastProcesses = (times, now);
+        return result;
+    }
+
+    private (Dictionary<int, (string Name, TimeSpan Cpu)> Times, long Ticks)? _lastProcesses;
+
     // seconds since the last key press or mouse move of the user of this session (Windows; a service sees no input)
     private static double? IdleSeconds()
     {

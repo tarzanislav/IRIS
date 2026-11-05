@@ -85,6 +85,8 @@ public sealed class LabAgent
     private readonly StrainJudge _judge = new();
     private StrainSignals _signals = StrainSignals.None;
     private Strain? _strain;
+    private List<(string Name, double Share)> _others = [];
+    private bool _lookingAtOthers;
     private readonly Lock _gate = new();
     private Dictionary<string, string[]> _sentences = [];
     private LabLearner? _learner;
@@ -176,6 +178,10 @@ public sealed class LabAgent
             {
                 _sample = _machine.Sample();
                 _signals = _counters.Read();
+                // who the others are, when they take much (the reading of all processes is kept for then); the
+                // first look only prepares the next one
+                _others = _sample.CpuOthers >= 15 || _lookingAtOthers ? _machine.Others() : [];
+                _lookingAtOthers = _sample.CpuOthers >= 15;
                 _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? Threads(), _duty);
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);
                 await Task.Delay(TimeSpan.FromSeconds(_options.StatusSeconds), session.Token);
@@ -242,6 +248,7 @@ public sealed class LabAgent
                 ["disk"] = Round(_signals.DiskBusy),
                 ["usual_performance"] = Round(_judge.UsualPerformance(_ecoSet ?? _eco)),
                 ["temperature_fixed"] = _machine.FixedTemperature,
+                ["others"] = new JsonArray([.. _others.Select(o => (JsonNode?)new JsonObject { ["name"] = o.Name, ["cpu"] = Math.Round(o.Share, 1) })]),
             },
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,

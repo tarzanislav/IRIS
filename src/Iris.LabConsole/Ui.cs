@@ -296,7 +296,11 @@ internal static class Ui
         }
 
         var level = strain["level"]?.GetValue<int>() ?? 0;
-        var reasons = string.Join(", ", strain["reasons"]?.AsArray().OfType<JsonObject>().Select(r => Reason(String(r["code"]), Value(r["value"]))) ?? []);
+        // the other programs by name (agents from 0.4.6), with words for the usual ones of Windows
+        var others = string.Join(", ", agent["status"]?["signals"]?["others"]?.AsArray().OfType<JsonObject>()
+            .Select(o => $"{Program(String(o["name"]))} {Value(o["cpu"]):0} %") ?? []);
+        var reasons = string.Join(", ", strain["reasons"]?.AsArray().OfType<JsonObject>()
+            .Select(r => Reason(String(r["code"]), Value(r["value"])) + (String(r["code"]) == "others" && others.Length > 0 ? $" ({others})" : "")) ?? []);
         return level switch
         {
             >= 2 => ("trápi sa", reasons, "Danger", 2),
@@ -304,6 +308,19 @@ internal static class Ui
             _ => ("v pohode", "", "Good", 0),
         };
     }
+
+    private static string Program(string? name) => name?.ToLowerInvariant() switch
+    {
+        "msmpeng" or "mpdefendercoreservice" or "nissrv" => "antivírus Defender",
+        "tiworker" or "trustedinstaller" or "moucoreworker" or "mousocoreworker" or "usoclient" or "wuauclt" => "aktualizácia Windows",
+        "mscorsvw" or "ngen" or "ngentask" => "optimalizácia .NET",
+        "searchindexer" or "searchprotocolhost" or "searchfilterhost" => "indexovanie vyhľadávania",
+        "compattelrunner" or "devicecensus" => "zber údajov Windows",
+        "msiexec" => "inštalácia programu",
+        "sihost" or "explorer" or "dwm" => "pracovná plocha Windows",
+        null => "?",
+        _ => name,
+    };
 
     private static string Reason(string? code, double value) => code switch
     {

@@ -794,6 +794,31 @@ public static class LabTests
     }
 
     [Test]
+    public static void TheOtherProgramsThatTakeTheProcessorAreNamed()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/bin/sh"))
+        {
+            throw new SkipException("a busy program of the test needs /bin/sh");
+        }
+
+        var machine = new Machine();
+        using var busy = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "while :; do :; done"]) { UseShellExecute = false })!;
+        try
+        {
+            machine.Others();
+            Thread.Sleep(1500);
+            var others = machine.Others();
+            var named = string.Join(", ", others.Select(o => $"{o.Name} {o.Share:0.0}"));
+            Assert.True(others.Any(o => o.Name == "sh" && o.Share > 100.0 / Environment.ProcessorCount / 2), $"the busy program is named with its share ({named})");
+            Assert.True(others.Zip(others.Skip(1)).All(p => p.First.Share >= p.Second.Share), "the busiest first");
+        }
+        finally
+        {
+            busy.Kill();
+        }
+    }
+
+    [Test]
     public static void TheHubStartsFromTheLearningFileTheUpdaterLeft()
     {
         var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-start-{Environment.ProcessId}");
