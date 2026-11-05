@@ -113,6 +113,7 @@ public sealed class LabHub
     private readonly Lazy<int> _fontFiles;
     private CancellationTokenSource? _stop;
     private TestRun? _test;
+    private bool _wakeReported = true;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
     {
@@ -372,7 +373,20 @@ public sealed class LabHub
                         toWake.Add(a.Mac!);
                     }
 
+                    var noCard = _agents.Values.Where(a => a.Channel is null && a.Mac is null && Switch(a, "wake")).Select(a => a.Name).Order(StringComparer.OrdinalIgnoreCase).ToList();
+                    Note($"the time of learning begins: waking {_woken.Count} computers" + (_woken.Count > 0 ? $" ({string.Join(", ", _woken.Order(StringComparer.OrdinalIgnoreCase))})" : "") +
+                         (noCard.Count > 0 ? $"; without a known card (cannot be woken): {string.Join(", ", noCard)}" : ""));
+                    _wakeReported = false;
                     SaveKnown();
+                }
+                else if (open && !_wakeReported && now - _openedAt >= TimeSpan.FromMinutes(30))
+                {
+                    // half an hour later: which of the woken computers never came
+                    _wakeReported = true;
+                    var missing = _agents.Values.Where(a => _woken.Contains(a.Name) && a.Channel is null).Select(a => a.Name).Order(StringComparer.OrdinalIgnoreCase).ToList();
+                    Note(missing.Count == 0
+                        ? "all woken computers came"
+                        : $"woken but not here after 30 min (check Wake-on-LAN in the BIOS, Deep Sleep, fast startup of Windows): {string.Join(", ", missing)}");
                 }
                 else if (open && now - _openedAt < TimeSpan.FromMinutes(30) && now - _lastWake > TimeSpan.FromMinutes(5))
                 {
@@ -384,6 +398,7 @@ public sealed class LabHub
                 {
                     // the time of learning ends: the computers that were off go off again
                     toReturn.AddRange(_agents.Values.Where(a => _woken.Contains(a.Name) && a.Channel is not null));
+                    Note($"the time of learning ends: {toReturn.Count} woken computers are shut down again");
                     _woken.Clear();
                     SaveKnown();
                 }
