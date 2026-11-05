@@ -93,7 +93,7 @@ public interface IConsoleActions
     Task<bool> ModelFromRelease();
 
     /// <summary>The test mode (hubs from 0.4.4): the hub's answer, or null when it cannot be asked.</summary>
-    Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco);
+    Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco, bool keepTime = false);
 
     /// <summary>Ends the test mode; true when the hub took it.</summary>
     Task<bool> StopTest();

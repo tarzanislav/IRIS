@@ -113,9 +113,10 @@ public sealed class LabConsoleClient : IDisposable
     /// The test mode: the chosen computers (null = all) learn now for some minutes with this load (shares of the time
     /// and of the cores, the efficiency mode of Windows), also outside the time of learning – hubs from 0.4.4.
     /// </summary>
-    public Task<JsonObject> StartTestAsync(IEnumerable<string>? computers, double minutes, double duty, double cores, bool eco, CancellationToken cancel) =>
+    public Task<JsonObject> StartTestAsync(IEnumerable<string>? computers, double minutes, double duty, double cores, bool eco, CancellationToken cancel, bool keepTime = false) =>
         Server("test", new JsonObject
         {
+            ["keep_time"] = keepTime,
             ["computers"] = computers is null ? null : new JsonArray([.. computers.Select(c => (JsonNode?)c)]),
             ["minutes"] = minutes,
             ["duty"] = duty,
@@ -123,7 +124,7 @@ public sealed class LabConsoleClient : IDisposable
             ["eco"] = eco,
         }, cancel);
 
-    /// <summary>Ends the test mode at once.</summary>
+    /// <summary>Ends the test mode gently: a round that runs is finished and used, then the computers wait.</summary>
     public Task<JsonObject> StopTestAsync(CancellationToken cancel) => Server("test-stop", [], cancel);
 
     private Task<JsonObject> Server(string what, JsonObject header, CancellationToken cancel)

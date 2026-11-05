@@ -88,16 +88,18 @@ public sealed class TestPage : ConsolePage
         panel.Children.Add(Ui.Heading($"Test beží do {until:HH:mm} – zostáva {Math.Ceiling(left):0} min",
             $"{count} {Computers(count)} · {Ui.Percent(Ui.Value(test["duty"]))} času na {Ui.Percent(Ui.Value(test["cores"]))} jadier · úsporný režim {(test["eco"]?.GetValue<bool>() == true ? "áno" : "nie")} · spustila konzola {Ui.String(test["console"])}"));
         var buttons = new WrapPanel();
-        buttons.Children.Add(Ui.Button("Zastaviť test", async () =>
+        buttons.Children.Add(Ui.Button("Ukončiť test (kolo dobehne)", async () =>
         {
             if (Actions is not null)
             {
-                _note = await Actions.StopTest() ? "Test je zastavený. Mimo času učenia počítače prestanú hneď." : "Server zastavenie neprijal.";
+                _note = await Actions.StopTest()
+                    ? "Test končí: kolo, ktoré beží, počítače dokončia a jeho výsledok sa použije; potom sa vrátia k svojim nastaveniam."
+                    : "Server ukončenie neprijal.";
                 Redraw(data);
             }
         }, danger: true));
         panel.Children.Add(buttons);
-        panel.Children.Add(Ui.Text("Po skončení času sa počítače samy vrátia k svojim nastaveniam; kolo, ktoré beží, ešte dobehne a jeho výsledok sa použije.", 12.5, brush: "TextMuted"));
+        panel.Children.Add(Ui.Text("Záťaž sa dá počas testu meniť nižšie („Zmeniť záťaž“) – počítače ju prevezmú hneď, koniec testu ostáva. Pri ukončení aj po skončení času kolo, ktoré beží, ešte dobehne a jeho výsledok sa použije.", 12.5, brush: "TextMuted"));
         return panel;
     }
 
@@ -173,7 +175,15 @@ public sealed class TestPage : ConsolePage
         }
 
         var start = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
-        start.Children.Add(Ui.Button(running ? "Spustiť s týmito nastaveniami" : "Spustiť test", () => _ = Start(data), primary: true));
+        if (running)
+        {
+            start.Children.Add(Ui.Button("Zmeniť záťaž (koniec ostáva)", () => _ = Start(data, keepTime: true), primary: true));
+            start.Children.Add(Ui.Button($"Začať znova na {_minutes} min", () => _ = Start(data)));
+        }
+        else
+        {
+            start.Children.Add(Ui.Button("Spustiť test", () => _ = Start(data), primary: true));
+        }
         panel.Children.Add(start);
         if (_note is not null)
         {
@@ -187,7 +197,7 @@ public sealed class TestPage : ConsolePage
         return panel;
     }
 
-    private async Task Start(ConsoleData data)
+    private async Task Start(ConsoleData data, bool keepTime = false)
     {
         if (Actions is null)
         {
@@ -210,16 +220,18 @@ public sealed class TestPage : ConsolePage
 
         var minutes = double.Parse(_minutes, CultureInfo.InvariantCulture);
         var count = computers?.Count ?? data.Agents.Count(a => a["connected"]?.GetValue<bool>() == true);
-        if (MessageBox.Show(
-                $"{count} {Computers(count)} sa začne učiť hneď na {minutes:0} min: {Ui.Percent(_duty.Value)} času na {Ui.Percent(_cores.Value)} jadier, úsporný režim {(_eco.IsChecked == true ? "áno" : "nie")}.\n\nSpustiť test?",
+        var load = $"{Ui.Percent(_duty.Value)} času na {Ui.Percent(_cores.Value)} jadier, úsporný režim {(_eco.IsChecked == true ? "áno" : "nie")}";
+        if (!keepTime && MessageBox.Show(
+                $"{count} {Computers(count)} sa začne učiť hneď na {minutes:0} min: {load}.\n\nSpustiť test?",
                 "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
         {
             return;
         }
 
-        var answer = await Actions.StartTest(computers, minutes, Math.Round(_duty.Value, 2), Math.Round(_cores.Value, 2), _eco.IsChecked == true);
+        var answer = await Actions.StartTest(computers, minutes, Math.Round(_duty.Value, 2), Math.Round(_cores.Value, 2), _eco.IsChecked == true, keepTime);
         _note = answer is null ? "Server test neprijal (nie je pripojený)."
             : Ui.String(answer["error"]) is { } e ? $"Server test neprijal: {e}"
+            : keepTime ? $"Nová záťaž ({load}) platí hneď na {Ui.Number(answer["computers"])} počítačoch."
             : $"Test beží na {Ui.Number(answer["computers"])} počítačoch – prvé kolo sa začne do pár sekúnd.";
         Redraw(data);
     }

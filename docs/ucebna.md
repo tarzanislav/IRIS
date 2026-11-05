@@ -99,8 +99,9 @@ Stránka **Testovací režim** v konzole: zvolené počítače (všetky pripojen
 hneď**, aj mimo času učenia, so záťažou zvolenou v konzole – predvoľby Jemne 25 %, Bežne 50 %, Naplno 100 %, alebo
 posuvníky podielu času a jadier a úsporný režim Windows – na 10 minút až 2 hodiny. Vidno pri tom procesor, podiel
 učenia, teplotu, vlákna a riadky za sekundu každého počítača. Čo sa naučia, sa ponechá. Po skončení času sa počítače
-samy vrátia k svojim nastaveniam (kolo, ktoré beží, dobehne); **Zastaviť test** ich mimo času učenia zastaví hneď.
-Reštart servera test ukončí. Ochrana pred prehriatím (`hot`) platí aj počas testu.
+samy vrátia k svojim nastaveniam (kolo, ktoré beží, dobehne).
+Záťaž sa dá počas testu meniť (**Zmeniť záťaž** – koniec ostáva), **Ukončiť test** ho ukončí jemne: kolo, ktoré
+beží, počítače dokončia a jeho výsledok sa použije. Reštart servera test ukončí. Ochrana pred prehriatím (`hot`) platí aj počas testu.
 
 ### Aktualizácie (podpísané)
 - **Server sa raz denne okolo poludnia pozrie na GitHub**, či vyšla nová verzia IRIS (`iris-hub-update.timer`).

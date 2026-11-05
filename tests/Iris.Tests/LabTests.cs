@@ -624,8 +624,12 @@ public static class LabTests
                 Assert.True(log.Any(l => l.Contains("started a test", StringComparison.Ordinal)) && log.Any(l => l.Contains("is over", StringComparison.Ordinal)), "the log has the test");
             }
 
-            // a test of all, stopped at once
-            Assert.Equal(2, (await console.StartTestAsync(null, 30, 0.25, 0.25, eco: true, stop.Token))["computers"]!.GetValue<int>(), "all connected");
+            // a test of all: the load changed while it runs (the end stays), then ended gently
+            var all = await console.StartTestAsync(null, 30, 0.25, 0.25, eco: true, stop.Token);
+            Assert.Equal(2, all["computers"]!.GetValue<int>(), "all connected");
+            var changed = await console.StartTestAsync(null, 5, 0.75, 0.5, eco: true, stop.Token, keepTime: true);
+            Assert.Equal(all["test"]!["until"]!.GetValue<string>(), changed["test"]!["until"]!.GetValue<string>(), "the end stays");
+            Assert.Equal(0.75, changed["test"]!["duty"]!.GetValue<double>(), "the new load");
             Assert.True((await console.StopTestAsync(stop.Token))["stopped"]!.GetValue<bool>(), "stopped");
             Assert.True((await console.SnapshotAsync(stop.Token))["test"] is null, "no test any more");
             stop.Cancel();
@@ -634,7 +638,14 @@ public static class LabTests
         }
         finally
         {
-            Directory.Delete(folder, recursive: true);
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+                // a file still held by a computer that is ending; the temporary folder goes with the next cleanup
+            }
         }
     }
 

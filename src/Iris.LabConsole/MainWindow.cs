@@ -563,9 +563,9 @@ public sealed class MainWindow : Window, IConsoleActions
         return done;
     }
 
-    public async Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco)
+    public async Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco, bool keepTime = false)
     {
-        var answer = await AskServer<JsonObject>(c => cancel => c.StartTestAsync(computers, minutes, duty, cores, eco, cancel), 15);
+        var answer = await AskServer<JsonObject>(c => cancel => c.StartTestAsync(computers, minutes, duty, cores, eco, cancel, keepTime), 15);
         await Refresh();
         return answer;
     }

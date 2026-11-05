@@ -1099,13 +1099,13 @@ public sealed class LabHub
     private bool InTest(AgentEntry agent, DateTime now) => _test is { } t && now < t.Until && t.Includes(agent.Name);
 
     // the test mode from the console: the chosen computers learn now (also outside the time of learning) with the
-    // chosen load, for a few minutes; what they learn is kept. "test-stop" ends it at once.
+    // chosen load, for a few minutes; what they learn is kept. A new choice while it runs changes the load at once
+    // (with "keep_time" the end stays). "test-stop" ends it gently: a round that runs is finished and used.
     private async Task Test(LabChannel channel, JsonObject header, CancellationToken cancel)
     {
         var console = ConsoleName(channel);
         var now = _options.Now();
         List<AgentEntry> affected;
-        List<AgentEntry> stopped = [];
         JsonObject answer;
         lock (_gate)
         {
@@ -1113,18 +1113,9 @@ public sealed class LabHub
             if (header["what"]!.GetValue<string>() == "test-stop")
             {
                 _test = null;
+                // their own settings again; a computer in a round finishes it (its part is used), then it waits
                 affected = [.. _agents.Values.Where(a => a.Channel is not null && before is not null && before.Includes(a.Name))];
-                if (!_options.Schedule.IsOpen(now))
-                {
-                    // outside the time of learning they stop at once (their part of the round is left out)
-                    foreach (var a in affected.Where(a => a.State == "learning"))
-                    {
-                        a.State = "waiting";
-                        stopped.Add(a);
-                    }
-                }
-
-                Note($"console {console} stopped the test");
+                Note($"console {console} stopped the test (the round that runs is finished)");
                 answer = new JsonObject { ["stopped"] = before is not null };
             }
             else
@@ -1140,11 +1131,12 @@ public sealed class LabHub
                 }
                 else
                 {
-                    _test = new TestRun(now, now.AddMinutes(minutes), computers,
+                    var keep = before is not null && header["keep_time"]?.GetValue<bool>() == true;
+                    _test = new TestRun(keep ? before!.Started : now, keep ? before!.Until : now.AddMinutes(minutes), computers,
                         Math.Clamp(header["duty"]?.GetValue<double>() ?? 0.5, 0.05, 1), Math.Clamp(header["cores"]?.GetValue<double>() ?? 0.5, 0.05, 1),
                         header["eco"]?.GetValue<bool>() ?? true, console);
                     affected = [.. _agents.Values.Where(a => a.Channel is not null && ((before?.Includes(a.Name) ?? false) || _test.Includes(a.Name)))];
-                    Note($"console {console} started a test of {minutes:0} min on {(computers is null ? "all computers" : string.Join(", ", computers.Order(StringComparer.OrdinalIgnoreCase)))}: " +
+                    Note($"console {console} {(keep ? "changed the test (until " + _test.Until.ToString("HH:mm", CultureInfo.InvariantCulture) + ")" : before is not null ? "started the test anew for " + minutes.ToString("0", CultureInfo.InvariantCulture) + " min" : "started a test of " + minutes.ToString("0", CultureInfo.InvariantCulture) + " min")} on {(computers is null ? "all computers" : string.Join(", ", computers.Order(StringComparer.OrdinalIgnoreCase)))}: " +
                          $"{_test.Duty:P0} of the time on {_test.Cores:P0} of the cores, efficiency mode {(_test.Eco ? "on" : "off")}");
                     answer = new JsonObject { ["test"] = _test.ToJson(), ["computers"] = affected.Count(a => _test.Includes(a.Name)) };
                 }
@@ -1157,10 +1149,6 @@ public sealed class LabHub
             await Send(a, new LabMessage(MessageKind.Settings, Settings(a)), cancel);
         }
 
-        foreach (var a in stopped)
-        {
-            await Send(a, new LabMessage(MessageKind.Wait, new JsonObject { ["seconds"] = Math.Round(_options.Schedule.UntilChange(now).TotalSeconds) }), cancel);
-        }
     }
 
     private void Note(string text) => _options.Log?.Invoke(text);
