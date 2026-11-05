@@ -543,21 +543,21 @@ public sealed class MainWindow : Window, IConsoleActions
         }
     }
 
-    public async Task<JsonObject?> ServerStatus() => await Server(c => c.ServerStatusAsync, 20);
+    public async Task<JsonObject?> ServerStatus() => await AskServer(c => c.ServerStatusAsync, 20);
 
-    public async Task<IReadOnlyList<string>?> ServerLog(string name, int lines) => await Server(c => cancel => c.ServerLogAsync(name, lines, cancel), 30);
+    public async Task<IReadOnlyList<string>?> ServerLog(string name, int lines) => await AskServer(c => cancel => c.ServerLogAsync(name, lines, cancel), 30);
 
     public async Task<bool> RestartServer()
     {
-        var done = await Server(c => c.RestartServerAsync, 10);
+        var done = await AskServer(c => c.RestartServerAsync, 10);
         _connection.Text = done ? "server sa reštartuje – o pol minúty sa konzola pripojí znova" : _connection.Text;
         return done;
     }
 
-    public async Task<bool> ModelFromRelease() => await Server(c => c.ServerModelFromReleaseAsync, 10);
+    public async Task<bool> ModelFromRelease() => await AskServer(c => c.ServerModelFromReleaseAsync, 10);
 
     // one question to the server itself; on a broken connection the console connects again with the next refresh
-    private async Task<T?> Server<T>(Func<LabConsoleClient, Func<CancellationToken, Task<T>>> ask, int seconds)
+    private async Task<T?> AskServer<T>(Func<LabConsoleClient, Func<CancellationToken, Task<T>>> ask, int seconds)
     {
         if (_client is null)
         {
