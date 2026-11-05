@@ -168,13 +168,42 @@ static async Task<int> Update(LabArguments a, bool check)
     var hub = Path.Combine(target, UpdateManifest.Hub);
     if (File.Exists(hub))
     {
-        LabUpdates.ReplaceProgram(Path.Combine(install, "iris-hub"), await File.ReadAllBytesAsync(hub, timeout.Token));
-        File.Delete(hub);
-        Console.WriteLine($"{LabUpdates.Version} → {version}: the server's program is in {install}");
+        var program = await File.ReadAllBytesAsync(hub, timeout.Token);
+        // The restart is started before the program is replaced: this program is one bundle file, and the runtime
+        // reads parts of it (e.g. what starting a process needs) by its path only when they are first used – after
+        // the replacement that path is the new program, and 0.4.1 failed there. So the shell waits for one line on
+        // its input and restarts the hub after it; everything a process needs is loaded already.
+        System.Diagnostics.Process? restart = null;
         if (OperatingSystem.IsLinux() && Environment.UserName == "root")
         {
-            using var restart = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("systemctl", $"restart {service}") { UseShellExecute = false });
-            await restart!.WaitForExitAsync(timeout.Token);
+            restart = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", "read go && exec systemctl restart \"$0\"", service])
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+            });
+        }
+
+        try
+        {
+            LabUpdates.ReplaceProgram(Path.Combine(install, "iris-hub"), program);
+        }
+        catch
+        {
+            restart?.Kill();
+            restart?.Dispose();
+            throw;
+        }
+
+        File.Delete(hub);
+        Console.WriteLine($"{LabUpdates.Version} → {version}: the server's program is in {install}");
+        if (restart is not null)
+        {
+            using (restart)
+            {
+                restart.StandardInput.WriteLine("go");
+                restart.StandardInput.Close();
+                await restart.WaitForExitAsync(timeout.Token);
+            }
         }
     }
 

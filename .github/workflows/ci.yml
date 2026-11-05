@@ -330,6 +330,32 @@ jobs:
           [ "$(sudo sha256sum /var/lib/iris-hub/agent.key)" = "$key" ] || { echo "::error::a second install changed the keys"; exit 1; }
           grep -q -- '--backup /srv/share/IRIS' /etc/default/iris-hub || { echo "::error::a second install lost the options"; exit 1; }
           systemctl is-active iris-hub
+      - name: An older hub updates itself to the newest release and the hub runs the new program afterwards
+        run: |
+          set -e
+          # this commit's hub built as 0.0.1, so the newest release is newer: it replaces itself and restarts the hub
+          # (0.4.1 replaced the program but could not restart – the bundle was read by its path after the replacement)
+          dotnet publish src/Iris.Hub -c Release -r linux-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=0.0.1 -o out/hub-old
+          sudo systemctl stop iris-hub
+          sudo install -m 0755 out/hub-old/iris-hub /opt/iris-hub/iris-hub
+          sudo systemctl start iris-hub
+          [ "$(sudo /opt/iris-hub/iris-hub version)" = "iris-hub 0.0.1" ] || { echo "::error::the old hub is not in place"; exit 1; }
+          if ! sudo systemctl start iris-hub-update.service; then
+            journalctl -u iris-hub-update --no-pager | tail -20
+            if journalctl -u iris-hub-update --no-pager | grep -qE 'iris-hub: .*(403|429|rate limit|Forbidden|Too Many)'; then
+              echo "::warning title=Updater::GitHub refused this runner – the update from an older hub was not tried"; exit 0
+            fi
+            echo "::error::the update from an older hub failed"; exit 1
+          fi
+          journalctl -u iris-hub-update --no-pager | tail -5
+          new=$(sudo /opt/iris-hub/iris-hub version)
+          [ "$new" != "iris-hub 0.0.1" ] || { echo "::error::the program was not replaced"; exit 1; }
+          for i in $(seq 1 20); do systemctl is-active -q iris-hub && break; sleep 1; done
+          systemctl is-active iris-hub
+          pid=$(systemctl show -p MainPID --value iris-hub)
+          exe=$(sudo readlink "/proc/$pid/exe")
+          case "$exe" in *deleted*) echo "::error::the hub still runs the old program ($exe)"; exit 1;; esac
+          echo "::notice title=Update from an older hub::0.0.1 → ${new#iris-hub }, the hub restarted with the new program"
       - name: Removal – everything of the hub gone, the data kept until --purge, the backup folder untouched
         run: |
           set -e
