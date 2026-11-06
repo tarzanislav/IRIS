@@ -296,6 +296,31 @@ public static unsafe class OcrTrainingTests
     }
 
     [Test]
+    public static void WideWeightGradientsMatchTheChunkedWay()
+    {
+        // 104 channels in and out on many threads: wide enough for all tiles at once (104 · 104 > 48 · 208), checked
+        // against the chunks
+        const int channels = 104;
+        var random = new Random(8);
+        using var level = new Level();
+        level.Set(12, [37, 22, 9]);
+        var x = Values(random, level.Pixels * channels);
+        var dz = Values(random, level.Pixels * channels);
+        var chunked = new float[channels * 9 * channels];
+        var whole = new float[channels * 9 * channels];
+        using var shared = new Buffer<float>();
+        fixed (float* px = x, pd = dz)
+        {
+            Winograd.WeightGradient(px, channels, pd, channels, level, chunked, threads: 3);
+            Winograd.WeightGradient(px, channels, pd, channels, level, whole, threads: 16, shared); // 16 copies of dU would not fit a cache
+        }
+
+        var scale = chunked.Max(MathF.Abs);
+        var worst = chunked.Zip(whole, (a, b) => MathF.Abs(a - b)).Max() / scale;
+        Assert.True(scale > 0 && worst < 1e-5, $"all tiles at once differ by {worst:E1} of the largest value");
+    }
+
+    [Test]
     public static void LearnedReaderReadsLikeTheReaderOfIris()
     {
         var shape = Tiny(8, 8);

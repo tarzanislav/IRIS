@@ -25,6 +25,9 @@ internal static unsafe class Winograd
     /// <summary>Tiles worked at a time for the gradient of the weights (longer: its sums are the large part).</summary>
     public const int GradientChunk = 48;
 
+    /// <summary>The copies of dU of all threads (bytes) above which the wide layers take all tiles at once: about what a shared cache holds.</summary>
+    public const long WholeAbove = 16L << 20;
+
     // values of a transformed tile (6 × 6), outputs of a tile per side, size of the input piece per side
     private const int Values = 36;
     private const int Side = 4;
@@ -213,10 +216,21 @@ internal static unsafe class Winograd
     /// <summary>
     /// The gradient of the weights [outputs, 3, 3, inputs] (added to gw) from the input x [pixels, inputs] and the
     /// gradient of the output dz [pixels, outputs]: per tile V = Bᵀ d B and dM = A dZ Aᵀ, dU[ξ] = Σ Vᵀ dM, dg = Gᵀ dU G.
+    /// Narrow layers, and few threads, sum chunk by chunk, each thread into its own dU (it stays in the cache). Wide
+    /// layers on many threads – where the sums of a chunk weigh more than the chunk's transformed tiles and the copies
+    /// of dU no longer fit the shared cache – transform every tile once into one place (given as whole) and then make
+    /// one product per value over all tiles: no copies of dU, no adding them up, and the memory (of a single channel
+    /// on the classroom's computers) moves less than half as much.
     /// </summary>
-    public static void WeightGradient(float* x, int inputs, float* dz, int outputs, Level level, float[] gw, int threads)
+    public static void WeightGradient(float* x, int inputs, float* dz, int outputs, Level level, float[] gw, int threads, Buffer<float>? whole = null)
     {
         var tiles = new Tiles(level);
+        if (whole is not null && (long)inputs * outputs > (long)GradientChunk * (inputs + outputs) && (long)threads * Values * inputs * outputs * sizeof(float) > WholeAbove)
+        {
+            WeightGradientWhole(x, inputs, dz, outputs, tiles, gw, threads, whole);
+            return;
+        }
+
         var chunk = GradientChunk;
         var chunks = (tiles.Count + chunk - 1) / chunk;
         var parts = Math.Max(1, Math.Min(threads, chunks));
@@ -274,49 +288,89 @@ internal static unsafe class Winograd
                 });
             }
 
-            // back from the 6 × 6 values to the 3 × 3 kernel: dg = Gᵀ dU G, input channel by input channel in parallel
-            Work.For(inputs, size, threads, (from, to) =>
-            {
-                Span<double> du6 = stackalloc double[Values];
-                Span<double> q = stackalloc double[3 * Piece];
-                Span<double> back = stackalloc double[3];
-                var total = (float*)all;
-                for (var i = from; i < to; i++)
-                {
-                    for (var o = 0; o < outputs; o++)
-                    {
-                        for (var xi = 0; xi < Values; xi++)
-                        {
-                            du6[xi] = total[((long)xi * plane) + (i * outputs) + o];
-                        }
-
-                        // Q = Gᵀ dU (3 × 6), column by column
-                        for (var c = 0; c < Piece; c++)
-                        {
-                            GradientColumn(du6[c], du6[Piece + c], du6[2 * Piece + c], du6[3 * Piece + c], du6[4 * Piece + c], du6[5 * Piece + c], back);
-                            q[c] = back[0];
-                            q[Piece + c] = back[1];
-                            q[2 * Piece + c] = back[2];
-                        }
-
-                        // dg = Q G (3 × 3), row by row
-                        for (var r = 0; r < 3; r++)
-                        {
-                            var row = q.Slice(r * Piece, Piece);
-                            GradientColumn(row[0], row[1], row[2], row[3], row[4], row[5], back);
-                            for (var c = 0; c < 3; c++)
-                            {
-                                gw[((((o * 3) + r) * 3) + c) * inputs + i] += (float)back[c];
-                            }
-                        }
-                    }
-                }
-            });
+            Back((float*)all, inputs, outputs, gw, threads);
         }
         finally
         {
             NativeMemory.AlignedFree(sums);
         }
+    }
+
+    // the wide layers: all tiles transformed into V[ξ][tile][input] and dM[ξ][tile][output], then dU[ξ] = V[ξ]ᵀ dM[ξ]
+    // for the 36 values side by side (whichever thread is free takes the next value)
+    private static void WeightGradientWhole(float* x, int inputs, float* dz, int outputs, Tiles tiles, float[] gw, int threads, Buffer<float> whole)
+    {
+        var count = tiles.Count;
+        var plane = (long)inputs * outputs;
+        var vSize = (long)Values * count * inputs;
+        var mSize = (long)Values * count * outputs;
+        var v = whole.Ensure(vSize + mSize + (Values * plane));
+        var (vs, ms, ds, xs) = ((nint)v, (nint)(v + vSize), (nint)dz, (nint)x);
+        var du = v + vSize + mSize;
+        Work.For((count + Chunk - 1) / Chunk, (long)count * Values * (inputs + outputs), threads, (from, to) =>
+        {
+            for (var t = from * Chunk; t < Math.Min(count, to * Chunk); t++)
+            {
+                InputTile((float*)xs, inputs, tiles, t, (float*)vs + ((long)t * inputs), (long)count * inputs);
+                GradientTile((float*)ds, outputs, tiles, t, (float*)ms + ((long)t * outputs), (long)count * outputs);
+            }
+        });
+
+        var us = (nint)du;
+        Work.For(Values, Values * plane * count, threads, (from, to) =>
+        {
+            for (var xi = from; xi < to; xi++)
+            {
+                Gemm.MultiplyLong(new ColumnsA((float*)vs + ((long)xi * count * inputs), inputs), new RowsB((float*)ms + ((long)xi * count * outputs), outputs),
+                    inputs, outputs, count, (float*)us + (xi * plane), outputs, add: false, threads: 1);
+            }
+        });
+
+        Back(du, inputs, outputs, gw, threads);
+    }
+
+    // back from the 6 × 6 values to the 3 × 3 kernel: dg = Gᵀ dU G, input channel by input channel in parallel
+    private static void Back(float* sums, int inputs, int outputs, float[] gw, int threads)
+    {
+        var plane = inputs * outputs;
+        var all = (nint)sums;
+        Work.For(inputs, (long)Values * plane, threads, (from, to) =>
+        {
+            Span<double> du6 = stackalloc double[Values];
+            Span<double> q = stackalloc double[3 * Piece];
+            Span<double> back = stackalloc double[3];
+            var total = (float*)all;
+            for (var i = from; i < to; i++)
+            {
+                for (var o = 0; o < outputs; o++)
+                {
+                    for (var xi = 0; xi < Values; xi++)
+                    {
+                        du6[xi] = total[((long)xi * plane) + (i * outputs) + o];
+                    }
+
+                    // Q = Gᵀ dU (3 × 6), column by column
+                    for (var c = 0; c < Piece; c++)
+                    {
+                        GradientColumn(du6[c], du6[Piece + c], du6[2 * Piece + c], du6[3 * Piece + c], du6[4 * Piece + c], du6[5 * Piece + c], back);
+                        q[c] = back[0];
+                        q[Piece + c] = back[1];
+                        q[2 * Piece + c] = back[2];
+                    }
+
+                    // dg = Q G (3 × 3), row by row
+                    for (var r = 0; r < 3; r++)
+                    {
+                        var row = q.Slice(r * Piece, Piece);
+                        GradientColumn(row[0], row[1], row[2], row[3], row[4], row[5], back);
+                        for (var c = 0; c < 3; c++)
+                        {
+                            gw[((((o * 3) + r) * 3) + c) * inputs + i] += (float)back[c];
+                        }
+                    }
+                }
+            }
+        });
     }
 
     // Gᵀ · (q0 … q5): back from six transformed values to three kernel values

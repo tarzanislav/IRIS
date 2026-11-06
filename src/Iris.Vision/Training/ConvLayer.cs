@@ -183,6 +183,9 @@ internal sealed unsafe class ConvLayer : IDisposable
 
     public string Name { get; set; } = "conv";
 
+    /// <summary>A buffer the layers of one network share for passing work (one layer at a time uses it), or null.</summary>
+    public Buffer<float>? Shared { get; set; }
+
     /// <summary>The output of the forward pass (on Out).</summary>
     public float* Output => Pools ? _pooled.Data : _activated.Data;
 
@@ -281,7 +284,7 @@ internal sealed unsafe class ConvLayer : IDisposable
         }
         else if (Winograd)
         {
-            Training.Winograd.WeightGradient(_input, _p.Inputs, d, outputs, In, g.Weight, threads);
+            Training.Winograd.WeightGradient(_input, _p.Inputs, d, outputs, In, g.Weight, threads, Shared);
         }
         else
         {

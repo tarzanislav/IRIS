@@ -33,6 +33,7 @@ public sealed unsafe class OcrNetwork : IDisposable
     private readonly Buffer<float> _logits = new();
     private readonly Buffer<float> _logitGradient = new();
     private readonly Buffer<float> _hiddenGradient = new();
+    private readonly Buffer<float> _shared = new();           // the transformed tiles of the wide layers' weight gradients
 
     public OcrNetwork(OcrWeights weights)
     {
@@ -45,6 +46,11 @@ public sealed unsafe class OcrNetwork : IDisposable
         }
 
         _convs[^1] = new ConvLayer(weights.Convs[^1], pad: 0, 1, 1);
+        foreach (var conv in _convs)
+        {
+            conv.Shared = _shared;
+        }
+
         _lstm = [.. weights.Lstm.Select(l => new LstmLayer(l[0], l[1]))];
     }
 
@@ -156,6 +162,7 @@ public sealed unsafe class OcrNetwork : IDisposable
         _logits.Dispose();
         _logitGradient.Dispose();
         _hiddenGradient.Dispose();
+        _shared.Dispose();
     }
 
     private void Forward(LineBatch batch, bool learning)
