@@ -99,6 +99,18 @@ Stránka **Efektivita**: podiel každého počítača a skupiny na učení za 1�
 vlákno, záťaž, námaha, ustúpenie). Server ukladá po každom kole jeden riadok na počítač do `efficiency.jsonl`
 (60 dní). **Uložiť denník efektivity…** uloží tabuľku pre Excel – mená z konzoly, typ hardvéru a čísla, bez adries.
 
+### Priemer modelu a najlepší model – práca servera (od 0.5.0)
+Server je slabší stroj, preto robí len ľahkú prácu, ktorá sa mu hodí:
+- **po každom kole posunie priemer modelu** – ponechá 9/10 priemeru a pridá 1/10 novej verzie, takže sa ráta asi
+  posledných 10 verzií a šum jednotlivých kôl sa vyrovná (`lab-model-average.iris`);
+- **pri meraní CER (každých 6 kôl) prečíta model aj priemer**. V konzole sú oba na stránke Kolá a učenie (krivky
+  „priemer modelu“) aj v Prehľade;
+- **najlepší model, aký kedy nameral** (podľa priemeru CER známych písiem a neznámeho písma), **si odloží** ako súbor
+  čítačky IRIS (`iris-ocr-best.iris`, `best.json`). Na stránke **Server** je jeho verzia a CER a tlačidlo **Uložiť
+  najlepší model…**.
+
+Model z vydania (nový začiatok učebne) priemer aj najlepší model zabudne – patria k predchádzajúcemu modelu.
+
 ### Pohyblivá záťaž (od 0.5.0)
 V **Nastaveniach** (pre všetky počítače, skupinu alebo jeden počítač) prepínač **Pohyblivá záťaž** a dva posuvníky
 **Najviac času** a **Najviac jadier**. Nastavený podiel času a jadier je potom spodná hranica a počítač sám hľadá,

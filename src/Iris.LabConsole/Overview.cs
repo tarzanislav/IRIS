@@ -332,6 +332,11 @@ public sealed class OverviewPage : ConsolePage
         var last = tests.LastOrDefault();
         panel.Children.Add(Ui.Fact("známe písma", last is null ? null : Ui.Number(last["cer"], "0.00", " %")));
         panel.Children.Add(Ui.Fact("neznáme písmo", last is null ? null : Ui.Number(last["cer_unseen"], "0.00", " %")));
+        if (last?["average_cer"] is { } average)
+        {
+            panel.Children.Add(Ui.Fact("priemer modelu", $"{Ui.Number(average, "0.00", " %")} / {Ui.Number(last["average_cer_unseen"], "0.00", " %")}"));
+        }
+
         var round = data.Snapshot?["rounds"]?.AsArray().OfType<JsonObject>().LastOrDefault();
         panel.Children.Add(Ui.Fact("posledné kolo", round is null ? null : $"{round["round"]}: {Ui.Number(round["computers"])} počítačov, loss {Ui.Number(round["loss"], "0.000")}"));
         panel.Children.Add(Ui.Fact("model", $"verzia {data.Snapshot?["version"] ?? 0}, {Ui.Number(data.Snapshot?["minutes"], "#,0")} min učenia"));

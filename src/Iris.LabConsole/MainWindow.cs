@@ -589,6 +589,9 @@ public sealed class MainWindow : Window, IConsoleActions
     public async Task<(byte[] Table, int Rows)?> EfficiencyTable(double days) =>
         await AskServer<(byte[] Table, int Rows)?>(c => async cancel => await c.EfficiencyTableAsync(days, cancel), 120);
 
+    public async Task<(byte[] File, JsonObject About)?> BestModel() =>
+        await AskServer<(byte[] File, JsonObject About)?>(c => async cancel => await c.BestModelAsync(cancel), 120);
+
     public async Task<bool> ModelFromRelease() => await AskServer<bool>(c => c.ServerModelFromReleaseAsync, 10);
 
     // one question to the server itself; on a broken connection the console connects again with the next refresh

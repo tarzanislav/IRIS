@@ -98,6 +98,9 @@ public interface IConsoleActions
     /// <summary>The log of efficiency of the last days as a table for Excel; null when it cannot be asked.</summary>
     Task<(byte[] Table, int Rows)?> EfficiencyTable(double days);
 
+    /// <summary>The best model the server's tests have seen (hubs from 0.5.0): its reader file (empty while none) and what is known of it.</summary>
+    Task<(byte[] File, JsonObject About)?> BestModel();
+
     /// <summary>The test mode (hubs from 0.4.4): the hub's answer, or null when it cannot be asked.</summary>
     Task<JsonObject?> StartTest(IReadOnlyList<string>? computers, double minutes, double duty, double cores, bool eco, bool keepTime = false);
 
@@ -259,6 +262,8 @@ public sealed class RoundsPage : ConsolePage
         var violet = (Color)ColorConverter.ConvertFromString("#7C6CF2");
         var pink = (Color)ColorConverter.ConvertFromString("#E86FA8");
         var green = (Color)ColorConverter.ConvertFromString("#2FA67A");
+        var teal = (Color)ColorConverter.ConvertFromString("#3A9BB5");
+        var orange = (Color)ColorConverter.ConvertFromString("#E0913A");
         _root.Children.Add(Ui.Card(new LineChart
         {
             Title = "Chyba učenia (loss) po kolách",
@@ -276,6 +281,8 @@ public sealed class RoundsPage : ConsolePage
             [
                 ("známe písma", green, [.. tests.Select(t => (Ui.Value(t["version"]), Ui.Value(t["cer"])))]),
                 ("neznáme písmo", pink, [.. tests.Select(t => (Ui.Value(t["version"]), Ui.Value(t["cer_unseen"]))).Where(p => double.IsFinite(p.Item2))]),
+                ("priemer modelu – známe", teal, [.. tests.Select(t => (Ui.Value(t["version"]), Ui.Value(t["average_cer"]))).Where(p => double.IsFinite(p.Item2))]),
+                ("priemer modelu – neznáme", orange, [.. tests.Select(t => (Ui.Value(t["version"]), Ui.Value(t["average_cer_unseen"]))).Where(p => double.IsFinite(p.Item2))]),
             ],
             Height = 240,
         }));

@@ -108,6 +108,13 @@ public sealed class LabConsoleClient : IDisposable
         return (answer.Data, answer.Header["rows"]?.GetValue<int>() ?? 0);
     }
 
+    /// <summary>The best model the server's tests have seen (a reader file for IRIS) with what is known of it; no file while there is none.</summary>
+    public async Task<(byte[] File, JsonObject About)> BestModelAsync(CancellationToken cancel)
+    {
+        var answer = await AskMessage(new LabMessage(MessageKind.Server, new JsonObject { ["what"] = "best-model" }), cancel);
+        return (answer.Data, answer.Header);
+    }
+
     /// <summary>Starts the hub again (a round that runs is lost); its service brings it back in about half a minute.</summary>
     public async Task<bool> RestartServerAsync(CancellationToken cancel) =>
         (await Server("restart", [], cancel))["ok"]?.GetValue<bool>() ?? false;

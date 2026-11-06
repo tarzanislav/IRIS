@@ -126,6 +126,7 @@ public sealed class LabHub
     private CancellationTokenSource? _stop;
     private TestRun? _test;
     private readonly EfficiencyLog _efficiency;
+    private readonly LabModels _models;
     private bool _wakeReported = true;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
@@ -139,6 +140,7 @@ public sealed class LabHub
         _sentences = LineTexts.ReadSentences(options.Sentences);
         _history = new LabHistory(Path.Combine(options.Folder, "history"));
         _efficiency = new EfficiencyLog(options.Folder, options.Now);
+        _models = new LabModels(options.Folder, weights);
         _config = LabConfig.Load(ConfigPath);
         _tester = new(MakeTester);
         _started = options.Now();
@@ -215,6 +217,7 @@ public sealed class LabHub
         }
 
         File.Move(pending, model);
+        LabModels.Forget(folder); // the average and the best model belong to the model before
         say("the model of the classroom starts from the learning file of the release");
     }
 
@@ -557,12 +560,26 @@ public sealed class LabHub
         {
             _state = _state with { Step = _state.Step + 1, Minutes = _state.Minutes + _options.RoundMinutes };
             Save();
-            if (_options.Fonts is { Count: > 0 } && _state.Step % Math.Max(1, _options.TestEvery) == 0)
+            var version = _state.Step;
+            var copy = _weights.Copy();
+            var test = _options.Fonts is { Count: > 0 } && version % Math.Max(1, _options.TestEvery) == 0;
+            _ = Task.Run(() =>
             {
-                var copy = _weights.Copy();
-                var version = _state.Step;
-                _ = Task.Run(() => Test(copy, version));
-            }
+                // the server's share: the average moves, and every few versions both are read
+                try
+                {
+                    _models.Add(copy, version);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    Note($"the average of the model was not saved: {e.Message}");
+                }
+
+                if (test)
+                {
+                    Test(copy, version);
+                }
+            });
         }
 
         var entry = new JsonObject
@@ -993,6 +1010,11 @@ public sealed class LabHub
 
                         await channel.SendAsync(table, cancel);
                         break;
+                    case MessageKind.Server when message.Header["what"]?.GetValue<string>() == "best-model":
+                        // the best model the tests have seen, as a reader file for IRIS (none: an empty answer)
+                        var bestFile = _models.BestFile();
+                        await channel.SendAsync(new LabMessage(MessageKind.Server, _models.Best ?? new JsonObject { ["none"] = true }, bestFile ?? []), cancel);
+                        break;
                     case MessageKind.Server when message.Header["what"]?.GetValue<string>() is "test" or "test-stop":
                         await Test(channel, message.Header, cancel);
                         break;
@@ -1244,6 +1266,7 @@ public sealed class LabHub
                     ["plan_done"] = Math.Round(_state.Step - _state.PlanStart),
                     ["source"] = _options.ModelSource,
                     ["file_mb"] = File.Exists(model) ? Math.Round(new FileInfo(model).Length / 1048576.0, 1) : null,
+                    ["best"] = _models.Best,
                 },
                 ["disk"] = disk,
                 ["memory_mb"] = Environment.WorkingSet / (1024 * 1024),
@@ -1454,19 +1477,37 @@ public sealed class LabHub
                     source.Values.CopyTo(target.Values, 0);
                 }
 
+                var time = _options.Now();
+                var cer = Math.Round(OcrTrainer.Cer(tester.Network, tester.Known), 2);
+                double? cerUnseen = tester.Unseen.Count > 0 ? Math.Round(OcrTrainer.Cer(tester.Network, tester.Unseen), 2) : null;
+                var best = _models.Offer(weights, version, "model", cer, cerUnseen, time);
+
+                // the average of the last versions, read the same way
+                var average = _models.Average();
+                foreach (var (target, source) in TensorPack.Tensors(tester.Network.Weights).Zip(TensorPack.Tensors(average)))
+                {
+                    source.Values.CopyTo(target.Values, 0);
+                }
+
+                var averageCer = Math.Round(OcrTrainer.Cer(tester.Network, tester.Known), 2);
+                double? averageUnseen = tester.Unseen.Count > 0 ? Math.Round(OcrTrainer.Cer(tester.Network, tester.Unseen), 2) : null;
+                best |= _models.Offer(average, version, "average", averageCer, averageUnseen, time);
                 var entry = new JsonObject
                 {
                     ["version"] = version,
-                    ["time"] = _options.Now().ToString("o", CultureInfo.InvariantCulture),
-                    ["cer"] = Math.Round(OcrTrainer.Cer(tester.Network, tester.Known), 2),
-                    ["cer_unseen"] = tester.Unseen.Count > 0 ? Math.Round(OcrTrainer.Cer(tester.Network, tester.Unseen), 2) : null,
+                    ["time"] = time.ToString("o", CultureInfo.InvariantCulture),
+                    ["cer"] = cer,
+                    ["cer_unseen"] = cerUnseen,
+                    ["average_cer"] = averageCer,
+                    ["average_cer_unseen"] = averageUnseen,
                 };
                 lock (_gate)
                 {
                     _tests.Add(entry);
                 }
 
-                Note($"test of model version {version}: CER {entry["cer"]} %" + (entry["cer_unseen"] is { } u ? $", unseen font {u} %" : ""));
+                Note($"test of model version {version}: CER {cer} %" + (cerUnseen is { } u ? $", unseen font {u} %" : "") +
+                     $"; the average {averageCer} %" + (averageUnseen is { } au ? $", unseen font {au} %" : "") + (best ? " – the best so far is kept" : ""));
 
                 File.AppendAllText(Path.Combine(_options.Folder, "tests.jsonl"), entry.ToJsonString() + "\n");
             }

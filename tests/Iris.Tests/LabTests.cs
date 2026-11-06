@@ -185,6 +185,11 @@ public static class LabTests
 
             var test = (await console.SnapshotAsync(default))["tests"]!.AsArray();
             Assert.True(test.Count > 0 && test[0]!["cer"]!.GetValue<double>() >= 0, "the hub measured how well the model reads");
+            Assert.True(test[0]!["average_cer"]!.GetValue<double>() >= 0, "and how well the average of its versions reads");
+            var server = await console.ServerStatusAsync(default);
+            Assert.True(server["model"]?["best"]?["version"]?.GetValue<int>() > 0, "the best model is kept");
+            var (bestFile, about) = await console.BestModelAsync(default);
+            Assert.True(bestFile.Length > 1000 && about["kind"] is not null, "the console can save the best model");
             var history = await console.HistoryAsync(DateTime.Now.AddMinutes(-5), DateTime.Now.AddMinutes(1), null, 1, default);
             Assert.True(history["series"]!.AsObject().Count == 2, "a history of both computers");
             Assert.Equal(1, await console.CommandAsync("PC-02", LabCommands.Shutdown, default), "the command went to one computer");
@@ -813,6 +818,41 @@ public static class LabTests
 
         Assert.Equal(0, full.Level, "a new load has no measure yet, so no struggle");
         Assert.Equal(2, slow.ToJson()["level"]!.GetValue<int>(), "for the console");
+    }
+
+    [Test]
+    public static void TheServerKeepsTheAverageAndTheBestModel()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"iris-lab-models-{Environment.ProcessId}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var shape = OcrTrainingTests.Tiny();
+            var start = OcrWeights.Create(shape, 1);
+            var models = new LabModels(folder, start);
+            var next = OcrWeights.Create(shape, 2);
+            models.Add(next, 1);
+            var average = models.Average();
+            var (a, s, n) = (average.OutWeight[3], start.OutWeight[3], next.OutWeight[3]);
+            Assert.Near(LabModels.Keep * s + (1 - LabModels.Keep) * n, a, 1e-6, "nine tenths of the average, a tenth of the new version");
+            Assert.Near(LabModels.Keep * start.Convs[0].Mean[1] + (1 - LabModels.Keep) * next.Convs[0].Mean[1], average.Convs[0].Mean[1], 1e-6, "the running statistics too");
+            Assert.Equal(a, new LabModels(folder, start).Average().OutWeight[3], "the average is kept on disk");
+
+            var time = new DateTime(2026, 11, 6, 20, 0, 0);
+            Assert.True(models.Best is null && models.BestFile() is null, "no best before a test");
+            Assert.True(models.Offer(next, 6, "model", 1.4, 0.9, time), "the first tested model is the best");
+            Assert.True(!models.Offer(average, 6, "average", 1.5, 0.9, time), "a worse one is not");
+            Assert.True(models.Offer(average, 12, "average", 1.2, 1.0, time), "the mean of both CER decides: (1.2 + 1.0) / 2 < (1.4 + 0.9) / 2");
+            Assert.Equal("average", models.Best!["kind"]!.GetValue<string>(), "which one is the best");
+            Assert.True(models.BestFile() is { Length: > 1000 }, "the best as a reader file");
+            Assert.Equal(12, new LabModels(folder, start).Best!["version"]!.GetValue<int>(), "the best is remembered");
+            LabModels.Forget(folder);
+            Assert.True(new LabModels(folder, start).Best is null && !File.Exists(LabModels.AveragePath(folder)), "a new start forgets both");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
     }
 
     [Test]

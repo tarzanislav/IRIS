@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
@@ -241,6 +242,14 @@ public sealed class ServerPage : ConsolePage
         panel.Children.Add(Ui.Fact("model učebne", $"verzia {Ui.Number(model?["version"])} · {Ui.Number(model?["file_mb"], "0.0", " MB")}"));
         panel.Children.Add(Ui.Fact("odkiaľ", Source(Ui.String(model?["source"]))));
         panel.Children.Add(Ui.Fact("plán učenia", $"kolo {Ui.Number(model?["plan_done"])} z {Ui.Number(model?["plan_rounds"])}, najvyššia rýchlosť {Ui.Number(model?["rate"], "0.#####")}"));
+        if (model?["best"] is JsonObject best)
+        {
+            var kind = Ui.String(best["kind"]) == "average" ? "priemer posledných verzií" : "model";
+            panel.Children.Add(Ui.Fact("najlepší model", $"verzia {Ui.Number(best["version"])} ({kind}) · CER {Ui.Number(best["cer"], "0.00", " %")}" +
+                                                       (best["cer_unseen"] is { } unseen ? $", neznáme písmo {Ui.Number(unseen, "0.00", " %")}" : "") +
+                                                       (DateTimeOffset.TryParse(Ui.String(best["time"]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var when) ? $" · {when.LocalDateTime:d. M. HH:mm}" : "")));
+        }
+
         var disk = s["disk"];
         var free = Ui.Value(disk?["free_mb"]);
         panel.Children.Add(Warn(Ui.Fact("disk", double.IsFinite(free) ? $"voľných {free / 1024:0.0} GB z {Ui.Value(disk?["total_mb"]) / 1024:0} GB" : null), double.IsFinite(free) && free < 2048));
@@ -277,6 +286,11 @@ public sealed class ServerPage : ConsolePage
         {
             buttons.Children.Add(Ui.Button("Aktualizovať server teraz", () => _ = Actions?.UpdateServer(), primary: true));
             buttons.Children.Add(Ui.Button("Model z vydania…", () => _ = ModelFromRelease()));
+            if (_state?["model"]?["best"] is JsonObject)
+            {
+                buttons.Children.Add(Ui.Button("Uložiť najlepší model…", () => _ = SaveBest()));
+            }
+
             buttons.Children.Add(Ui.Button("Reštartovať server…", () => _ = Restart(), danger: true));
         }
 
@@ -285,6 +299,7 @@ public sealed class ServerPage : ConsolePage
                  {
                      "Aktualizovať: server sa pozrie na najnovšie vydanie IRIS a nainštaluje ho, ak je novšie a jeho podpis sedí (inak to robí sám raz denne).",
                      "Model z vydania: učebňa bude ďalej učiť od učiaceho súboru najnovšieho podpísaného vydania; doterajší model sa odloží vedľa (tri posledné ostávajú).",
+                     "Najlepší model: server po každom kole posunie priemer posledných verzií modelu a pri meraní CER číta model aj priemer; najlepší, aký kedy nameral, si odloží – uložíte ho ako súbor čítačky IRIS.",
                      "Reštart: server sa ukončí a systém ho o pol minúty spustí znova; počítače sa pripoja samy.",
                  })
         {
@@ -340,6 +355,47 @@ public sealed class ServerPage : ConsolePage
             ? "Žiadosť je odoslaná. Aktualizátor servera to urobí do minúty a server sa reštartuje; výsledok uvidíte v „Posledná aktualizácia“ a v denníku aktualizácie."
             : "Server žiadosť neprijal.", "IRIS – učebňa", MessageBoxButton.OK, asked ? MessageBoxImage.Information : MessageBoxImage.Warning);
         _stateAt = DateTimeOffset.MinValue;
+    }
+
+    private async Task SaveBest()
+    {
+        if (Actions is null)
+        {
+            return;
+        }
+
+        var version = Ui.Number(_state?["model"]?["best"]?["version"]);
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"iris-ocr-ucebna-v{version}.iris",
+            Filter = "Model čítačky IRIS (*.iris)|*.iris",
+            DefaultExt = ".iris",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var best = await Actions.BestModel();
+        string text;
+        if (best is not { } got || got.File.Length == 0)
+        {
+            text = "Server najlepší model neposlal (nie je pripojený, alebo ešte žiadny nemá).";
+        }
+        else
+        {
+            try
+            {
+                await File.WriteAllBytesAsync(dialog.FileName, got.File);
+                text = $"Uložené: {dialog.FileName} ({got.File.Length / 1048576.0:0.0} MB).";
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                text = $"Súbor sa nepodarilo uložiť: {e.Message}";
+            }
+        }
+
+        MessageBox.Show(text, "IRIS – učebňa", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private async Task Restart()

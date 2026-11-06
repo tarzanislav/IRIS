@@ -42,7 +42,8 @@ public partial class App : Application
                 ["started"] = DateTime.Now.AddHours(-26).ToString("o", CultureInfo.InvariantCulture),
                 ["now"] = DateTimeOffset.Now.AddMinutes(129).ToString("o", CultureInfo.InvariantCulture),
                 ["uptime_minutes"] = 26 * 60 + 14,
-                ["model"] = new JsonObject { ["version"] = 83142, ["minutes"] = 26300, ["rate"] = 1e-4, ["plan_rounds"] = 600, ["plan_done"] = 62, ["source"] = "IRIS lab: learned on the computers of a classroom", ["file_mb"] = 29.7 },
+                ["model"] = new JsonObject { ["version"] = 83142, ["minutes"] = 26300, ["rate"] = 1e-4, ["plan_rounds"] = 600, ["plan_done"] = 62, ["source"] = "IRIS lab: learned on the computers of a classroom", ["file_mb"] = 29.7,
+                    ["best"] = new JsonObject { ["version"] = 83136, ["kind"] = "average", ["cer"] = 1.12, ["cer_unseen"] = 0.71, ["time"] = DateTime.Now.AddHours(-3).ToString("o", CultureInfo.InvariantCulture) } },
                 ["disk"] = new JsonObject { ["free_mb"] = 81234, ["total_mb"] = 117000 },
                 ["memory_mb"] = 412,
                 ["processors"] = 4,
@@ -273,7 +274,11 @@ public partial class App : Application
             });
             if (r % 6 == 0)
             {
-                tests.Add((JsonNode)new JsonObject { ["version"] = 1000 + r, ["cer"] = Math.Round(1.4 - r * 0.006, 2), ["cer_unseen"] = Math.Round(1.1 - r * 0.004, 2) });
+                tests.Add((JsonNode)new JsonObject
+                {
+                    ["version"] = 1000 + r, ["cer"] = Math.Round(1.4 - r * 0.006, 2), ["cer_unseen"] = Math.Round(1.1 - r * 0.004, 2),
+                    ["average_cer"] = Math.Round(1.36 - r * 0.006, 2), ["average_cer_unseen"] = Math.Round(1.06 - r * 0.004, 2),
+                });
             }
         }
 
