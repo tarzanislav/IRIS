@@ -44,6 +44,10 @@ jobs:
         env:
           DOTNET_EnableAVX2: '0'
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
+      - name: Classroom tests as on the server (without the data of cultures)
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'
+        run: dotnet run --project tests/Iris.Tests -c Release --no-build -- LabTests
       - name: Tests with SSE only
         env:
           DOTNET_EnableAVX: '0'

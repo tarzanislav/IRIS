@@ -977,8 +977,20 @@ public sealed class LabHub
                     case MessageKind.Server when message.Header["what"]?.GetValue<string>() == "efficiency-table":
                         // the lines of the last days as a table (Excel), to be saved by the console
                         var days = Math.Clamp(message.Header["days"]?.GetValue<double>() ?? 7, 0.04, EfficiencyLog.Days);
-                        var rows = _efficiency.Since(_options.Now().AddDays(-days));
-                        await channel.SendAsync(new LabMessage(MessageKind.Server, new JsonObject { ["rows"] = rows.Count, ["days"] = days }, EfficiencyLog.Table(rows)), cancel);
+                        LabMessage table;
+                        try
+                        {
+                            var rows = _efficiency.Since(_options.Now().AddDays(-days));
+                            table = new LabMessage(MessageKind.Server, new JsonObject { ["rows"] = rows.Count, ["days"] = days }, EfficiencyLog.Table(rows));
+                        }
+                        catch (Exception e) when (e is not OperationCanceledException)
+                        {
+                            // an answer in any case: a failure here must not cut the console off
+                            Note($"the table of efficiency failed: {e.Message}");
+                            table = new LabMessage(MessageKind.Server, new JsonObject { ["rows"] = 0, ["error"] = e.Message });
+                        }
+
+                        await channel.SendAsync(table, cancel);
                         break;
                     case MessageKind.Server when message.Header["what"]?.GetValue<string>() is "test" or "test-stop":
                         await Test(channel, message.Header, cancel);

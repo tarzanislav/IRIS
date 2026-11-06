@@ -143,18 +143,18 @@ public sealed class EfficiencyLog
     /// </summary>
     public static byte[] Table(IEnumerable<JsonObject> lines)
     {
-        var slovak = CultureInfo.GetCultureInfo("sk-SK");
         var text = new StringBuilder();
         text.Append(string.Join(';', Columns)).Append("\r\n");
         foreach (var line in lines)
         {
-            text.Append(string.Join(';', Columns.Select(c => Cell(line[c], slovak)))).Append("\r\n");
+            text.Append(string.Join(';', Columns.Select(c => Cell(line[c])))).Append("\r\n");
         }
 
         return [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(text.ToString())];
     }
 
-    private static string Cell(JsonNode? node, CultureInfo culture)
+    // the decimal comma is written by hand: the server runs without the data of cultures (no ICU on a bare Debian)
+    private static string Cell(JsonNode? node)
     {
         if (node is not JsonValue value)
         {
@@ -168,7 +168,7 @@ public sealed class EfficiencyLog
 
         if (value.GetValueKind() == JsonValueKind.Number)
         {
-            return value.GetValue<double>().ToString("0.###", culture);
+            return value.GetValue<double>().ToString("0.###", CultureInfo.InvariantCulture).Replace('.', ',');
         }
 
         var text = value.ToString();
