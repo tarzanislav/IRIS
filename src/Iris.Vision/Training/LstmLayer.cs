@@ -173,21 +173,25 @@ internal sealed unsafe class LstmLayer : IDisposable
             var gd = g[d];
 
             // h of the step before each frame (zero at the first step of a line)
-            for (var line = 0; line < _sequences.Frames.Length; line++)
+            var direction = d;
+            Work.For(_sequences.Frames.Length, (long)frames * h, threads, (from, to) =>
             {
-                for (var step = 0; step < _sequences.Frames[line]; step++)
+                for (var line = from; line < to; line++)
                 {
-                    var target = new Span<float>(previous + (long)_sequences.Frame(line, step, d) * h, h);
-                    if (step == 0)
+                    for (var step = 0; step < _sequences.Frames[line]; step++)
                     {
-                        target.Clear();
-                    }
-                    else
-                    {
-                        new ReadOnlySpan<float>(_output.Data + (long)_sequences.Frame(line, step - 1, d) * 2 * h + d * h, h).CopyTo(target);
+                        var target = new Span<float>(previous + (long)_sequences.Frame(line, step, direction) * h, h);
+                        if (step == 0)
+                        {
+                            target.Clear();
+                        }
+                        else
+                        {
+                            new ReadOnlySpan<float>(_output.Data + (long)_sequences.Frame(line, step - 1, direction) * 2 * h + direction * h, h).CopyTo(target);
+                        }
                     }
                 }
-            }
+            });
 
             clock?.Mark("previous");
             fixed (float* ghh = gd.HiddenWeight, gih = gd.InputWeight, wih = _p[d].InputWeight)
@@ -255,36 +259,74 @@ internal sealed unsafe class LstmLayer : IDisposable
         _inputGradient.Dispose();
     }
 
-    // the recurrences are independent per direction and per line: both directions, and groups of lines when there
-    // are threads to spare (each group keeps its lines from the longest to the shortest)
+    // The recurrences are independent per direction and per line. One thread runs all lines together (full blocks of
+    // the product); more threads get as many groups of lines as there are threads, dealt like cards from the longest
+    // line down and back up (every group gets a long line and a short one, so the groups are about equal), each group
+    // keeping its lines from the longest to the shortest. The jobs – both directions of every group – are taken from
+    // the most expensive one down by whichever thread is free; the longest line no longer holds up threads with
+    // nothing to do, as the narrow kernels let its last lonely steps cost one row, not six.
     private void RunTasks(int threads, Action<int, int[]> task)
     {
         var lines = _sequences.Frames.Length;
-        var groups = Math.Max(1, Math.Min(threads / 2, lines / 8));
-        var jobs = new List<(int Direction, int[] Lines)>();
-        for (var d = 0; d < 2; d++)
+        var groups = Math.Clamp(threads, 1, Math.Max(1, lines));
+        var members = new List<int>[groups];
+        for (var g = 0; g < groups; g++)
         {
-            for (var group = 0; group < groups; group++)
-            {
-                var members = Enumerable.Range(0, lines).Where(i => i % groups == group).ToArray();
-                if (members.Length > 0)
-                {
-                    jobs.Add((d, members));
-                }
-            }
+            members[g] = [];
+        }
+
+        for (var i = 0; i < lines; i++)
+        {
+            var turn = i % (2 * groups);
+            members[turn < groups ? turn : 2 * groups - 1 - turn].Add(i);
+        }
+
+        var jobs = new List<(int Direction, int[] Lines, double Cost)>();
+        foreach (var group in members.Where(m => m.Count > 0))
+        {
+            var cost = Cost(group);
+            jobs.Add((0, [.. group], cost));
+            jobs.Add((1, [.. group], cost));
         }
 
         if (threads <= 1)
         {
-            foreach (var (d, members) in jobs)
+            foreach (var (d, group, _) in jobs)
             {
-                task(d, members);
+                task(d, group);
             }
 
             return;
         }
 
-        Parallel.ForEach(jobs, new ParallelOptions { MaxDegreeOfParallelism = threads }, job => task(job.Direction, job.Lines));
+        jobs.Sort((x, y) => y.Cost.CompareTo(x.Cost));
+        var next = -1;
+        Parallel.For(0, Math.Min(threads, jobs.Count), new ParallelOptions { MaxDegreeOfParallelism = threads }, _ =>
+        {
+            for (int j; (j = Interlocked.Increment(ref next)) < jobs.Count;)
+            {
+                task(jobs[j].Direction, jobs[j].Lines);
+            }
+        });
+    }
+
+    // the work of a group's recurrence: every step costs by the lines still running (one to three rows go through the
+    // narrow kernels, more through blocks of six)
+    private double Cost(List<int> group)
+    {
+        double cost = 0;
+        var running = group.Count;
+        for (var step = 0; running > 0; step++)
+        {
+            while (running > 0 && _sequences.Frames[group[running - 1]] <= step)
+            {
+                running--;
+            }
+
+            cost += running switch { 0 => 0, 1 => 1, 2 => 1.8, 3 => 2.7, _ => 5.3 * ((running + Gemm.MR - 1) / Gemm.MR) };
+        }
+
+        return cost;
     }
 
     private void ForwardTask(int d, int[] lines, Gemm.PackedB hiddenWeight, float* output)

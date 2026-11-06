@@ -12,7 +12,7 @@ public static unsafe class OcrTrainingTests
     public static void ProductOfMatricesIsExactInEveryForm()
     {
         var random = new Random(3);
-        foreach (var (m, n, k) in new[] { (1, 1, 1), (5, 17, 3), (6, 16, 256), (37, 33, 300), (200, 48, 700), (13, 160, 1100), (97, 10, 2000) })
+        foreach (var (m, n, k) in new[] { (1, 1, 1), (5, 17, 3), (6, 16, 256), (37, 33, 300), (200, 48, 700), (13, 160, 1100), (97, 10, 2000), (2, 50, 300), (3, 70, 260), (8, 65, 513), (1, 200, 192) })
         {
             var a = Values(random, m * k);
             var b = Values(random, k * n);
@@ -66,6 +66,40 @@ public static unsafe class OcrTrainingTests
                             Assert.Near(want, c[i], 1e-4 * Math.Sqrt(k) + 1e-5, $"{form} {m}×{n}×{k} threads {threads} add {add} [{i}]");
                         }
                     }
+                }
+            }
+        }
+    }
+
+    [Test]
+    public static void FewRowsGiveTheSameBitsAsAFullBlock()
+    {
+        // one to three rows go through the narrow kernels, six through the full one: the same sums in the same order
+        var random = new Random(5);
+        const int n = 70, k = 300;
+        var a = Values(random, 6 * k);
+        var b = Values(random, k * n);
+        var start = Values(random, 6 * n);
+        foreach (var add in new[] { false, true })
+        {
+            var full = (float[])start.Clone();
+            fixed (float* pa = a, pb = b, pc = full)
+            {
+                Gemm.Multiply(new RowsA(pa, k), new RowsB(pb, n), 6, n, k, pc, n, add, threads: 1);
+            }
+
+            for (var rows = 1; rows <= 3; rows++)
+            {
+                var few = (float[])start.Clone();
+                fixed (float* pa = a, pb = b, pc = few)
+                {
+                    Gemm.Multiply(new RowsA(pa, k), new RowsB(pb, n), rows, n, k, pc, n, add, threads: 1);
+                }
+
+                for (var i = 0; i < 6 * n; i++)
+                {
+                    var want = i < rows * n ? full[i] : start[i];
+                    Assert.True(BitConverter.SingleToInt32Bits(want) == BitConverter.SingleToInt32Bits(few[i]), $"{rows} rows, add {add} [{i}]: {few[i]} ≠ {want}");
                 }
             }
         }

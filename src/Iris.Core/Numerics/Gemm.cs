@@ -191,7 +191,10 @@ internal static unsafe class Gemm
     private const long ParallelWork = 1 << 18;
 
     // a block of zeros to read missing rows from (never written)
-    private static readonly float* Zeros = AllocateZeros();
+    private static readonly float* Zeros = AllocateZeros(KC + 16);
+
+    // a panel of zeros (KC × NR) for the narrow kernels past the last panel of B (never written)
+    private static readonly float* ZeroPanel = AllocateZeros(KC * NR);
 
     [ThreadStatic]
     private static float* t_a;
@@ -430,10 +433,10 @@ internal static unsafe class Gemm
         }
     }
 
-    private static float* AllocateZeros()
+    private static float* AllocateZeros(int count)
     {
-        var zeros = (float*)NativeMemory.AlignedAlloc((KC + 16) * sizeof(float), 64);
-        new Span<float>(zeros, KC + 16).Clear();
+        var zeros = (float*)NativeMemory.AlignedAlloc((nuint)(count * sizeof(float)), 64);
+        new Span<float>(zeros, count).Clear();
         return zeros;
     }
 
@@ -466,12 +469,15 @@ internal static unsafe class Gemm
         }
     }
 
-    // rows [m0, m0 + mc) of C: block after block of k, the rows of A packed once per block and run against every panel of B
+    // rows [m0, m0 + mc) of C: block after block of k, the rows of A packed once per block and run against every panel
+    // of B; a last panel of one to three rows goes through the narrow kernels (a full block would be mostly zeros)
     private static void Block<TA>(TA a, PackedB b, int m0, int mc, float* c, int ldc, bool add)
         where TA : struct, IMatrixA
     {
         var panels = (mc + MR - 1) / MR;
         var buffer = Scratch(ref t_a, ref t_aSize, (long)panels * MR * KC);
+        var lastRows = mc - (panels - 1) * MR;
+        var full = Narrow && lastRows <= 3 ? panels - 1 : panels;
         for (var k0 = 0; k0 < b.K; k0 += KC)
         {
             var kc = Math.Min(KC, b.K - k0);
@@ -481,16 +487,193 @@ internal static unsafe class Gemm
             }
 
             var accumulate = add || k0 > 0;
-            for (var j = 0; j < b.Panels; j++)
+            for (var j = 0; full > 0 && j < b.Panels; j++)
             {
                 var panel = b.Panel(k0, j);
                 var columns = Math.Min(NR, b.N - j * NR);
-                for (var p = 0; p < panels; p++)
+                for (var p = 0; p < full; p++)
                 {
                     Kernel(kc, buffer + (long)p * MR * kc, panel, c + (long)(m0 + p * MR) * ldc + j * NR, ldc, Math.Min(MR, mc - p * MR), columns, accumulate);
                 }
             }
+
+            if (full < panels)
+            {
+                Thin(kc, buffer + (long)full * MR * kc, lastRows, b, k0, c + (long)(m0 + full * MR) * ldc, ldc, accumulate);
+            }
         }
+    }
+
+    /// <summary>Whether the narrow kernels run (256-bit vectors: AVX, with or without FMA).</summary>
+    internal static bool Narrow => Avx.IsSupported;
+
+    // one to three rows of A (a packed panel, rows past them unused) against all panels of the block k0 of B: one row
+    // against four panels at a time, two or three rows against two – as many sums in registers as the full kernel keeps,
+    // so each multiply-add does useful work. An LSTM step with few lines still running costs what its rows need, not a
+    // full block of six.
+    private static void Thin(int depth, float* a, int rows, PackedB b, int k0, float* c, int ldc, bool add)
+    {
+        var stride = (long)NR * depth; // the panels of a block follow one another
+        var group = rows == 1 ? 4 : 2;
+        var t = stackalloc float[3 * 4 * NR];
+        for (var j = 0; j < b.Panels; j += group)
+        {
+            var count = Math.Min(group, b.Panels - j);
+            var columns = Math.Min(group * NR, b.N - j * NR);
+            var panel = b.Panel(k0, j);
+            if (rows == 1)
+            {
+                One(depth, a, panel, count > 1 ? panel + stride : ZeroPanel, count > 2 ? panel + 2 * stride : ZeroPanel, count > 3 ? panel + 3 * stride : ZeroPanel, t);
+            }
+            else if (rows == 2)
+            {
+                Two(depth, a, panel, count > 1 ? panel + stride : ZeroPanel, t);
+            }
+            else
+            {
+                Three(depth, a, panel, count > 1 ? panel + stride : ZeroPanel, t);
+            }
+
+            // t holds the rows side by side, group · NR values each
+            for (var i = 0; i < rows; i++)
+            {
+                var row = c + (long)i * ldc + j * NR;
+                var sums = t + i * group * NR;
+                var x = 0;
+                if (columns == group * NR)
+                {
+                    for (; x < columns; x += 8)
+                    {
+                        var v = Avx.LoadVector256(sums + x);
+                        Avx.Store(row + x, add ? Avx.Add(v, Avx.LoadVector256(row + x)) : v);
+                    }
+                }
+
+                for (; x < columns; x++)
+                {
+                    row[x] = add ? sums[x] + row[x] : sums[x];
+                }
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector256<float> MulAdd(Vector256<float> x, Vector256<float> b, Vector256<float> sum) =>
+        Fma.IsSupported ? Fma.MultiplyAdd(x, b, sum) : Avx.Add(sum, Avx.Multiply(x, b));
+
+    // one row × 64 columns: eight sums, the eight values of B loaded once per step of k
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void One(int depth, float* a, float* b0, float* b1, float* b2, float* b3, float* t)
+    {
+        Vector256<float> s0 = default, s1 = default, s2 = default, s3 = default, s4 = default, s5 = default, s6 = default, s7 = default;
+        for (var k = 0; k < depth; k++)
+        {
+            var x = Avx.BroadcastScalarToVector256(a);
+            s0 = MulAdd(x, Avx.LoadVector256(b0), s0);
+            s1 = MulAdd(x, Avx.LoadVector256(b0 + 8), s1);
+            s2 = MulAdd(x, Avx.LoadVector256(b1), s2);
+            s3 = MulAdd(x, Avx.LoadVector256(b1 + 8), s3);
+            s4 = MulAdd(x, Avx.LoadVector256(b2), s4);
+            s5 = MulAdd(x, Avx.LoadVector256(b2 + 8), s5);
+            s6 = MulAdd(x, Avx.LoadVector256(b3), s6);
+            s7 = MulAdd(x, Avx.LoadVector256(b3 + 8), s7);
+            a += MR;
+            b0 += NR;
+            b1 += NR;
+            b2 += NR;
+            b3 += NR;
+        }
+
+        Avx.Store(t, s0);
+        Avx.Store(t + 8, s1);
+        Avx.Store(t + 16, s2);
+        Avx.Store(t + 24, s3);
+        Avx.Store(t + 32, s4);
+        Avx.Store(t + 40, s5);
+        Avx.Store(t + 48, s6);
+        Avx.Store(t + 56, s7);
+    }
+
+    // two rows × 32 columns: eight sums
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void Two(int depth, float* a, float* b0, float* b1, float* t)
+    {
+        Vector256<float> s00 = default, s01 = default, s02 = default, s03 = default, s10 = default, s11 = default, s12 = default, s13 = default;
+        for (var k = 0; k < depth; k++)
+        {
+            var x0 = Avx.BroadcastScalarToVector256(a);
+            var x1 = Avx.BroadcastScalarToVector256(a + 1);
+            var v = Avx.LoadVector256(b0);
+            s00 = MulAdd(x0, v, s00);
+            s10 = MulAdd(x1, v, s10);
+            v = Avx.LoadVector256(b0 + 8);
+            s01 = MulAdd(x0, v, s01);
+            s11 = MulAdd(x1, v, s11);
+            v = Avx.LoadVector256(b1);
+            s02 = MulAdd(x0, v, s02);
+            s12 = MulAdd(x1, v, s12);
+            v = Avx.LoadVector256(b1 + 8);
+            s03 = MulAdd(x0, v, s03);
+            s13 = MulAdd(x1, v, s13);
+            a += MR;
+            b0 += NR;
+            b1 += NR;
+        }
+
+        Avx.Store(t, s00);
+        Avx.Store(t + 8, s01);
+        Avx.Store(t + 16, s02);
+        Avx.Store(t + 24, s03);
+        Avx.Store(t + 32, s10);
+        Avx.Store(t + 40, s11);
+        Avx.Store(t + 48, s12);
+        Avx.Store(t + 56, s13);
+    }
+
+    // three rows × 32 columns: twelve sums, the three values of A held while the four vectors of B pass
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void Three(int depth, float* a, float* b0, float* b1, float* t)
+    {
+        Vector256<float> s00 = default, s01 = default, s02 = default, s03 = default, s10 = default, s11 = default;
+        Vector256<float> s12 = default, s13 = default, s20 = default, s21 = default, s22 = default, s23 = default;
+        for (var k = 0; k < depth; k++)
+        {
+            var x0 = Avx.BroadcastScalarToVector256(a);
+            var x1 = Avx.BroadcastScalarToVector256(a + 1);
+            var x2 = Avx.BroadcastScalarToVector256(a + 2);
+            var v = Avx.LoadVector256(b0);
+            s00 = MulAdd(x0, v, s00);
+            s10 = MulAdd(x1, v, s10);
+            s20 = MulAdd(x2, v, s20);
+            v = Avx.LoadVector256(b0 + 8);
+            s01 = MulAdd(x0, v, s01);
+            s11 = MulAdd(x1, v, s11);
+            s21 = MulAdd(x2, v, s21);
+            v = Avx.LoadVector256(b1);
+            s02 = MulAdd(x0, v, s02);
+            s12 = MulAdd(x1, v, s12);
+            s22 = MulAdd(x2, v, s22);
+            v = Avx.LoadVector256(b1 + 8);
+            s03 = MulAdd(x0, v, s03);
+            s13 = MulAdd(x1, v, s13);
+            s23 = MulAdd(x2, v, s23);
+            a += MR;
+            b0 += NR;
+            b1 += NR;
+        }
+
+        Avx.Store(t, s00);
+        Avx.Store(t + 8, s01);
+        Avx.Store(t + 16, s02);
+        Avx.Store(t + 24, s03);
+        Avx.Store(t + 32, s10);
+        Avx.Store(t + 40, s11);
+        Avx.Store(t + 48, s12);
+        Avx.Store(t + 56, s13);
+        Avx.Store(t + 64, s20);
+        Avx.Store(t + 72, s21);
+        Avx.Store(t + 80, s22);
+        Avx.Store(t + 88, s23);
     }
 
     // the k range [from, to) of A · B into C (add: onto what is there); B packed block by block as it is needed
