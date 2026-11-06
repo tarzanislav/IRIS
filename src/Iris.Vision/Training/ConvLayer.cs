@@ -178,7 +178,7 @@ internal sealed unsafe class ConvLayer : IDisposable
 
     private bool First => UseFastPaths && FirstConvolution.Fits(_p, _pad);
 
-    /// <summary>Where the time of the layer goes (product, normalization, pooling), when set.</summary>
+    /// <summary>Where the time of the layer goes (product, statistics, activation and pooling, the way back), when set.</summary>
     public Dictionary<string, double>? Timings { get; set; }
 
     public string Name { get; set; } = "conv";
@@ -268,8 +268,8 @@ internal sealed unsafe class ConvLayer : IDisposable
     }
 
     /// <summary>
-    /// Backward from the gradient of the output (Out pixels × outputs; may be overwritten): adds the gradients of the
-    /// weights to g and returns the gradient of the input (In pixels × inputs) when asked for it, else null.
+    /// Backward from the gradient of the output (Out pixels × outputs, only read): adds the gradients of the weights to g
+    /// and returns the gradient of the input (In pixels × inputs) when asked for it, else null. z becomes its gradient.
     /// </summary>
     public float* Backward(float* gradient, ConvParameters g, bool inputGradient, int threads)
     {
