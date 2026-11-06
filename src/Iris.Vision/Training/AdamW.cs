@@ -89,7 +89,7 @@ public sealed class AdamW
         var i = 0;
         fixed (float* pp = p, pg = g, pm = m, pv = v)
         {
-            if (Vector256.IsHardwareAccelerated)
+            if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
             {
                 var vb1 = Vector256.Create(b1);
                 var vb2 = Vector256.Create(b2);

@@ -358,7 +358,7 @@ internal sealed unsafe class LstmLayer : IDisposable
     private static void Cell(float* gate, float* c, float* hOut, int h)
     {
         var k = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             for (; k <= h - 8; k += 8)
             {
@@ -396,7 +396,7 @@ internal sealed unsafe class LstmLayer : IDisposable
     private static void CellBackward(float* gate, float* cell, float* before, float* dh, float* dc, float* dz, int h)
     {
         var k = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             var one = Vector256.Create(1f);
             for (; k <= h - 8; k += 8)

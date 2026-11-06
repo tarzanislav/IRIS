@@ -307,7 +307,7 @@ internal static class Kernels
         var max = Max(row);
         var log = (float)Math.Log(SumExp(row, max));
         var i = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             var vmax = Vector256.Create(max);
             var vlog = Vector256.Create(log);
@@ -336,7 +336,7 @@ internal static class Kernels
     {
         var max = float.NegativeInfinity;
         var i = 0;
-        if (Vector256.IsHardwareAccelerated && row.Length >= 8)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated) && row.Length >= 8)
         {
             var m = Vector256.Create(float.NegativeInfinity);
             for (; i <= row.Length - 8; i += 8)
@@ -365,7 +365,7 @@ internal static class Kernels
     {
         double sum = 0;
         var i = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             var vmax = Vector256.Create(max);
             var s0 = Vector256<double>.Zero;

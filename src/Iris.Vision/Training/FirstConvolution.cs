@@ -16,7 +16,7 @@ internal static unsafe class FirstConvolution
 {
     /// <summary>Whether a layer is such a first convolution (and the processor has vectors for it).</summary>
     public static bool Fits(ConvParameters p, int pad) =>
-        Vector256.IsHardwareAccelerated && p.Inputs == 1 && p.Kh == 3 && p.Kw == 3 && pad == 1 && p.Outputs % 8 == 0;
+        (Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated) && p.Inputs == 1 && p.Kh == 3 && p.Kw == 3 && pad == 1 && p.Outputs % 8 == 0;
 
     /// <summary>z [pixels, outputs] = the convolution of the picture x [pixels] (same geometry) with weights [outputs, 3, 3, 1].</summary>
     public static void Convolve(float* x, Level level, float[] weight, int outputs, float* z, int threads)

@@ -459,7 +459,7 @@ internal sealed unsafe class ConvLayer : IDisposable
             {
                 var row = z + (long)r * channels;
                 var c = 0;
-                if (Vector256.IsHardwareAccelerated)
+                if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                 {
                     for (; c <= channels - 8; c += 8)
                     {
@@ -525,7 +525,7 @@ internal sealed unsafe class ConvLayer : IDisposable
                     var x = z + (long)r * channels;
                     var y = a + (long)r * channels;
                     var c = 0;
-                    if (Vector256.IsHardwareAccelerated)
+                    if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                     {
                         for (; c <= channels - 8; c += 8)
                         {
@@ -575,7 +575,7 @@ internal sealed unsafe class ConvLayer : IDisposable
                         var dy = d + (long)r * channels;
                         var x = xhat + (long)r * channels;
                         var c = 0;
-                        if (Vector256.IsHardwareAccelerated)
+                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                         {
                             for (; c <= channels - 8; c += 8)
                             {
@@ -637,7 +637,7 @@ internal sealed unsafe class ConvLayer : IDisposable
                     var dy = d + (long)r * channels;
                     var x = xhat + (long)r * channels;
                     var c = 0;
-                    if (Vector256.IsHardwareAccelerated)
+                    if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                     {
                         for (; c <= channels - 8; c += 8)
                         {
@@ -672,7 +672,7 @@ internal sealed unsafe class ConvLayer : IDisposable
                         Window(window, a, line, y, x, convWidth, channels);
                         var o = pooled + (long)(Out.Offsets[line] + y * width + x) * channels;
                         var c = 0;
-                        if (Vector256.IsHardwareAccelerated)
+                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                         {
                             for (; c <= channels - 8; c += 8)
                             {
@@ -733,7 +733,7 @@ internal sealed unsafe class ConvLayer : IDisposable
                         var best = pooled + index;
                         var g = gradient + index;
                         var c = 0;
-                        if (Vector256.IsHardwareAccelerated)
+                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
                         {
                             for (; c <= channels - 8; c += 8)
                             {

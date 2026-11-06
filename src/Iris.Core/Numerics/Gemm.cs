@@ -549,7 +549,21 @@ internal static unsafe class Gemm
     {
         if (!Fast)
         {
-            PortableKernel(depth, a, b, c, ldc, rows, columns, add);
+            // processors without AVX2 and FMA: AVX alone (Sandy and Ivy Bridge), else 128-bit vectors (SSE on every
+            // x64, NEON on ARM) – the plain loop only where there are no vectors at all
+            if (Avx.IsSupported)
+            {
+                AvxKernel(depth, a, b, c, ldc, rows, columns, add);
+            }
+            else if (Vector128.IsHardwareAccelerated)
+            {
+                Vector128Kernel(depth, a, b, c, ldc, rows, columns, add);
+            }
+            else
+            {
+                PortableKernel(depth, a, b, c, ldc, rows, columns, add);
+            }
+
             return;
         }
 
@@ -644,7 +658,112 @@ internal static unsafe class Gemm
         }
     }
 
-    // the same arithmetic without AVX2 (old processors): slower, the same results up to rounding
+    // AVX without FMA: the same block with a multiply and an add (12 sums, 2 rows of B, the broadcast and the product
+    // fit the 16 registers)
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void AvxKernel(int depth, float* a, float* b, float* c, int ldc, int rows, int columns, bool add)
+    {
+        Vector256<float> c00 = default, c01 = default, c10 = default, c11 = default, c20 = default, c21 = default;
+        Vector256<float> c30 = default, c31 = default, c40 = default, c41 = default, c50 = default, c51 = default;
+        for (var k = 0; k < depth; k++)
+        {
+            var b0 = Avx.LoadVector256(b);
+            var b1 = Avx.LoadVector256(b + 8);
+            var x = Avx.BroadcastScalarToVector256(a);
+            c00 = Avx.Add(c00, Avx.Multiply(x, b0));
+            c01 = Avx.Add(c01, Avx.Multiply(x, b1));
+            x = Avx.BroadcastScalarToVector256(a + 1);
+            c10 = Avx.Add(c10, Avx.Multiply(x, b0));
+            c11 = Avx.Add(c11, Avx.Multiply(x, b1));
+            x = Avx.BroadcastScalarToVector256(a + 2);
+            c20 = Avx.Add(c20, Avx.Multiply(x, b0));
+            c21 = Avx.Add(c21, Avx.Multiply(x, b1));
+            x = Avx.BroadcastScalarToVector256(a + 3);
+            c30 = Avx.Add(c30, Avx.Multiply(x, b0));
+            c31 = Avx.Add(c31, Avx.Multiply(x, b1));
+            x = Avx.BroadcastScalarToVector256(a + 4);
+            c40 = Avx.Add(c40, Avx.Multiply(x, b0));
+            c41 = Avx.Add(c41, Avx.Multiply(x, b1));
+            x = Avx.BroadcastScalarToVector256(a + 5);
+            c50 = Avx.Add(c50, Avx.Multiply(x, b0));
+            c51 = Avx.Add(c51, Avx.Multiply(x, b1));
+            a += MR;
+            b += NR;
+        }
+
+        var t = stackalloc float[MR * NR];
+        Avx.Store(t, c00);
+        Avx.Store(t + 8, c01);
+        Avx.Store(t + 16, c10);
+        Avx.Store(t + 24, c11);
+        Avx.Store(t + 32, c20);
+        Avx.Store(t + 40, c21);
+        Avx.Store(t + 48, c30);
+        Avx.Store(t + 56, c31);
+        Avx.Store(t + 64, c40);
+        Avx.Store(t + 72, c41);
+        Avx.Store(t + 80, c50);
+        Avx.Store(t + 88, c51);
+        StoreEdge(t, c, ldc, rows, columns, add);
+    }
+
+    // 128-bit vectors (SSE, NEON): the panel of 16 columns in two halves of 8, each with 12 sums in registers – x64
+    // has 16 of them, so nothing spills; the panel of A is read twice from the L1 cache
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void Vector128Kernel(int depth, float* a, float* b, float* c, int ldc, int rows, int columns, bool add)
+    {
+        var t = stackalloc float[MR * NR];
+        for (var half = 0; half < NR; half += 8)
+        {
+            Vector128<float> c00 = default, c01 = default, c10 = default, c11 = default, c20 = default, c21 = default;
+            Vector128<float> c30 = default, c31 = default, c40 = default, c41 = default, c50 = default, c51 = default;
+            var pa = a;
+            var pb = b + half;
+            for (var k = 0; k < depth; k++)
+            {
+                var b0 = Vector128.Load(pb);
+                var b1 = Vector128.Load(pb + 4);
+                var x = Vector128.Create(pa[0]);
+                c00 = Vector128.MultiplyAddEstimate(x, b0, c00);
+                c01 = Vector128.MultiplyAddEstimate(x, b1, c01);
+                x = Vector128.Create(pa[1]);
+                c10 = Vector128.MultiplyAddEstimate(x, b0, c10);
+                c11 = Vector128.MultiplyAddEstimate(x, b1, c11);
+                x = Vector128.Create(pa[2]);
+                c20 = Vector128.MultiplyAddEstimate(x, b0, c20);
+                c21 = Vector128.MultiplyAddEstimate(x, b1, c21);
+                x = Vector128.Create(pa[3]);
+                c30 = Vector128.MultiplyAddEstimate(x, b0, c30);
+                c31 = Vector128.MultiplyAddEstimate(x, b1, c31);
+                x = Vector128.Create(pa[4]);
+                c40 = Vector128.MultiplyAddEstimate(x, b0, c40);
+                c41 = Vector128.MultiplyAddEstimate(x, b1, c41);
+                x = Vector128.Create(pa[5]);
+                c50 = Vector128.MultiplyAddEstimate(x, b0, c50);
+                c51 = Vector128.MultiplyAddEstimate(x, b1, c51);
+                pa += MR;
+                pb += NR;
+            }
+
+            var u = t + half;
+            c00.Store(u);
+            c01.Store(u + 4);
+            c10.Store(u + NR);
+            c11.Store(u + NR + 4);
+            c20.Store(u + 2 * NR);
+            c21.Store(u + 2 * NR + 4);
+            c30.Store(u + 3 * NR);
+            c31.Store(u + 3 * NR + 4);
+            c40.Store(u + 4 * NR);
+            c41.Store(u + 4 * NR + 4);
+            c50.Store(u + 5 * NR);
+            c51.Store(u + 5 * NR + 4);
+        }
+
+        StoreEdge(t, c, ldc, rows, columns, add);
+    }
+
+    // the same arithmetic without any vectors: slower, the same results up to rounding
     private static void PortableKernel(int depth, float* a, float* b, float* c, int ldc, int rows, int columns, bool add)
     {
         var t = stackalloc float[MR * NR];

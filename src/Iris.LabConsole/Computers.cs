@@ -89,7 +89,9 @@ public sealed class ComputersPage : ConsolePage
                 continue;
             }
 
-            var machine = agent["status"]?["machine"] as JsonObject;
+            // a computer that is not connected shows no values (its last ones would mislead)
+            var connected = agent["connected"]?.GetValue<bool>() == true;
+            var machine = connected ? agent["status"]?["machine"] as JsonObject : null;
             var (state, back, fore) = Ui.State(agent);
             var version = Ui.String(agent["version"]);
             var old = data.Available is { } available && version is not null && Iris.Lab.LabUpdates.IsNewer(available, version);
@@ -99,8 +101,8 @@ public sealed class ComputersPage : ConsolePage
                 Ui.String(agent["group"]) is { Length: > 0 } g ? g : "–",
                 null,
                 Ui.Number(machine?["cpu"], "0", " %"),
-                Ui.Temperature(agent),
-                Ui.Number(agent["status"]?["last"]?["lines_per_second"], "0.0"),
+                connected ? Ui.Temperature(agent) : "–",
+                connected ? Ui.Number(agent["status"]?["last"]?["lines_per_second"], "0.0") : "–",
                 version is null ? "–" : old ? version + " ↑" : version
             ], header: false, compact, badge: Ui.Badge(state, back, fore));
             radio.Checked += (_, _) =>
@@ -430,7 +432,7 @@ public sealed class ComputersPage : ConsolePage
 
         panel.Children.Add(Ui.Fact("grafika", string.Join(", ", inventory["gpu"]?.AsArray().Select(S).Where(t => t is not null) ?? [])));
         panel.Children.Add(Ui.Fact("systém", string.Join(" · ", new[] { S(inventory["os"]?["name"]), S(inventory["os"]?["version"]), S(inventory["os"]?["build"]) }.Where(t => t is not null))));
-        foreach (var card in inventory["network"]?.AsArray().OfType<JsonObject>() ?? [])
+        foreach (var card in Iris.Lab.Inventory.RealCards(inventory["network"]?.AsArray()))
         {
             panel.Children.Add(Ui.Fact(Ui.Bool(card["wireless"]) == true ? "wi-fi" : "sieť", string.Join(" · ", new[] { S(card["name"]), Ui.Value(card["mbps"]) is var m && double.IsFinite(m) ? $"{m:0} Mb/s" : null, S(card["mac"]) }.Where(t => t is not null))));
         }

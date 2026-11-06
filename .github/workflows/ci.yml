@@ -38,10 +38,15 @@ jobs:
         run: bash tools/ci/dotnet.sh format Iris.slnx --verify-no-changes
       - name: Tests
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
-      # the same tests on the paths of older processors: 128-bit vectors only, then no vector instructions at all
+      # the same tests on the paths of older processors: AVX without AVX2 and FMA (Sandy and Ivy Bridge), 128-bit
+      # vectors only (SSE – Pentium and Celeron, like NEON on ARM), then no vector instructions at all
       - name: Tests without AVX2
         env:
           DOTNET_EnableAVX2: '0'
+        run: dotnet run --project tests/Iris.Tests -c Release --no-build
+      - name: Tests with SSE only
+        env:
+          DOTNET_EnableAVX: '0'
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       - name: Tests without vector instructions
         env:

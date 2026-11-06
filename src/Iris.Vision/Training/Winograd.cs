@@ -44,7 +44,7 @@ internal static unsafe class Winograd
 
     /// <summary>Whether a layer can use it: a 3 × 3 kernel, padding 1, channels in whole vectors, vector hardware.</summary>
     public static bool Fits(ConvParameters p, int pad) =>
-        Vector256.IsHardwareAccelerated && p.Kh == 3 && p.Kw == 3 && pad == 1 && p.Inputs % 8 == 0 && p.Outputs % 8 == 0;
+        (Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated) && p.Kh == 3 && p.Kw == 3 && pad == 1 && p.Inputs % 8 == 0 && p.Outputs % 8 == 0;
 
     /// <summary>
     /// The 36 transformed kernels U[ξ] = G g Gᵀ as packed right matrices [inputs, outputs], from weights

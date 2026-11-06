@@ -149,7 +149,9 @@ public sealed class OverviewPage : ConsolePage
 
     private Border Tile(JsonObject agent)
     {
-        var status = agent["status"] as JsonObject;
+        // a computer that is not connected has no values now: its last ones would only mislead
+        var connected = agent["connected"]?.GetValue<bool>() == true;
+        var status = connected ? agent["status"] as JsonObject : null;
         var machine = status?["machine"] as JsonObject;
         var cpu = Ui.Value(machine?["cpu"]);
         var own = Ui.Value(machine?["cpu_own"]);
@@ -168,9 +170,16 @@ public sealed class OverviewPage : ConsolePage
         var badge = Ui.Badge(stateText, stateBack, stateFore);
         badge.Margin = new Thickness(0, 5, 0, 7);
         panel.Children.Add(badge);
-        panel.Children.Add(Ui.Text($"procesor {Ui.Number(machine?["cpu"], "0", " %")} · učenie {Ui.Number(machine?["cpu_own"], "0", " %")}", 12, brush: "TextMuted"));
-        panel.Children.Add(Ui.Bar(double.IsFinite(cpu) ? cpu : 0, double.IsFinite(own) ? own : 0));
-        panel.Children.Add(Ui.Text($"{Ui.Temperature(agent)} · {Ui.Number(status?["last"]?["lines_per_second"], "0.0")} riadkov/s", 12, brush: "TextMuted"));
+        if (!connected)
+        {
+            panel.Children.Add(Ui.Text(agent["seen"] is not null ? $"naposledy {Ui.Ago(agent["seen"])}" : "ešte sa nepripojil", 12, brush: "TextMuted"));
+        }
+        else
+        {
+            panel.Children.Add(Ui.Text($"procesor {Ui.Number(machine?["cpu"], "0", " %")} · učenie {Ui.Number(machine?["cpu_own"], "0", " %")}", 12, brush: "TextMuted"));
+            panel.Children.Add(Ui.Bar(double.IsFinite(cpu) ? cpu : 0, double.IsFinite(own) ? own : 0));
+            panel.Children.Add(Ui.Text($"{Ui.Temperature(agent)} · {Ui.Number(status?["last"]?["lines_per_second"], "0.0")} riadkov/s", 12, brush: "TextMuted"));
+        }
         var (strainText, strainWhy, strainBrush, strainLevel) = Ui.Strain(agent);
         if (strainLevel is not null)
         {

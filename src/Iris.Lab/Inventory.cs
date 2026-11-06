@@ -252,9 +252,30 @@ public static partial class Inventory
         cpu["arch"] = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
         cpu["avx2"] = System.Runtime.Intrinsics.X86.Avx2.IsSupported;
         cpu["avx512"] = System.Runtime.Intrinsics.X86.Avx512F.IsSupported;
-        json["network"] = Cards();
+        json["network"] = new JsonArray([.. RealCards(Cards()).Select(c => (JsonNode?)c.DeepClone())]);
         json["time"] = DateTime.Now.ToString("o", CultureInfo.InvariantCulture);
         return json;
+    }
+
+    /// <summary>
+    /// The real network cards of a list: Windows also lists the filters bound to a card (WFP, QoS, LightWeight Filter)
+    /// and its WAN miniports, with the card's own address – those say nothing; one entry per address stays.
+    /// </summary>
+    public static IEnumerable<JsonObject> RealCards(JsonArray? cards)
+    {
+        string[] noise = ["-WFP", "QoS Packet Scheduler", "LightWeight Filter", "WAN Miniport", "Kernel Debug", "Virtual Adapter", "-0000"];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var card in cards?.OfType<JsonObject>() ?? [])
+        {
+            var name = card["name"]?.GetValue<string>() ?? "";
+            var mac = card["mac"]?.GetValue<string>();
+            if (noise.Any(n => name.Contains(n, StringComparison.OrdinalIgnoreCase)) || (mac is not null && !seen.Add(mac)))
+            {
+                continue;
+            }
+
+            yield return card;
+        }
     }
 
     private static JsonArray Cards()

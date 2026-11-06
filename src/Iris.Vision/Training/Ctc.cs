@@ -193,7 +193,7 @@ internal static class Ctc
 
         double sum = 0;
         var k0 = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             var m = Vector256.Create(max);
             for (; k0 <= classes - 8; k0 += 8)
@@ -214,7 +214,7 @@ internal static class Ctc
     private static unsafe void Softmax(float* row, int classes, float normalizer, float* target, float scale)
     {
         var k = 0;
-        if (Vector256.IsHardwareAccelerated)
+        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
         {
             var n = Vector256.Create(normalizer);
             var sc = Vector256.Create(scale);
