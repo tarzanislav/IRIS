@@ -18,6 +18,11 @@ internal sealed class RoundLoad
     private double _total;
     private double _others;
     private int _strain;
+    private int _movingLooks;
+    private double _movingLevel;
+    private int _movingUps;
+    private int _movingBacks;
+    private readonly Dictionary<string, int> _held = new(StringComparer.Ordinal);
 
     public void Add(MachineSample sample, Strain? strain)
     {
@@ -43,6 +48,22 @@ internal sealed class RoundLoad
         }
     }
 
+    /// <summary>One look of the moving load during the round: its level, why it held (or null) and whether it added (+1) or gave back (−1).</summary>
+    public void Moving(double level, string? holding, int change)
+    {
+        lock (_gate)
+        {
+            _movingLooks++;
+            _movingLevel += level;
+            _movingUps += change > 0 ? 1 : 0;
+            _movingBacks += change < 0 ? 1 : 0;
+            if (holding is not null)
+            {
+                _held[holding] = _held.GetValueOrDefault(holding) + 1;
+            }
+        }
+    }
+
     public JsonObject Receipt(RoundWork work, double asked, bool eco, bool moving)
     {
         lock (_gate)
@@ -61,6 +82,10 @@ internal sealed class RoundLoad
         ["duty"] = Math.Round(work.Duty, 2),
         ["eco"] = eco,
         ["moving"] = moving,
+        ["moving_level"] = _movingLooks > 0 ? Math.Round(_movingLevel / _movingLooks, 2) : null,
+        ["moving_ups"] = _movingLooks > 0 ? _movingUps : null,
+        ["moving_backs"] = _movingLooks > 0 ? _movingBacks : null,
+        ["moving_held"] = _held.Count > 0 ? string.Join(',', _held.OrderByDescending(h => h.Value).ThenBy(h => h.Key, StringComparer.Ordinal).Select(h => $"{h.Key}:{h.Value}")) : null,
         ["per_thread"] = work.ThreadSeconds > 0 ? Math.Round(work.PerThread, 3) : null,
         ["cpu_own"] = _count > 0 ? Math.Round(_own / _count, 1) : null,
         ["cpu_total"] = _count > 0 ? Math.Round(_total / _count, 1) : null,
@@ -256,10 +281,15 @@ public sealed class LabAgent
                     _load.Add(_sample, _strain);
                 }
                 _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? _threads, _duty);
-                if (_loadSettings.Moving && _state == "learning" && _sample is { } now
-                    && _control.Look(DateTime.UtcNow, _strain.Level, now.CpuOthers, now.Temperature, _hot, now.IdleSeconds))
+                if (_loadSettings.Moving && _state == "learning" && _sample is { } now)
                 {
-                    ApplyLoad();
+                    var before = _control.Level;
+                    if (_control.Look(DateTime.UtcNow, _strain.Level, now.CpuOthers, now.Temperature, _hot, now.IdleSeconds))
+                    {
+                        ApplyLoad();
+                    }
+
+                    _load.Moving(_control.Level, _control.Holding, Math.Sign(_control.Level - before));
                 }
 
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);

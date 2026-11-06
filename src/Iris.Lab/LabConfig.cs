@@ -11,19 +11,24 @@ namespace Iris.Lab;
 /// </summary>
 public sealed class LabConfig
 {
-    /// <summary>The settings there are, and their ranges: the share of time and of cores, the temperature limit.</summary>
+    /// <summary>
+    /// The settings there are, and their ranges: the share of time and of cores (with the moving load their lower
+    /// bounds), the upper bounds of the moving load, the temperature limit.
+    /// </summary>
     public static readonly IReadOnlyDictionary<string, (double Min, double Max)> Numbers = new Dictionary<string, (double, double)>(StringComparer.Ordinal)
     {
         ["duty"] = (0.05, 1),
         ["cores"] = (0.05, 1),
+        ["duty_max"] = (0.05, 1),
+        ["cores_max"] = (0.05, 1),
         ["hot"] = (50, 100),
     };
 
     /// <summary>
-    /// The switches: the efficiency mode, taking part in the learning, being woken by the server, getting new
-    /// programs by itself.
+    /// The switches: the moving load, the efficiency mode, taking part in the learning, being woken by the server,
+    /// getting new programs by itself.
     /// </summary>
-    public static readonly IReadOnlySet<string> Switches = new HashSet<string>(StringComparer.Ordinal) { "eco", "learn", "wake", "update" };
+    public static readonly IReadOnlySet<string> Switches = new HashSet<string>(StringComparer.Ordinal) { "moving", "eco", "learn", "wake", "update" };
 
     public Dictionary<string, string> Aliases { get; } = new(StringComparer.OrdinalIgnoreCase);
 

@@ -126,6 +126,9 @@ public static class LabTests
                 TestEvery = 1,
                 TestLines = 16,
             };
+            // the second computer with the moving load (set as the console saves it)
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "lab-config.json"), """{ "settings": { "computers": { "PC-02": { "moving": true, "duty_max": 1.0, "cores_max": 0.75, "unknown": 1 } } } }""");
             var hub = new LabHub(options, weights, new OcrLearningState { PlanStart = 0, PlanEnd = 50, PlanRate = 1e-3 });
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var hubTask = hub.RunAsync(stop.Token);
@@ -173,6 +176,8 @@ public static class LabTests
             Assert.True(efficiency["lines"]!.GetValue<double>() > 0 && Math.Abs(computers.Sum(c => c["share"]!.GetValue<double>()) - 100) < 0.1, "their shares make the whole");
             Assert.True(computers.All(c => c["per_thread"]?.GetValue<double>() > 0 && c["hours"]!.GetValue<double>() > 0 && c["used"]!.GetValue<int>() > 0), "speed per thread, hours, rounds used");
             Assert.True(computers.All(c => c["threads"]?.GetValue<double>() >= 1), "with the load they had");
+            Assert.True(computers.Single(c => c["key"]!.GetValue<string>() == "PC-02")["moving"]?["level"] is not null, "the moving load is measured where it runs");
+            Assert.True(computers.Single(c => c["key"]!.GetValue<string>() == "PC-01")["moving"] is null, "and not where it does not");
             var (table, rows) = await console.EfficiencyTableAsync(1, default);
             var text = System.Text.Encoding.UTF8.GetString(table).TrimStart('\uFEFF').Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(rows + 1, text.Length, "a heading and a row per computer and round");
@@ -853,6 +858,39 @@ public static class LabTests
         {
             Directory.Delete(folder, true);
         }
+    }
+
+    [Test]
+    public static void TheEfficiencyComparesTheMovingLoadWithTheFixedOne()
+    {
+        System.Text.Json.Nodes.JsonObject Line(int round, bool moving, double lines, double threads, double duty, string? held = null) => new()
+        {
+            ["time"] = "2026-11-06T20:00:00",
+            ["round"] = round,
+            ["computer"] = "PC-01",
+            ["group"] = "A",
+            ["lines"] = lines,
+            ["seconds"] = 600.0,
+            ["threads"] = threads,
+            ["duty"] = duty,
+            ["moving"] = moving,
+            ["moving_level"] = moving ? 0.5 : null,
+            ["moving_backs"] = moving ? 2.0 : null,
+            ["moving_held"] = held,
+            ["cpu_own"] = moving ? 40.0 : 25.0,
+            ["strain"] = 0.0,
+        };
+        var summary = EfficiencyLog.Summary([Line(1, false, 30_000, 10, 0.5), Line(2, true, 54_000, 12, 0.75, "warm:3,strain:1"), Line(3, true, 54_000, 12, 0.75, "warm:1")]);
+        var m = summary["computers"]![0]!["moving"]!;
+        Assert.Equal(2, m["rounds"]!.GetValue<int>(), "rounds with the moving load");
+        Assert.Equal(1, m["fixed_rounds"]!.GetValue<int>(), "rounds with the fixed load");
+        Assert.Equal(90.0, m["per_second"]!.GetValue<double>(), "lines per second of a round, moving");
+        Assert.Equal(50.0, m["per_second_fixed"]!.GetValue<double>(), "and fixed");
+        Assert.Equal(10.0, m["per_thread"]!.GetValue<double>(), "per working thread: 108 000 lines / (1200 s · 0.75 · 12)");
+        Assert.Equal("warm", m["held"]![0]!["code"]!.GetValue<string>(), "what held it most");
+        Assert.Equal(4, m["held"]![0]!["looks"]!.GetValue<int>(), "in how many looks");
+        Assert.True(summary["moving"] is not null && summary["groups"]![0]!["moving"] is not null, "for all and for the group too");
+        Assert.True(EfficiencyLog.Summary([Line(1, false, 30_000, 10, 0.5)])["moving"] is null, "nothing where it never ran");
     }
 
     [Test]

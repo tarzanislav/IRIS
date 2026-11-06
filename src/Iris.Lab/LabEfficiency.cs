@@ -29,7 +29,8 @@ public sealed class EfficiencyLog
     public static IReadOnlyList<string> Columns { get; } =
     [
         "time", "round", "computer", "name", "group", "model", "cpu", "logical", "lines", "seconds", "asked", "stopped", "used",
-        "threads", "duty", "eco", "moving", "per_thread", "cpu_own", "cpu_total", "cpu_others", "strain", "reasons", "loss",
+        "threads", "duty", "eco", "moving", "moving_level", "moving_ups", "moving_backs", "moving_held",
+        "per_thread", "cpu_own", "cpu_total", "cpu_others", "strain", "reasons", "loss",
     ];
 
     /// <summary>Writes the line of one computer for one round (the time is added); once a day the old lines go.</summary>
@@ -81,7 +82,8 @@ public sealed class EfficiencyLog
     /// <summary>
     /// What every computer and every group did in these lines: lines and their share of all, hours of learning,
     /// rounds (used, stopped early), lines per second and thread, the load it had, how often it struggled or was
-    /// busy and why. The busiest first.
+    /// busy and why – and, where the moving load ran, how it did against the fixed load of the same computers. The
+    /// busiest first.
     /// </summary>
     public static JsonObject Summary(IReadOnlyList<JsonObject> lines, Func<string, string?>? alias = null)
     {
@@ -117,6 +119,7 @@ public sealed class EfficiencyLog
                 ["struggled"] = list.Count(l => Number(l, "strain") >= 2),
                 ["busy"] = list.Count(l => Number(l, "strain") is >= 1 and < 2),
                 ["reasons"] = new JsonArray([.. reasons]),
+                ["moving"] = Moving(list),
             };
         }
 
@@ -134,6 +137,46 @@ public sealed class EfficiencyLog
             ["until"] = lines.Count > 0 ? lines[^1]["time"]?.GetValue<string>() : null,
             ["computers"] = new JsonArray([.. computers.Select(c => (JsonNode?)c)]),
             ["groups"] = new JsonArray([.. groups.Select(c => (JsonNode?)c)]),
+            ["moving"] = Moving([.. lines]),
+        };
+    }
+
+    // the moving load of these lines against the fixed load: rounds, where it got (0 = the set load, 1 = the most),
+    // the threads and the share of time it used, the speed (lines per second of the round – what a night learns – and
+    // per working thread), the processor it took, how often it gave back and why it held; null when it never ran
+    private static JsonObject? Moving(List<JsonObject> lines)
+    {
+        var moving = lines.Where(l => l["moving"] is JsonValue v && v.TryGetValue<bool>(out var b) && b).ToList();
+        if (moving.Count == 0)
+        {
+            return null;
+        }
+
+        var steady = lines.Except(moving).ToList();
+        static double? Speed(List<JsonObject> part) => part.Sum(l => Number(l, "seconds")) is > 0 and var s ? Math.Round(part.Sum(l => Number(l, "lines")) / s, 2) : null;
+        static double? PerThread(List<JsonObject> part) =>
+            part.Sum(l => Number(l, "seconds") * Math.Max(0.05, Number(l, "duty")) * Math.Max(1, Number(l, "threads"))) is > 0 and var t ? Math.Round(part.Sum(l => Number(l, "lines")) / t, 3) : null;
+        var held = moving.SelectMany(l => (l["moving_held"]?.GetValue<string>() ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+            .Select(h => h.Split(':')).Where(h => h.Length == 2 && int.TryParse(h[1], CultureInfo.InvariantCulture, out _))
+            .GroupBy(h => h[0], StringComparer.Ordinal).Select(g => (Code: g.Key, Looks: g.Sum(h => int.Parse(h[1], CultureInfo.InvariantCulture))))
+            .OrderByDescending(h => h.Looks).Take(3).Select(h => (JsonNode?)new JsonObject { ["code"] = h.Code, ["looks"] = h.Looks });
+        return new JsonObject
+        {
+            ["rounds"] = moving.Count,
+            ["fixed_rounds"] = steady.Count,
+            ["level"] = Mean(moving, "moving_level", 2),
+            ["threads"] = Mean(moving, "threads", 1),
+            ["duty"] = Mean(moving, "duty", 2),
+            ["per_second"] = Speed(moving),
+            ["per_second_fixed"] = Speed(steady),
+            ["per_thread"] = PerThread(moving),
+            ["per_thread_fixed"] = PerThread(steady),
+            ["cpu_own"] = Mean(moving, "cpu_own", 1),
+            ["cpu_own_fixed"] = Mean(steady, "cpu_own", 1),
+            ["backs"] = Math.Round(moving.Average(l => Number(l, "moving_backs")), 1),
+            ["struggled"] = moving.Count(l => Number(l, "strain") >= 2),
+            ["struggled_fixed"] = steady.Count(l => Number(l, "strain") >= 2),
+            ["held"] = new JsonArray([.. held]),
         };
     }
 

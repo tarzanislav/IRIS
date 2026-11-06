@@ -98,7 +98,96 @@ public sealed class EfficiencyPage : ConsolePage
 
         _root.Children.Add(Ui.Card(Table("Skupiny", _summary["groups"]?.AsArray(), groups: true)));
         _root.Children.Add(Ui.Card(Table("Počítače", _summary["computers"]?.AsArray(), groups: false)));
+        _root.Children.Add(Ui.Card(Moving(_summary)));
     }
+
+    // the moving load against the fixed one: where it got, what it used, how much faster the nights learned, what it cost
+    private static StackPanel Moving(JsonObject summary)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Heading("Pohyblivá záťaž", "oproti pevnej záťaži tých istých počítačov v tom istom období"));
+        if (summary["moving"] is not JsonObject all)
+        {
+            panel.Children.Add(Ui.Text("V tomto období pohyblivá záťaž nebežala – zapína sa v Nastaveniach (pre všetky počítače, skupinu alebo jeden).", 13, brush: "TextMuted"));
+            return panel;
+        }
+
+        var gain = Gain(all);
+        panel.Children.Add(Ui.Text($"Spolu: {Ui.Number(all["rounds"])} kôl s pohyblivou záťažou, {Ui.Number(all["fixed_rounds"])} s pevnou · " +
+                                   $"riadky za sekundu kola {Ui.Number(all["per_second"], "0.0")} oproti {Ui.Number(all["per_second_fixed"], "0.0")}" +
+                                   (gain is { } g ? $" ({g:+0;−0} %)" : "") + $" · priemerná úroveň {Ui.Percent(Ui.Value(all["level"]))} cesty k najvyššej", 13, bold: true));
+        var note = Ui.Text("Riadky/s kola = čo sa za noc naučí (aj s oddychom). Na vlákno = rýchlosť jedného pracujúceho vlákna. Úroveň 0 % = nastavená záťaž, 100 % = najvyššia. " +
+                           "Uberania = koľkokrát za kolo záťaž ubrala; prečo držala = čo ju brzdilo (námaha, iné programy, človek, teplo).", 12, brush: "TextMuted");
+        note.Margin = new Thickness(0, 4, 0, 8);
+        panel.Children.Add(note);
+        string[] headers = ["Počítač", "Kolá", "Úroveň", "Vlákna · čas", "Riadky/s", "Pevná", "Zisk", "Na vlákno", "Učenie % CPU", "Trápil sa", "Uberania na kolo", "Prečo držala"];
+        var grid = new Grid();
+        foreach (var _ in headers)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        }
+
+        grid.RowDefinitions.Add(new RowDefinition());
+        for (var c = 0; c < headers.Length; c++)
+        {
+            Place(grid, Ui.Caption(headers[c]), 0, c);
+        }
+
+        var row = 1;
+        foreach (var item in summary["computers"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            if (item["moving"] is not JsonObject m)
+            {
+                continue;
+            }
+
+            grid.RowDefinitions.Add(new RowDefinition());
+            var itemGain = Gain(m);
+            var held = string.Join(", ", m["held"]?.AsArray().OfType<JsonObject>().Select(h => $"{Held(Ui.String(h["code"]))} {Ui.Number(h["looks"])}×") ?? []);
+            var cells = new FrameworkElement[]
+            {
+                Ui.Text(Ui.String(item["name"]) ?? Ui.String(item["key"]) ?? "?", 13.5, bold: true),
+                Ui.Text($"{Ui.Number(m["rounds"])} / {Ui.Number(m["fixed_rounds"])}", 13),
+                Ui.Text(Ui.Percent(Ui.Value(m["level"])), 13),
+                Ui.Text($"{Ui.Number(m["threads"], "0.#")} · {Ui.Percent(Ui.Value(m["duty"]))}", 13),
+                Ui.Text(Ui.Number(m["per_second"], "0.0"), 13, bold: true),
+                Ui.Text(Ui.Number(m["per_second_fixed"], "0.0"), 13, brush: "TextMuted"),
+                Ui.Text(itemGain is { } ig ? $"{ig:+0;−0} %" : "–", 13, bold: true, brush: itemGain is > 0 ? "Text" : "Warn"),
+                Ui.Text($"{Ui.Number(m["per_thread"], "0.00")} / {Ui.Number(m["per_thread_fixed"], "0.00")}", 13),
+                Ui.Text($"{Ui.Number(m["cpu_own"], "0", " %")} / {Ui.Number(m["cpu_own_fixed"], "0", " %")}", 13),
+                Ui.Text($"{Ui.Number(m["struggled"])} / {Ui.Number(m["struggled_fixed"])}", 13, brush: Ui.Value(m["struggled"]) > 0 ? "Danger" : "Text"),
+                Ui.Text(Ui.Number(m["backs"], "0.0"), 13),
+                Ui.Text(held.Length == 0 ? "–" : held, 12, brush: "TextMuted"),
+            };
+            for (var c = 0; c < cells.Length; c++)
+            {
+                Place(grid, cells[c], row, c);
+            }
+
+            row++;
+        }
+
+        panel.Children.Add(new ScrollViewer { Content = grid, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        var pairs = Ui.Text("Pri dvojiciach čísel: pohyblivá / pevná záťaž.", 11.5, brush: "TextMuted");
+        pairs.Margin = new Thickness(0, 6, 0, 0);
+        panel.Children.Add(pairs);
+        return panel;
+    }
+
+    // how much more a round learned with the moving load than with the fixed one (%), when both ran
+    private static double? Gain(JsonObject moving) =>
+        Ui.Value(moving["per_second"]) is var a && Ui.Value(moving["per_second_fixed"]) is var b && double.IsFinite(a) && double.IsFinite(b) && b > 0
+            ? Math.Round(100 * (a / b - 1))
+            : null;
+
+    private static string Held(string? code) => code switch
+    {
+        "strain" => "námaha",
+        "others" => "iné programy",
+        "user" => "človek pri PC",
+        "warm" => "teplo",
+        _ => code ?? "?",
+    };
 
     private string Period()
     {
