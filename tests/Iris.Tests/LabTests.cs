@@ -887,6 +887,12 @@ public static class LabTests
         control.Reset();
         Assert.Equal((0.5, 10), control.Load(settings, 20, 14), "the set load is the floor");
         Assert.Equal((0.5, 12), control.Load(settings with { Cores = 0.6, CoresMax = 0.6 }, 20, 8), "a floor above the physical cores stays");
+        for (var m = 60; m < 90; m += 2)
+        {
+            Calm(m);
+        }
+
+        Assert.Equal((1.0, 3), control.Load(settings, 4, 4), "cores without a second thread: one left for drawing the lines");
         var low = LoadSettings.From(new System.Text.Json.Nodes.JsonObject { ["duty"] = 0.6, ["duty_max"] = 0.3 });
         Assert.Equal(0.6, low.DutyMax, "the most is never below the set load");
     }

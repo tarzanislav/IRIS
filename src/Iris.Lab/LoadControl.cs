@@ -92,8 +92,10 @@ public sealed class LoadControl
     }
 
     /// <summary>
-    /// The share of time and the threads at the present level: both go from the set value to the most allowed together;
-    /// beyond the set threads it stays within the physical cores (two threads of one core add little and warm it).
+    /// The share of time and the threads at the present level: both go from the set value to the most allowed together.
+    /// Beyond the set threads it stays within the physical cores – two threads of one core add little and warm it –
+    /// and where the cores have no second thread, one core is left to the drawing of lines and the system (a learning
+    /// thread pushed off its core holds up all the others).
     /// </summary>
     public (double Duty, int Threads) Load(LoadSettings settings, int logical, int? physical)
     {
@@ -103,7 +105,8 @@ public sealed class LoadControl
         var threads = Threads(cores, logical);
         if (physical is { } p && p > 0)
         {
-            threads = Math.Min(threads, Math.Max(floor, p));
+            var cap = logical > p ? p : Math.Max(1, p - 1);
+            threads = Math.Min(threads, Math.Max(floor, cap));
         }
 
         return (Math.Clamp(duty, 0.05, 1), Math.Max(floor, threads));
