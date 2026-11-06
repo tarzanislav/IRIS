@@ -415,7 +415,17 @@ public static class LabTests
             using var main = await Connect(Path.Combine(folder, "console.key"));
             using var first = await Connect(school);
             using var second = await Connect(home);
-            var consoles = (await main.SnapshotAsync(stop.Token))["consoles"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+            // the hub registers a console a moment after its hello is answered: ask again for a little while
+            List<string> consoles = [];
+            for (var tries = 0; tries < 40 && consoles.Count < 3; tries++)
+            {
+                consoles = [.. (await main.SnapshotAsync(stop.Token))["consoles"]!.AsArray().Select(c => c!.GetValue<string>())];
+                if (consoles.Count < 3)
+                {
+                    await Task.Delay(50, stop.Token);
+                }
+            }
+
             Assert.Sequence(["", "notebook-a", "notebook-b"], consoles, "the hub shows which consoles are connected (\"\" = the main key)");
 
             // a key under another console's name does not fit
@@ -803,6 +813,42 @@ public static class LabTests
 
         Assert.Equal(0, full.Level, "a new load has no measure yet, so no struggle");
         Assert.Equal(2, slow.ToJson()["level"]!.GetValue<int>(), "for the console");
+    }
+
+    [Test]
+    public static void TheMovingLoadAddsWhileCalmAndGivesBackAtTrouble()
+    {
+        var control = new LoadControl();
+        var t = new DateTime(2026, 11, 6, 18, 0, 0, DateTimeKind.Utc);
+        bool Calm(double minutes) => control.Look(t.AddMinutes(minutes), 0, 3, 60, 90, null);
+        Assert.True(!Calm(0), "not at once");
+        Assert.True(!Calm(1.5), "calm for two minutes first");
+        Assert.True(Calm(2) && control.Level == LoadControl.Up, "an eighth of the way after two calm minutes");
+        Assert.True(!Calm(3), "two minutes between additions");
+        Assert.True(Calm(4) && control.Level == 2 * LoadControl.Up, "another eighth");
+        Assert.True(control.Look(t.AddMinutes(4.5), 1, 3, 60, 90, null) && control.Level == LoadControl.Up && control.Holding == "strain", "strain gives back half");
+        Assert.True(!control.Look(t.AddMinutes(4.6), 1, 3, 60, 90, null), "at most every half minute");
+        Assert.True(!Calm(7) && !Calm(9), "five minutes of waiting after giving back");
+        Assert.True(Calm(9.5) && control.Level == 2 * LoadControl.Up && control.Holding is null, "then it adds again");
+        Assert.True(control.Look(t.AddMinutes(10), 0, 3, 83, 90, null) && control.Holding == "warm", "near the limit of temperature it gives back");
+        Assert.True(control.Look(t.AddMinutes(11), 0, 20, 60, 90, null) && control.Holding == "others", "other programs");
+        control.Look(t.AddMinutes(12), 0, 3, 60, 90, 30);
+        Assert.True(control.Holding == "user" && control.Level == 0, "someone at the keyboard: back to the set load");
+        for (var m = 20; m < 60; m += 2)
+        {
+            Calm(m);
+        }
+
+        Assert.Equal(1.0, control.Level, "at most the whole way");
+
+        var settings = LoadSettings.From(new System.Text.Json.Nodes.JsonObject { ["duty"] = 0.5, ["cores"] = 0.5, ["moving"] = true, ["duty_max"] = 1.0, ["cores_max"] = 1.0 });
+        Assert.Equal((1.0, 14), control.Load(settings, 20, 14), "the most: all the time, but not past the physical cores");
+        Assert.Equal((1.0, 20), control.Load(settings, 20, null), "unknown cores: the share asked for");
+        control.Reset();
+        Assert.Equal((0.5, 10), control.Load(settings, 20, 14), "the set load is the floor");
+        Assert.Equal((0.5, 12), control.Load(settings with { Cores = 0.6, CoresMax = 0.6 }, 20, 8), "a floor above the physical cores stays");
+        var low = LoadSettings.From(new System.Text.Json.Nodes.JsonObject { ["duty"] = 0.6, ["duty_max"] = 0.3 });
+        Assert.Equal(0.6, low.DutyMax, "the most is never below the set load");
     }
 
     [Test]

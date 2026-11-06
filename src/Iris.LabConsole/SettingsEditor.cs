@@ -16,11 +16,14 @@ public sealed class SettingsEditor : StackPanel
     [
         ("duty", "Podiel času", "koľko času učenie pracuje (zvyšok odpočíva)", 0.05, 1, 0.05, "%"),
         ("cores", "Podiel jadier", "koľko jadier procesora učenie použije", 0.05, 1, 0.05, "%"),
+        ("duty_max", "Najviac času", "pohyblivá záťaž: kam až smie podiel času stúpnuť", 0.05, 1, 0.05, "%"),
+        ("cores_max", "Najviac jadier", "pohyblivá záťaž: kam až smie podiel jadier stúpnuť (nad fyzické jadrá nejde)", 0.05, 1, 0.05, "%"),
         ("hot", "Hranica teploty", "nad ňou učenie čaká, kým sa počítač neochladí o 5 °C", 50, 100, 1, "°C"),
     ];
 
     private static readonly (string Key, string Text, string Note)[] Switches =
     [
+        ("moving", "Pohyblivá záťaž", "počítač sám pridáva od nastavenej záťaže po najviac, kým je pokojný; uberá, keď sa trápi, je teplý alebo ho niekto používa"),
         ("eco", "Úsporný režim Windows", "úsporné jadrá a frekvencia – menej tepla a hluku"),
         ("learn", "Učí sa", "vypnuté: počítač sa do kôl nezapája"),
         ("wake", "Budiť na začiatku učenia", "Wake-on-LAN o začiatku času učenia, potom ho vypne"),
@@ -48,7 +51,7 @@ public sealed class SettingsEditor : StackPanel
 
         foreach (var (key, text, note) in Switches)
         {
-            var on = Ui.Bool(own[key]) ?? Ui.Bool(inherited[key]) ?? true;
+            var on = Ui.Bool(own[key]) ?? Ui.Bool(inherited[key]) ?? key != "moving";
             var toggle = Ui.Switch(on ? "áno" : "nie", on);
             toggle.Checked += (_, _) => toggle.Content = "áno";
             toggle.Unchecked += (_, _) => toggle.Content = "nie";
@@ -138,7 +141,7 @@ public sealed class SettingsEditor : StackPanel
 
     private static string Describe(string key, JsonNode value) => key switch
     {
-        "duty" or "cores" => Show(Ui.Value(value), "%"),
+        "duty" or "cores" or "duty_max" or "cores_max" => Show(Ui.Value(value), "%"),
         "hot" => Show(Ui.Value(value), "°C"),
         _ => Ui.Bool(value) == true ? "áno" : "nie",
     };

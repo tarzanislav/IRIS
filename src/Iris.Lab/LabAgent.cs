@@ -43,23 +43,25 @@ internal sealed class RoundLoad
         }
     }
 
-    public JsonObject Receipt(RoundWork work, double asked, int threads, double duty, bool eco)
+    public JsonObject Receipt(RoundWork work, double asked, bool eco, bool moving)
     {
         lock (_gate)
         {
-            return ReceiptLocked(work, asked, threads, duty, eco);
+            return ReceiptLocked(work, asked, eco, moving);
         }
     }
 
-    private JsonObject ReceiptLocked(RoundWork work, double asked, int threads, double duty, bool eco) => new()
+    // the threads and the share of time as they really were (the moving load changes them during a round)
+    private JsonObject ReceiptLocked(RoundWork work, double asked, bool eco, bool moving) => new()
     {
         ["logical"] = Environment.ProcessorCount,
         ["asked"] = Math.Round(asked, 1),
         ["stopped"] = work.Stopped,
-        ["threads"] = threads,
-        ["duty"] = Math.Round(duty, 2),
+        ["threads"] = Math.Round(work.Threads, 1),
+        ["duty"] = Math.Round(work.Duty, 2),
         ["eco"] = eco,
-        ["per_thread"] = work.Seconds > 0 ? Math.Round(work.Lines / (work.Seconds * Math.Max(0.05, duty) * Math.Max(1, threads)), 3) : null,
+        ["moving"] = moving,
+        ["per_thread"] = work.ThreadSeconds > 0 ? Math.Round(work.PerThread, 3) : null,
         ["cpu_own"] = _count > 0 ? Math.Round(_own / _count, 1) : null,
         ["cpu_total"] = _count > 0 ? Math.Round(_total / _count, 1) : null,
         ["cpu_others"] = _count > 0 ? Math.Round(_others / _count, 1) : null,
@@ -156,8 +158,11 @@ public sealed class LabAgent
     private LabLearner? _learner;
     private CancellationTokenSource? _learning;
     private Task _learningTask = Task.CompletedTask;
+    private LoadSettings _loadSettings = new(0.5, 0.5);
+    private readonly LoadControl _control = new();
+    private readonly int? _physicalCores = Inventory.PhysicalCores();
     private double _duty = 0.5;
-    private double _cores = 0.5;
+    private int _threads = LoadControl.Threads(0.5, Environment.ProcessorCount);
     private int _batch = 32;
     private bool _eco = true;
     private bool? _ecoSet;
@@ -250,7 +255,13 @@ public sealed class LabAgent
                 {
                     _load.Add(_sample, _strain);
                 }
-                _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? Threads(), _duty);
+                _strain = _judge.Judge(_sample, _signals, _ecoSet ?? _eco, _state == "learning", _learner?.Threads ?? _threads, _duty);
+                if (_loadSettings.Moving && _state == "learning" && _sample is { } now
+                    && _control.Look(DateTime.UtcNow, _strain.Level, now.CpuOthers, now.Temperature, _hot, now.IdleSeconds))
+                {
+                    ApplyLoad();
+                }
+
                 await channel.SendAsync(new LabMessage(MessageKind.Status, Status()), session.Token);
                 await Task.Delay(TimeSpan.FromSeconds(_options.StatusSeconds), session.Token);
             }
@@ -320,6 +331,7 @@ public sealed class LabAgent
             },
             ["threads"] = _learner?.Threads,
             ["duty"] = _duty,
+            ["moving"] = _loadSettings.Moving ? _control.ToJson() : null,
             ["eco"] = _ecoSet,
             ["too_hot"] = _tooHot,
             ["mac"] = _mac,
@@ -342,8 +354,13 @@ public sealed class LabAgent
 
     private void ApplySettings(JsonObject settings)
     {
-        _duty = Math.Clamp(settings["duty"]?.GetValue<double>() ?? _duty, 0.05, 1);
-        _cores = Math.Clamp(settings["cores"]?.GetValue<double>() ?? _cores, 0.05, 1);
+        var load = LoadSettings.From(settings, _loadSettings);
+        if (!load.Moving)
+        {
+            _control.Reset();
+        }
+
+        _loadSettings = load;
         _batch = Math.Clamp(settings["batch"]?.GetValue<int>() ?? _batch, 1, 256);
         _eco = settings["eco"]?.GetValue<bool>() ?? _eco;
         _hot = Math.Clamp(settings["hot"]?.GetValue<double>() ?? _hot, 50, 100);
@@ -353,17 +370,24 @@ public sealed class LabAgent
             _sentences = sentences.ToDictionary(p => p.Key, p => p.Value!.AsArray().Select(s => s!.GetValue<string>()).ToArray(), StringComparer.Ordinal);
         }
 
+        ApplyLoad();
+    }
+
+    // the share of time and the threads now: the set load, or with the moving load where it has got to
+    private void ApplyLoad()
+    {
+        (_duty, _threads) = _loadSettings.Moving
+            ? _control.Load(_loadSettings, Environment.ProcessorCount, _physicalCores)
+            : (_loadSettings.Duty, LoadControl.Threads(_loadSettings.Cores, Environment.ProcessorCount));
         if (_learner is { } learner)
         {
             learner.Duty = _duty;
             learner.BatchSize = _batch;
-            learner.Threads = Threads();
+            learner.Threads = _threads;
         }
     }
 
     private static double? Round(double? value) => value is { } v ? Math.Round(v, 1) : null;
-
-    private int Threads() => Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * _cores));
 
     // the efficiency mode as the hub wants it (null in the status: the system has no such mode)
     private void ApplyEfficiency() => _ecoSet = Machine.SetEfficiency(_eco) ? _eco : null;
@@ -396,7 +420,7 @@ public sealed class LabAgent
 
             _learner.Duty = _duty;
             _learner.BatchSize = _batch;
-            _learner.Threads = Threads();
+            _learner.Threads = _threads;
         }
 
         var learner = _learner;
@@ -416,9 +440,9 @@ public sealed class LabAgent
             Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
             var work = learner.Learn(TimeSpan.FromSeconds(seconds), rate, MayGoOn, learning.Token);
             _last = work;
-            if (!work.Stopped && work.Seconds > 0)
+            if (!work.Stopped && work.ThreadSeconds > 0)
             {
-                _judge.Round(work.Lines / (work.Seconds * Math.Max(0.05, _duty) * Math.Max(1, learner.Threads)), _ecoSet ?? _eco, learner.Threads, _duty);
+                _judge.Round(work.PerThread, _ecoSet ?? _eco, (int)Math.Round(work.Threads), Math.Round(work.Duty, 2));
             }
             _options.Log?.Invoke($"round {round}: {work.Steps} steps, {work.Lines} lines, loss {work.Loss:F3}, {work.Seconds:F0} s");
             var (layout, data) = TensorPack.Pack(TensorPack.Difference(learner.Weights, start));
@@ -430,7 +454,7 @@ public sealed class LabAgent
                 ["seconds"] = Math.Round(work.Seconds, 1),
                 ["loss"] = double.IsFinite(work.Loss) ? work.Loss : null,
                 ["layout"] = layout,
-                ["receipt"] = _load.Receipt(work, seconds, learner.Threads, _duty, _ecoSet ?? _eco),
+                ["receipt"] = _load.Receipt(work, seconds, _ecoSet ?? _eco, _loadSettings.Moving),
             };
             _state = "idle";
             try

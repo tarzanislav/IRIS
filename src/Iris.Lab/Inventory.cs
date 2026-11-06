@@ -357,6 +357,53 @@ public static partial class Inventory
         return buffer.AsSpan(8, length).ToArray();
     }
 
+    /// <summary>
+    /// The physical cores of the processor (two threads of one core count once), or null where the system does not
+    /// tell: Windows by the processor relations, Linux by the core ids in /proc/cpuinfo.
+    /// </summary>
+    public static int? PhysicalCores()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return Cores() is { } cores ? cores.Performance + cores.Efficient : null;
+            }
+
+            if (OperatingSystem.IsLinux() && File.Exists("/proc/cpuinfo"))
+            {
+                var cores = new HashSet<string>(StringComparer.Ordinal);
+                var package = "0";
+                foreach (var line in File.ReadLines("/proc/cpuinfo"))
+                {
+                    var colon = line.IndexOf(':');
+                    if (colon < 0)
+                    {
+                        continue;
+                    }
+
+                    var key = line[..colon].Trim();
+                    var value = line[(colon + 1)..].Trim();
+                    if (key == "physical id")
+                    {
+                        package = value;
+                    }
+                    else if (key == "core id")
+                    {
+                        cores.Add(package + "/" + value);
+                    }
+                }
+
+                return cores.Count > 0 ? cores.Count : null;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or EntryPointNotFoundException or DllNotFoundException)
+        {
+        }
+
+        return null;
+    }
+
     // the cores by their efficiency class (hybrid processors: the highest class are the performance cores)
     private static unsafe (int Performance, int Efficient)? Cores()
     {

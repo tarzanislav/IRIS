@@ -99,6 +99,20 @@ Stránka **Efektivita**: podiel každého počítača a skupiny na učení za 1�
 vlákno, záťaž, námaha, ustúpenie). Server ukladá po každom kole jeden riadok na počítač do `efficiency.jsonl`
 (60 dní). **Uložiť denník efektivity…** uloží tabuľku pre Excel – mená z konzoly, typ hardvéru a čísla, bez adries.
 
+### Pohyblivá záťaž (od 0.5.0)
+V **Nastaveniach** (pre všetky počítače, skupinu alebo jeden počítač) prepínač **Pohyblivá záťaž** a dva posuvníky
+**Najviac času** a **Najviac jadier**. Nastavený podiel času a jadier je potom spodná hranica a počítač sám hľadá,
+koľko vládze:
+- kým je **pokojný** (nenamáha sa, iné programy berú menej ako 15 % procesora, nikto pri ňom nepracuje a je aspoň
+  8 °C pod hranicou teploty), **pridá každé 2 minúty osminu** cesty k najvyššej záťaži;
+- pri **prvom znaku problému** (námaha, iné programy, človek pri počítači, teplo) **uberie polovicu** toho, čo pridal
+  (najviac raz za pol minúty) a 5 minút nepridáva.
+
+Čas aj jadrá rastú spolu. Vlákien nad nastavenú záťaž nebude viac, ako má procesor fyzických jadier (dve vlákna
+jedného jadra pridajú málo a viac ho zohrejú). V konzole na stránke počítača je vidno, kde pohyblivá záťaž práve
+je a prečo drží. Denník efektivity zapisuje skutočne použité vlákna a podiel času (priemer za kolo). Testovací
+režim pohyblivú záťaž vypína – meria pri pevnej záťaži.
+
 ### Testovací režim (od 0.4.4)
 Stránka **Testovací režim** v konzole: zvolené počítače (všetky pripojené, skupina, alebo vybrané) sa **začnú učiť
 hneď**, aj mimo času učenia, so záťažou zvolenou v konzole – predvoľby Jemne 25 %, Bežne 50 %, Naplno 100 %, alebo

@@ -29,7 +29,7 @@ public sealed class EfficiencyLog
     public static IReadOnlyList<string> Columns { get; } =
     [
         "time", "round", "computer", "name", "group", "model", "cpu", "logical", "lines", "seconds", "asked", "stopped", "used",
-        "threads", "duty", "eco", "per_thread", "cpu_own", "cpu_total", "cpu_others", "strain", "reasons", "loss",
+        "threads", "duty", "eco", "moving", "per_thread", "cpu_own", "cpu_total", "cpu_others", "strain", "reasons", "loss",
     ];
 
     /// <summary>Writes the line of one computer for one round (the time is added); once a day the old lines go.</summary>

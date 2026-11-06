@@ -364,6 +364,21 @@ public sealed class ComputersPage : ConsolePage
         }
 
         _live.Children.Add(badges);
+        if (status?["moving"] is JsonObject moving)
+        {
+            var holding = Ui.String(moving["holding"]) switch
+            {
+                "strain" => "drží: počítač sa namáha",
+                "others" => "drží: pracujú iné programy",
+                "user" => "drží: niekto pri ňom pracuje",
+                "warm" => "drží: blíži sa hranica teploty",
+                _ => "pridáva, kým je pokojný",
+            };
+            var line = Ui.Text($"pohyblivá záťaž: {Ui.Percent(Ui.Value(moving["level"]))} cesty od nastavenej k najvyššej · teraz {Ui.Percent(Ui.Value(status["duty"]))} času na {Ui.Number(status["threads"])} vláknach · {holding}", 13, brush: "Text");
+            line.Margin = new Thickness(0, 0, 0, 6);
+            _live.Children.Add(line);
+        }
+
         var strain = Ui.Strain(agent);
         if (strain.Level is not null)
         {

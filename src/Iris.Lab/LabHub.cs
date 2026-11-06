@@ -843,6 +843,7 @@ public sealed class LabHub
             ["threads"] = Of("threads"),
             ["duty"] = Of("duty"),
             ["eco"] = receipt?["eco"]?.GetValue<bool>(),
+            ["moving"] = receipt?["moving"]?.GetValue<bool>(),
             ["per_thread"] = Of("per_thread"),
             ["cpu_own"] = Of("cpu_own"),
             ["cpu_total"] = Of("cpu_total"),
@@ -1481,6 +1482,9 @@ public sealed class LabHub
     {
         ["duty"] = _options.Duty,
         ["cores"] = _options.CoreShare,
+        ["moving"] = false,
+        ["duty_max"] = 1.0,
+        ["cores_max"] = 1.0,
         ["eco"] = _options.Eco,
         ["hot"] = 90.0,
         ["learn"] = true,
@@ -1503,6 +1507,7 @@ public sealed class LabHub
             // the test mode: the load the console chose, for the time of the test
             settings["duty"] = test.Duty;
             settings["cores"] = test.Cores;
+            settings["moving"] = false;
             settings["eco"] = test.Eco;
             settings["learn"] = true;
         }
