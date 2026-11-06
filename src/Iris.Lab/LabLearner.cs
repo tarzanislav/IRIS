@@ -94,9 +94,9 @@ public sealed class LabLearner : IDisposable
                 var batch = new LineBatch(Enumerable.Range(0, BatchSize).Select(_ => _lines.Take(cancel)));
                 _gradients.Clear();
                 losses += _network.Learn(batch, _gradients);
-                AdamW.Clip(_gradients, 5);
+                AdamW.Clip(_gradients, 5, Threads);
                 var warmUp = Math.Min(1.0, (_steps + 1) / 100.0);
-                _adam.Step(_weights, _gradients, (float)(rate * warmUp));
+                _adam.Step(_weights, _gradients, (float)(rate * warmUp), Threads);
                 _steps++;
                 steps++;
                 lines += batch.Count;

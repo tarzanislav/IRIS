@@ -115,7 +115,7 @@ internal sealed unsafe class LstmLayer : IDisposable
 
             fixed (float* w = p.HiddenWeight)
             {
-                packed[d] = Gemm.PackedB.Create(new ColumnsB(w, h), g4, h); // B[k, n] = W_hh[n, k]
+                packed[d] = Gemm.PackedB.Create(new ColumnsB(w, h), g4, h, threads); // B[k, n] = W_hh[n, k]
             }
         }
 
@@ -149,7 +149,7 @@ internal sealed unsafe class LstmLayer : IDisposable
             _dz[d].Ensure((long)frames * g4);
             fixed (float* w = _p[d].HiddenWeight)
             {
-                packed[d] = Gemm.PackedB.Create(new RowsB(w, h), h, g4); // B[k, n] = W_hh[k, n]
+                packed[d] = Gemm.PackedB.Create(new RowsB(w, h), h, g4, threads); // B[k, n] = W_hh[k, n]
             }
         }
 

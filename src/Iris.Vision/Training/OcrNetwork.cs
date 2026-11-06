@@ -234,10 +234,16 @@ public sealed unsafe class OcrNetwork : IDisposable
             Gemm.Multiply(new RowsA(dLogits, classes), new RowsB(w, hidden2), frames, hidden2, classes, dx, hidden2, add: false, Threads);
         }
 
-        for (var f = 0; f < frames; f++)
+        Work.For(frames, (long)frames * classes, Threads, (from, to) =>
         {
-            Kernels.AddScaled(g.OutBias, new ReadOnlySpan<float>(dLogits + (long)f * classes, classes), 1f);
-        }
+            var part = new float[classes];
+            for (var f = from; f < to; f++)
+            {
+                Kernels.AddScaled(part, new ReadOnlySpan<float>(dLogits + (long)f * classes, classes), 1f);
+            }
+
+            return part;
+        }, part => Kernels.AddScaled(g.OutBias, part, 1f));
 
         Time("output backward", ref start);
         for (var l = _lstm.Length - 1; l >= 0; l--)

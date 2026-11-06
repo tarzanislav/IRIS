@@ -118,6 +118,10 @@ internal readonly unsafe struct Neighbourhoods : IMatrixA, IMatrixB
 /// max-pooling – forwards with what the way back needs, and backwards to the gradients of its weights and its input.
 /// Normalization in learning uses the statistics of the batch (all pixels of all lines) and moves the running ones
 /// like PyTorch (momentum 0.1, unbiased variance); in evaluation it uses the running ones.
+/// The block keeps only the convolution z (and the output it hands on): normalization, ReLU and pooling are one pass
+/// from z to the output, and the way back works x̂, the activations and the winners of the pooling out of z again –
+/// the same operations on the same values give the same bits – instead of storing them. These steps wait for memory,
+/// not for the processor, so fewer maps written and read is what makes them faster (and the learning smaller).
 /// </summary>
 internal sealed unsafe class ConvLayer : IDisposable
 {
@@ -128,20 +132,30 @@ internal sealed unsafe class ConvLayer : IDisposable
     private readonly int _pad;
     private readonly int _poolH;
     private readonly int _poolW;
-    private readonly Buffer<float> _normalized = new();   // x̂ [conv pixels, outputs]
-    private readonly Buffer<float> _activated = new();    // relu(γx̂ + β); on the way back its gradient
+    private readonly Buffer<float> _z = new();            // the convolution [conv pixels, outputs]; on the way back its gradient
+    private readonly Buffer<float> _activated = new();    // relu(γx̂ + β) of a block without pooling (the next one's input)
     private readonly Buffer<float> _pooled = new();
     private readonly Buffer<float> _inputGradient = new();
     private readonly Buffer<float> _flipped = new();      // weights for the gradient of the input (3 × 3)
     private readonly Buffer<float> _columns = new();      // gathered gradient (collapsing convolution)
+    private readonly float[] _mean;                       // the normalization of the last forward pass: x̂ = (z − mean) · invStd
     private readonly float[] _invStd;
+    private readonly float[] _k1;                         // the way back through the normalization: γσ⁻¹, mean(d), mean(d x̂)
+    private readonly float[] _k2;
+    private readonly float[] _k3;
     private float* _input;
     private int _inputChannels;
+    private Gemm.PackedB[]? _kernels;                     // the transformed kernels of Winograd's way, kept for the next step
+    private Gemm.PackedB[]? _turnedKernels;               // the same for the gradient of the input (turned, inputs and outputs swapped)
 
     public ConvLayer(ConvParameters p, int pad, int poolH, int poolW)
     {
         (_p, _pad, _poolH, _poolW) = (p, pad, poolH, poolW);
+        _mean = new float[p.Outputs];
         _invStd = new float[p.Outputs];
+        _k1 = new float[p.Outputs];
+        _k2 = new float[p.Outputs];
+        _k3 = new float[p.Outputs];
     }
 
     /// <summary>The level of the convolution's output (before pooling).</summary>
@@ -189,25 +203,15 @@ internal sealed unsafe class ConvLayer : IDisposable
         Conv.Set(outHeight, widths);
         var clock = Timings is null ? null : new Clock(Timings, Name + " forward ");
         var pixels = Conv.Pixels;
-        var z = _normalized.Ensure((long)pixels * outputs);
+        var z = _z.Ensure((long)pixels * outputs);
         if (First)
         {
             FirstConvolution.Convolve(input, level, _p.Weight, outputs, z, threads);
         }
         else if (Winograd)
         {
-            var kernels = Training.Winograd.TransformKernels(_p.Weight, _p.Inputs, outputs, flipped: false);
-            try
-            {
-                Training.Winograd.Convolve(input, _p.Inputs, level, kernels, outputs, z, threads);
-            }
-            finally
-            {
-                foreach (var k in kernels)
-                {
-                    k.Dispose();
-                }
-            }
+            _kernels = Training.Winograd.TransformKernels(_p.Weight, _p.Inputs, outputs, flipped: false, threads, _kernels);
+            Training.Winograd.Convolve(input, _p.Inputs, level, _kernels, outputs, z, threads);
         }
         else
         {
@@ -219,35 +223,33 @@ internal sealed unsafe class ConvLayer : IDisposable
         }
 
         clock?.Mark("product");
-        var a = _activated.Ensure((long)pixels * outputs);
         if (learning)
         {
             var (mean, variance) = Statistics(z, pixels, outputs, threads);
             for (var c = 0; c < outputs; c++)
             {
+                _mean[c] = (float)mean[c];
                 _invStd[c] = (float)(1 / Math.Sqrt(variance[c] + Epsilon));
                 _p.Mean[c] = (float)((1 - Momentum) * _p.Mean[c] + Momentum * mean[c]);
                 _p.Variance[c] = (float)((1 - Momentum) * _p.Variance[c] + Momentum * variance[c] * pixels / Math.Max(1, pixels - 1));
             }
-
-            Normalize(z, a, pixels, mean.Select(m => (float)m).ToArray(), threads);
         }
         else
         {
-            var mean = new float[outputs];
             for (var c = 0; c < outputs; c++)
             {
                 _invStd[c] = 1 / MathF.Sqrt(_p.Variance[c] + Epsilon);
-                mean[c] = _p.Mean[c];
+                _mean[c] = _p.Mean[c];
             }
-
-            Normalize(z, a, pixels, mean, threads);
         }
 
-        clock?.Mark("normalization");
+        clock?.Mark("statistics");
         if (!Pools)
         {
             Out.Set(Conv.Height, Conv.Widths);
+            var a = _activated.Ensure((long)pixels * outputs);
+            Activate(z, a, threads);
+            clock?.Mark("activation");
             return a;
         }
 
@@ -257,8 +259,8 @@ internal sealed unsafe class ConvLayer : IDisposable
         }
 
         Out.Set(Conv.Height / _poolH, widths);
-        Pool(a, _pooled.Ensure((long)Out.Pixels * outputs), threads);
-        clock?.Mark("pooling");
+        ActivateAndPool(z, _pooled.Ensure((long)Out.Pixels * outputs), threads);
+        clock?.Mark("activation");
         return _pooled.Data;
     }
 
@@ -271,18 +273,7 @@ internal sealed unsafe class ConvLayer : IDisposable
         var outputs = _p.Outputs;
         var pixels = Conv.Pixels;
         var clock = Timings is null ? null : new Clock(Timings, Name + " backward ");
-        var d = _activated.Data; // the activations are not needed any more: their place takes their gradient
-        if (Pools)
-        {
-            Unpool(gradient, d, threads); // reads the activations and writes their gradient over them
-        }
-        else if (gradient != d)
-        {
-            System.Buffer.MemoryCopy(gradient, d, (long)pixels * outputs * sizeof(float), (long)pixels * outputs * sizeof(float));
-        }
-
-        clock?.Mark("pooling");
-        NormalizeBackward(d, g, pixels, threads);
+        var d = NormalizeBackward(gradient, g, threads);
         clock?.Mark("normalization");
         if (First)
         {
@@ -310,12 +301,15 @@ internal sealed unsafe class ConvLayer : IDisposable
 
     public void Dispose()
     {
-        _normalized.Dispose();
+        _z.Dispose();
         _activated.Dispose();
         _pooled.Dispose();
         _inputGradient.Dispose();
         _flipped.Dispose();
         _columns.Dispose();
+        Training.Winograd.Free(_kernels);
+        Training.Winograd.Free(_turnedKernels);
+        _kernels = _turnedKernels = null;
         Conv.Dispose();
         Out.Dispose();
     }
@@ -329,18 +323,8 @@ internal sealed unsafe class ConvLayer : IDisposable
         if (Winograd)
         {
             // the same convolution with the kernel turned and inputs and outputs swapped
-            var kernels = Training.Winograd.TransformKernels(_p.Weight, inputs, outputs, flipped: true);
-            try
-            {
-                Training.Winograd.Convolve(dz, outputs, Conv, kernels, inputs, dx, threads);
-            }
-            finally
-            {
-                foreach (var k in kernels)
-                {
-                    k.Dispose();
-                }
-            }
+            _turnedKernels = Training.Winograd.TransformKernels(_p.Weight, inputs, outputs, flipped: true, threads, _turnedKernels);
+            Training.Winograd.Convolve(dz, outputs, Conv, _turnedKernels, inputs, dx, threads);
 
             return dx;
         }
@@ -509,28 +493,26 @@ internal sealed unsafe class ConvLayer : IDisposable
         count = total;
     }
 
-    // z → x̂ = (z − mean) / σ in place, a = relu(γ x̂ + β)
-    private void Normalize(float* z, float* a, int pixels, float[] mean, int threads)
+    private static bool Wide => Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated;
+
+    // a = relu(γ x̂ + β) of every pixel of a block without pooling, x̂ = (z − mean) · invStd
+    private void Activate(float* z, float* a, int threads)
     {
         var channels = _p.Outputs;
-        var invStd = _invStd;
-        var gamma = _p.Gamma;
-        var beta = _p.Beta;
-        Work.For(pixels, (long)pixels * channels, threads, (from, to) =>
+        Work.For(Conv.Pixels, (long)Conv.Pixels * channels, threads, (from, to) =>
         {
-            fixed (float* m = mean, s = invStd, g = gamma, b = beta)
+            fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta)
             {
                 for (var r = from; r < to; r++)
                 {
                     var x = z + (long)r * channels;
                     var y = a + (long)r * channels;
                     var c = 0;
-                    if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
+                    if (Wide)
                     {
                         for (; c <= channels - 8; c += 8)
                         {
                             var n = (Vector256.Load(x + c) - Vector256.Load(m + c)) * Vector256.Load(s + c);
-                            Vector256.Store(n, x + c);
                             Vector256.Store(Vector256.Max(Vector256.Load(g + c) * n + Vector256.Load(b + c), Vector256<float>.Zero), y + c);
                         }
                     }
@@ -538,7 +520,6 @@ internal sealed unsafe class ConvLayer : IDisposable
                     for (; c < channels; c++)
                     {
                         var n = (x[c] - m[c]) * s[c];
-                        x[c] = n;
                         y[c] = MathF.Max(g[c] * n + b[c], 0);
                     }
                 }
@@ -546,62 +527,97 @@ internal sealed unsafe class ConvLayer : IDisposable
         });
     }
 
-    // d: gradient of the activations → gradient of z (in place); adds dγ and dβ to g
-    private void NormalizeBackward(float* d, ConvParameters g, int pixels, int threads)
+    // the pooled output straight from z: the activations of every window worked out and the largest written, eight
+    // channels at a time (the activations themselves are never stored)
+    private void ActivateAndPool(float* z, float* pooled, int threads)
     {
         var channels = _p.Outputs;
-        var xhat = _normalized.Data;
-        var gamma = _p.Gamma;
-        var beta = _p.Beta;
-        // the ReLU first (where γx̂ + β ≤ 0 nothing flows back), with the two sums of the normalization
-        var sumD = new double[channels];
-        var sumDx = new double[channels];
-        Work.For(pixels, (long)pixels * channels, threads, (from, to) =>
+        var taps = _poolH * _poolW;
+        Work.For(Out.Widths.Length * Out.Height, (long)Conv.Pixels * channels, threads, (from, to) =>
         {
-            var s1 = new double[channels];
-            var s2 = new double[channels];
-            var p1 = stackalloc float[channels];
-            var p2 = stackalloc float[channels];
-            const int Chunk = 256;
-            fixed (float* gp = gamma, bp = beta)
+            var window = stackalloc float*[taps];
+            fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta)
             {
-                for (var start = from; start < to; start += Chunk)
+                for (var band = from; band < to; band++)
                 {
-                    new Span<float>(p1, channels).Clear();
-                    new Span<float>(p2, channels).Clear();
-                    var end = Math.Min(to, start + Chunk);
-                    for (var r = start; r < end; r++)
+                    var line = band / Out.Height;
+                    var y = band - line * Out.Height;
+                    var width = Out.Widths[line];
+                    for (var x = 0; x < width; x++)
                     {
-                        var dy = d + (long)r * channels;
-                        var x = xhat + (long)r * channels;
+                        Window(window, z, line, y, x, Conv.Widths[line], channels);
+                        var o = pooled + (long)(Out.Offsets[line] + y * width + x) * channels;
                         var c = 0;
-                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
+                        if (Wide)
                         {
                             for (; c <= channels - 8; c += 8)
                             {
-                                var n = Vector256.Load(x + c);
-                                var on = Vector256.GreaterThan(Vector256.Load(gp + c) * n + Vector256.Load(bp + c), Vector256<float>.Zero);
-                                var v = Vector256.BitwiseAnd(Vector256.Load(dy + c), on);
-                                Vector256.Store(v, dy + c);
-                                Vector256.Store(Vector256.Load(p1 + c) + v, p1 + c);
-                                Vector256.Store(Vector256.Load(p2 + c) + v * n, p2 + c);
+                                var mean = Vector256.Load(m + c);
+                                var invStd = Vector256.Load(s + c);
+                                var gamma = Vector256.Load(g + c);
+                                var beta = Vector256.Load(b + c);
+                                var best = Vector256.Max(gamma * ((Vector256.Load(window[0] + c) - mean) * invStd) + beta, Vector256<float>.Zero);
+                                for (var k = 1; k < taps; k++)
+                                {
+                                    best = Vector256.Max(best, Vector256.Max(gamma * ((Vector256.Load(window[k] + c) - mean) * invStd) + beta, Vector256<float>.Zero));
+                                }
+
+                                Vector256.Store(best, o + c);
                             }
                         }
 
                         for (; c < channels; c++)
                         {
-                            var v = gp[c] * x[c] + bp[c] > 0 ? dy[c] : 0;
-                            dy[c] = v;
-                            p1[c] += v;
-                            p2[c] += v * x[c];
+                            var best = MathF.Max(g[c] * ((window[0][c] - m[c]) * s[c]) + b[c], 0);
+                            for (var k = 1; k < taps; k++)
+                            {
+                                best = MathF.Max(best, MathF.Max(g[c] * ((window[k][c] - m[c]) * s[c]) + b[c], 0));
+                            }
+
+                            o[c] = best;
                         }
                     }
+                }
+            }
+        });
+    }
 
-                    for (var c = 0; c < channels; c++)
-                    {
-                        s1[c] += p1[c];
-                        s2[c] += p2[c];
-                    }
+    // From the gradient of the block's output to the gradient of z, written over z. The pooling sends each window's
+    // gradient to its winner (the first value equal to the largest, as PyTorch picks it), the ReLU lets it through
+    // where γx̂ + β > 0, and the normalization spreads it: dz = γσ⁻¹ (d − mean(d) − x̂ · mean(d x̂)), dγ += Σ d x̂,
+    // dβ += Σ d. Two passes over z: the sums, then dz – x̂, the activations and the winners worked out again each time.
+    private float* NormalizeBackward(float* gradient, ConvParameters g, int threads)
+    {
+        var channels = _p.Outputs;
+        var pixels = Conv.Pixels;
+        var z = _z.Data;
+        var items = Pools ? Out.Widths.Length * Out.Height : (pixels + Chunk - 1) / Chunk;
+        var sumD = new double[channels];
+        var sumDx = new double[channels];
+        Work.For(items, (long)pixels * channels, threads, (from, to) =>
+        {
+            var s1 = new double[channels];
+            var s2 = new double[channels];
+            var p1 = stackalloc float[channels];
+            var p2 = stackalloc float[channels];
+            var window = stackalloc float*[_poolH * _poolW];
+            for (var item = from; item < to; item++)
+            {
+                new Span<float>(p1, channels).Clear();
+                new Span<float>(p2, channels).Clear();
+                if (Pools)
+                {
+                    PooledSums(gradient, z, item, window, p1, p2);
+                }
+                else
+                {
+                    PlainSums(gradient, z, item * Chunk, Math.Min(pixels, (item + 1) * Chunk), p1, p2);
+                }
+
+                for (var c = 0; c < channels; c++)
+                {
+                    s1[c] += p1[c];
+                    s2[c] += p2[c];
                 }
             }
 
@@ -615,154 +631,247 @@ internal sealed unsafe class ConvLayer : IDisposable
             }
         });
 
-        var k1 = new float[channels]; // γ σ⁻¹
-        var k2 = new float[channels]; // mean of d
-        var k3 = new float[channels]; // mean of d · x̂
         for (var c = 0; c < channels; c++)
         {
             g.Gamma[c] += (float)sumDx[c];
             g.Beta[c] += (float)sumD[c];
-            k1[c] = gamma[c] * _invStd[c];
-            k2[c] = (float)(sumD[c] / pixels);
-            k3[c] = (float)(sumDx[c] / pixels);
+            _k1[c] = _p.Gamma[c] * _invStd[c];
+            _k2[c] = (float)(sumD[c] / pixels);
+            _k3[c] = (float)(sumDx[c] / pixels);
         }
 
-        // dz = γσ⁻¹ (d − mean(d) − x̂ · mean(d x̂))
-        Work.For(pixels, (long)pixels * channels, threads, (from, to) =>
-        {
-            fixed (float* a = k1, b = k2, e = k3)
-            {
-                for (var r = from; r < to; r++)
-                {
-                    var dy = d + (long)r * channels;
-                    var x = xhat + (long)r * channels;
-                    var c = 0;
-                    if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
-                    {
-                        for (; c <= channels - 8; c += 8)
-                        {
-                            var v = Vector256.Load(a + c) * (Vector256.Load(dy + c) - Vector256.Load(b + c) - Vector256.Load(x + c) * Vector256.Load(e + c));
-                            Vector256.Store(v, dy + c);
-                        }
-                    }
-
-                    for (; c < channels; c++)
-                    {
-                        dy[c] = a[c] * (dy[c] - b[c] - x[c] * e[c]);
-                    }
-                }
-            }
-        });
-    }
-
-    // max-pooling of a (Conv) into pooled (Out), eight channels at a time
-    private void Pool(float* a, float* pooled, int threads)
-    {
-        var channels = _p.Outputs;
-        Work.For(Out.Widths.Length, (long)Conv.Pixels * channels, threads, (from, to) =>
+        // the bands of rows of the pooling, and one more of the rows it leaves over
+        var bands = Pools ? Out.Height + (Conv.Height > Out.Height * _poolH ? 1 : 0) : 0;
+        Work.For(Pools ? Conv.Widths.Length * bands : items, (long)pixels * channels, threads, (from, to) =>
         {
             var window = stackalloc float*[_poolH * _poolW];
-            for (var line = from; line < to; line++)
+            for (var item = from; item < to; item++)
             {
-                int width = Out.Widths[line], convWidth = Conv.Widths[line];
-                for (var y = 0; y < Out.Height; y++)
+                if (Pools)
                 {
-                    for (var x = 0; x < width; x++)
-                    {
-                        Window(window, a, line, y, x, convWidth, channels);
-                        var o = pooled + (long)(Out.Offsets[line] + y * width + x) * channels;
-                        var c = 0;
-                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
-                        {
-                            for (; c <= channels - 8; c += 8)
-                            {
-                                var best = Vector256.Load(window[0] + c);
-                                for (var k = 1; k < _poolH * _poolW; k++)
-                                {
-                                    best = Vector256.Max(best, Vector256.Load(window[k] + c));
-                                }
-
-                                Vector256.Store(best, o + c);
-                            }
-                        }
-
-                        for (; c < channels; c++)
-                        {
-                            var best = window[0][c];
-                            for (var k = 1; k < _poolH * _poolW; k++)
-                            {
-                                best = MathF.Max(best, window[k][c]);
-                            }
-
-                            o[c] = best;
-                        }
-                    }
+                    PooledSpread(gradient, z, item / bands, item % bands, window);
+                }
+                else
+                {
+                    var at = (long)item * Chunk * channels;
+                    Spread(z + at, gradient + at, Math.Min(pixels, (item + 1) * Chunk) - item * Chunk);
                 }
             }
         });
+
+        return z;
     }
 
-    // the gradient of the pooled output back to the winner of each window (the first one equal to the largest, as
-    // PyTorch picks it); d holds the activations and gets their gradient, window by window in place
-    private void Unpool(float* gradient, float* d, int threads)
+    // pixels of a block without pooling worked at a time on the way back (their sums in float, between them in double)
+    private const int Chunk = 256;
+
+    // Σ d and Σ d x̂ of the pixels [from, to) of a block without pooling
+    private void PlainSums(float* gradient, float* z, int from, int to, float* p1, float* p2)
     {
         var channels = _p.Outputs;
-        var pooled = _pooled.Data;
-        var taps = _poolH * _poolW;
-        Work.For(Out.Widths.Length, (long)Conv.Pixels * channels, threads, (from, to) =>
+        fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta)
         {
-            var window = stackalloc float*[taps];
-            for (var line = from; line < to; line++)
+            for (var r = from; r < to; r++)
             {
-                int width = Out.Widths[line], convWidth = Conv.Widths[line];
-                // columns and rows left over by the pooling get no gradient
-                for (var y = 0; y < Conv.Height; y++)
+                var x = z + (long)r * channels;
+                var dy = gradient + (long)r * channels;
+                var c = 0;
+                if (Wide)
                 {
-                    for (var x = y < Out.Height * _poolH ? width * _poolW : 0; x < convWidth; x++)
+                    for (; c <= channels - 8; c += 8)
                     {
-                        new Span<float>(d + (long)(Conv.Offsets[line] + y * convWidth + x) * channels, channels).Clear();
+                        var n = (Vector256.Load(x + c) - Vector256.Load(m + c)) * Vector256.Load(s + c);
+                        var on = Vector256.GreaterThan(Vector256.Load(g + c) * n + Vector256.Load(b + c), Vector256<float>.Zero);
+                        var v = Vector256.BitwiseAnd(Vector256.Load(dy + c), on);
+                        Vector256.Store(Vector256.Load(p1 + c) + v, p1 + c);
+                        Vector256.Store(Vector256.Load(p2 + c) + v * n, p2 + c);
                     }
                 }
 
-                for (var y = 0; y < Out.Height; y++)
+                for (; c < channels; c++)
                 {
-                    for (var x = 0; x < width; x++)
+                    var n = (x[c] - m[c]) * s[c];
+                    var v = g[c] * n + b[c] > 0 ? dy[c] : 0;
+                    p1[c] += v;
+                    p2[c] += v * n;
+                }
+            }
+        }
+    }
+
+    // Σ d and Σ d x̂ of the windows of one band of the pooling (only the winner of a window gets its gradient, and only
+    // where it is above zero – a window whose largest activation is 0 sends nothing back)
+    private void PooledSums(float* gradient, float* z, int band, float** window, float* p1, float* p2)
+    {
+        var channels = _p.Outputs;
+        var taps = _poolH * _poolW;
+        var line = band / Out.Height;
+        var y = band - line * Out.Height;
+        var width = Out.Widths[line];
+        var pooled = _pooled.Data;
+        fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                Window(window, z, line, y, x, Conv.Widths[line], channels);
+                var at = (long)(Out.Offsets[line] + y * width + x) * channels;
+                var c = 0;
+                if (Wide)
+                {
+                    for (; c <= channels - 8; c += 8)
                     {
-                        Window(window, d, line, y, x, convWidth, channels);
-                        var index = (long)(Out.Offsets[line] + y * width + x) * channels;
-                        var best = pooled + index;
-                        var g = gradient + index;
-                        var c = 0;
-                        if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
+                        var mean = Vector256.Load(m + c);
+                        var invStd = Vector256.Load(s + c);
+                        var gamma = Vector256.Load(g + c);
+                        var beta = Vector256.Load(b + c);
+                        var best = Vector256.Load(pooled + at + c);
+                        var taken = Vector256<float>.Zero;
+                        var winner = Vector256<float>.Zero;
+                        for (var k = 0; k < taps; k++)
                         {
-                            for (; c <= channels - 8; c += 8)
-                            {
-                                var max = Vector256.Load(best + c);
-                                var value = Vector256.Load(g + c);
-                                var taken = Vector256<float>.Zero;
-                                for (var k = 0; k < taps; k++)
-                                {
-                                    var mine = Vector256.AndNot(Vector256.Equals(Vector256.Load(window[k] + c), max), taken);
-                                    taken |= mine;
-                                    Vector256.Store(value & mine, window[k] + c);
-                                }
-                            }
+                            var n = (Vector256.Load(window[k] + c) - mean) * invStd;
+                            var mine = Vector256.AndNot(Vector256.Equals(Vector256.Max(gamma * n + beta, Vector256<float>.Zero), best), taken);
+                            taken |= mine;
+                            winner |= n & mine;
                         }
 
-                        for (; c < channels; c++)
+                        var v = Vector256.Load(gradient + at + c) & Vector256.GreaterThan(best, Vector256<float>.Zero);
+                        Vector256.Store(Vector256.Load(p1 + c) + v, p1 + c);
+                        Vector256.Store(Vector256.Load(p2 + c) + v * winner, p2 + c);
+                    }
+                }
+
+                for (; c < channels; c++)
+                {
+                    var best = pooled[at + c];
+                    if (best > 0)
+                    {
+                        for (var k = 0; k < taps; k++)
                         {
-                            var found = false;
-                            for (var k = 0; k < taps; k++)
+                            var n = (window[k][c] - m[c]) * s[c];
+                            if (MathF.Max(g[c] * n + b[c], 0) == best)
                             {
-                                var mine = !found && window[k][c] == best[c];
-                                found |= mine;
-                                window[k][c] = mine ? g[c] : 0;
+                                var v = gradient[at + c];
+                                p1[c] += v;
+                                p2[c] += v * n;
+                                break;
                             }
                         }
                     }
                 }
             }
-        });
+        }
+    }
+
+    // dz of one band of rows of a pooling block: its windows (each worked out whole before it is written over), the
+    // columns the pooling leaves over, or – the last band – the rows it leaves over
+    private void PooledSpread(float* gradient, float* z, int line, int band, float** window)
+    {
+        var channels = _p.Outputs;
+        var taps = _poolH * _poolW;
+        int convWidth = Conv.Widths[line], width = Out.Widths[line];
+        var pooled = _pooled.Data;
+        if (band == Out.Height)
+        {
+            var first = band * _poolH;
+            Spread(z + (long)(Conv.Offsets[line] + first * convWidth) * channels, null, (Conv.Height - first) * convWidth);
+            return;
+        }
+
+        var n = stackalloc Vector256<float>[taps];
+        var mine = stackalloc Vector256<float>[taps];
+        var values = stackalloc float[taps];
+        fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta, a1 = _k1, a2 = _k2, a3 = _k3)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                Window(window, z, line, band, x, convWidth, channels);
+                var at = (long)(Out.Offsets[line] + band * width + x) * channels;
+                var c = 0;
+                if (Wide)
+                {
+                    for (; c <= channels - 8; c += 8)
+                    {
+                        var mean = Vector256.Load(m + c);
+                        var invStd = Vector256.Load(s + c);
+                        var gamma = Vector256.Load(g + c);
+                        var beta = Vector256.Load(b + c);
+                        var best = Vector256.Load(pooled + at + c);
+                        var taken = Vector256<float>.Zero;
+                        for (var k = 0; k < taps; k++)
+                        {
+                            n[k] = (Vector256.Load(window[k] + c) - mean) * invStd;
+                            mine[k] = Vector256.AndNot(Vector256.Equals(Vector256.Max(gamma * n[k] + beta, Vector256<float>.Zero), best), taken);
+                            taken |= mine[k];
+                        }
+
+                        var v = Vector256.Load(gradient + at + c) & Vector256.GreaterThan(best, Vector256<float>.Zero);
+                        var k1 = Vector256.Load(a1 + c);
+                        var k2 = Vector256.Load(a2 + c);
+                        var k3 = Vector256.Load(a3 + c);
+                        for (var k = 0; k < taps; k++)
+                        {
+                            Vector256.Store(k1 * ((v & mine[k]) - k2 - n[k] * k3), window[k] + c);
+                        }
+                    }
+                }
+
+                for (; c < channels; c++)
+                {
+                    var best = pooled[at + c];
+                    var found = false;
+                    for (var k = 0; k < taps; k++)
+                    {
+                        values[k] = (window[k][c] - m[c]) * s[c];
+                    }
+
+                    for (var k = 0; k < taps; k++)
+                    {
+                        var winner = !found && MathF.Max(g[c] * values[k] + b[c], 0) == best;
+                        found |= winner;
+                        var v = winner && best > 0 ? gradient[at + c] : 0;
+                        window[k][c] = a1[c] * (v - a2[c] - values[k] * a3[c]);
+                    }
+                }
+            }
+
+            // the columns at the right the pooling leaves over (no gradient comes to them, the normalization still does)
+            for (var r = band * _poolH; r < band * _poolH + _poolH && width * _poolW < convWidth; r++)
+            {
+                Spread(z + (long)(Conv.Offsets[line] + r * convWidth + width * _poolW) * channels, null, convWidth - width * _poolW);
+            }
+        }
+    }
+
+    // the last step of the way back through the normalization for a run of pixels, z in, dz out: dz = k1 (d − k2 − x̂ k3),
+    // d the gradient of the activations through the ReLU (none: pixels no gradient comes to)
+    private void Spread(float* z, float* d, int count)
+    {
+        var channels = _p.Outputs;
+        fixed (float* m = _mean, s = _invStd, g = _p.Gamma, b = _p.Beta, a1 = _k1, a2 = _k2, a3 = _k3)
+        {
+            for (var pixel = 0; pixel < count; pixel++, z += channels, d = d == null ? null : d + channels)
+            {
+                var c = 0;
+                if (Wide)
+                {
+                    for (; c <= channels - 8; c += 8)
+                    {
+                        var n = (Vector256.Load(z + c) - Vector256.Load(m + c)) * Vector256.Load(s + c);
+                        var v = d == null ? Vector256<float>.Zero
+                            : Vector256.BitwiseAnd(Vector256.Load(d + c), Vector256.GreaterThan(Vector256.Load(g + c) * n + Vector256.Load(b + c), Vector256<float>.Zero));
+                        Vector256.Store(Vector256.Load(a1 + c) * (v - Vector256.Load(a2 + c) - n * Vector256.Load(a3 + c)), z + c);
+                    }
+                }
+
+                for (; c < channels; c++)
+                {
+                    var n = (z[c] - m[c]) * s[c];
+                    var v = d == null || !(g[c] * n + b[c] > 0) ? 0 : d[c];
+                    z[c] = a1[c] * (v - a2[c] - n * a3[c]);
+                }
+            }
+        }
     }
 
     // the pixels of a pooling window (row after row), as pointers to their channels

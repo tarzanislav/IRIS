@@ -106,8 +106,8 @@ public static unsafe class OcrTrainingTests
     }
 
     // a small reader: 8 rows, blocks with and without pooling, LSTM; widths of 8 and 16 test the vector paths too
-    internal static OcrShape Tiny(int channels = 4, int hidden = 5) =>
-        new(8, [new(channels, 2, 2), new(channels + 2, 1, 1), new(channels * 2, 2, 1)], 6, hidden, 2, "abc");
+    internal static OcrShape Tiny(int channels = 4, int hidden = 5, int height = 8) =>
+        new(height, [new(channels, 2, 2), new(channels + 2, 1, 1), new(channels * 2, 2, 1)], 6, hidden, 2, "abc");
 
     internal static LineBatch TinyBatch(OcrShape shape, int seed, params (int Width, string Text)[] lines)
     {
@@ -178,12 +178,13 @@ public static unsafe class OcrTrainingTests
     public static void NetworkGradientsAreTheSlopesOfTheLoss()
     {
         var failures = "";
-        foreach (var (channels, hidden, threads, smooth) in new[] { (4, 5, 1, true), (8, 8, 3, true), (4, 5, 1, false), (8, 8, 3, false) })
+        foreach (var (channels, hidden, threads, smooth, height) in new[] { (4, 5, 1, true, 4), (8, 8, 3, true, 4), (4, 5, 1, false, 8), (8, 8, 3, false, 8), (8, 8, 3, false, 6) })
         {
             // smooth: no pooling and every ReLU open (β large), so the loss has no kinks and the slope along a random
             // direction must match exactly; with pooling, a window whose largest value changes is a kink, so single
-            // weights are checked there and most of them must match (the PyTorch comparison in CI is exact)
-            var shape = smooth ? new OcrShape(4, [new(channels, 1, 1), new(channels + 2, 1, 1)], 6, hidden, 2, "abc") : Tiny(channels, hidden);
+            // weights are checked there and most of them must match (the PyTorch comparison in CI is exact); a height of
+            // 6 leaves a row over at the second pooling
+            var shape = smooth ? new OcrShape(height, [new(channels, 1, 1), new(channels + 2, 1, 1)], 6, hidden, 2, "abc") : Tiny(channels, hidden, height);
             var weights = OcrWeights.Create(shape, seed: 11);
             var random = new Random(2);
             foreach (var c in weights.Convs)

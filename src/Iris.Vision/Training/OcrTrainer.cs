@@ -136,9 +136,9 @@ public sealed class OcrTrainer
                 var started = watch.Elapsed;
                 gradients.Clear();
                 loss = network.Learn(batch, gradients);
-                AdamW.Clip(gradients, _options.ClipNorm);
+                AdamW.Clip(gradients, _options.ClipNorm, _options.Threads);
                 rate = _state.Rate(minutes, stepsOfRun);
-                _adam.Step(_weights, gradients, (float)rate);
+                _adam.Step(_weights, gradients, (float)rate, _options.Threads);
                 stepsOfRun++;
                 linesDone += batch.Count;
                 losses += loss;

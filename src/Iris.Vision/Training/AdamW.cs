@@ -34,34 +34,38 @@ public sealed class AdamW
     }
 
     /// <summary>The length of the whole gradient (all tensors as one vector).</summary>
-    public static double Norm(OcrWeights gradients)
+    public static double Norm(OcrWeights gradients, int threads = 1)
     {
         double sum = 0;
         foreach (var t in gradients.Learnable())
         {
-            foreach (var v in t.Values)
+            var values = t.Values;
+            Work.For((values.Length + Run - 1) / Run, values.Length, threads, (from, to) =>
             {
-                sum += (double)v * v;
-            }
+                double part = 0;
+                for (var r = from; r < to; r++)
+                {
+                    part += Squares(values.AsSpan(r * Run, Math.Min(Run, values.Length - (r * Run))));
+                }
+
+                return part;
+            }, part => sum += part);
         }
 
         return Math.Sqrt(sum);
     }
 
     /// <summary>Scales the gradient down to the largest norm when it is longer (PyTorch's clip_grad_norm_); returns its norm before.</summary>
-    public static double Clip(OcrWeights gradients, double maxNorm)
+    public static double Clip(OcrWeights gradients, double maxNorm, int threads = 1)
     {
-        var norm = Norm(gradients);
+        var norm = Norm(gradients, threads);
         var factor = (float)Math.Min(1.0, maxNorm / (norm + 1e-6));
         if (factor < 1)
         {
             foreach (var t in gradients.Learnable())
             {
                 var values = t.Values;
-                for (var i = 0; i < values.Length; i++)
-                {
-                    values[i] *= factor;
-                }
+                Work.For(values.Length, values.Length, threads, (from, to) => Scale(values.AsSpan(from, to - from), factor));
             }
         }
 
@@ -69,7 +73,7 @@ public sealed class AdamW
     }
 
     /// <summary>One step of all learnable tensors of w with the gradients in g at the given rate.</summary>
-    public void Step(OcrWeights w, OcrWeights g, float rate)
+    public void Step(OcrWeights w, OcrWeights g, float rate, int threads = 1)
     {
         Steps++;
         var correction1 = 1 - Math.Pow(Beta1, Steps);
@@ -79,14 +83,51 @@ public sealed class AdamW
         foreach (var (weight, gradient) in w.Learnable().Zip(g.Learnable()))
         {
             var (m, v) = Moments(weight.Name, weight.Values.Length);
-            Update(weight.Values, gradient.Values, m, v, decay, stepSize, (float)correction2);
+            Work.For(weight.Values.Length, weight.Values.Length, threads, (from, to) =>
+                Update(weight.Values, gradient.Values, m, v, from, to, decay, stepSize, (float)correction2));
         }
     }
 
-    private unsafe void Update(float[] p, float[] g, float[] m, float[] v, float decay, float stepSize, float correction2)
+    // values summed in float over short runs (vectors), the runs in double
+    private const int Run = 1024;
+
+    private static double Squares(ReadOnlySpan<float> values)
+    {
+        var sum = Vector256<float>.Zero;
+        var i = 0;
+        for (; i <= values.Length - 8; i += 8)
+        {
+            var v = Vector256.Create(values.Slice(i, 8));
+            sum += v * v;
+        }
+
+        double total = Vector256.Sum(sum);
+        for (; i < values.Length; i++)
+        {
+            total += (double)values[i] * values[i];
+        }
+
+        return total;
+    }
+
+    private static void Scale(Span<float> values, float factor)
+    {
+        var i = 0;
+        for (; i <= values.Length - 8; i += 8)
+        {
+            (Vector256.Create(values.Slice(i, 8)) * factor).CopyTo(values.Slice(i, 8));
+        }
+
+        for (; i < values.Length; i++)
+        {
+            values[i] *= factor;
+        }
+    }
+
+    private unsafe void Update(float[] p, float[] g, float[] m, float[] v, int from, int to, float decay, float stepSize, float correction2)
     {
         float b1 = Beta1, b2 = Beta2, eps = Epsilon;
-        var i = 0;
+        var i = from;
         fixed (float* pp = p, pg = g, pm = m, pv = v)
         {
             if ((Vector256.IsHardwareAccelerated || Vector128.IsHardwareAccelerated))
@@ -99,7 +140,7 @@ public sealed class AdamW
                 var vs = Vector256.Create(stepSize);
                 var vc = Vector256.Create(correction2);
                 var ve = Vector256.Create(eps);
-                for (; i <= p.Length - 8; i += 8)
+                for (; i <= to - 8; i += 8)
                 {
                     var grad = Vector256.Load(pg + i);
                     var mi = vb1 * Vector256.Load(pm + i) + va1 * grad;
@@ -111,7 +152,7 @@ public sealed class AdamW
                 }
             }
 
-            for (; i < p.Length; i++)
+            for (; i < to; i++)
             {
                 var grad = pg[i];
                 pm[i] = b1 * pm[i] + (1 - b1) * grad;

@@ -49,96 +49,114 @@ internal static unsafe class Winograd
     /// <summary>
     /// The 36 transformed kernels U[ξ] = G g Gᵀ as packed right matrices [inputs, outputs], from weights
     /// [outputs, 3, 3, inputs]; flipped: the kernel turned by 180° with inputs and outputs swapped (the gradient of the input).
-    /// Eight output channels at a time, written straight into the packed panels.
+    /// Eight output channels at a time, written straight into the packed panels, input channels shared among the threads.
+    /// The panels of an earlier call are filled again when they fit (a layer transforms its kernels twice every step:
+    /// allocating them anew each time would only cost time).
     /// </summary>
-    public static Gemm.PackedB[] TransformKernels(float[] weight, int inputs, int outputs, bool flipped)
+    public static Gemm.PackedB[] TransformKernels(float[] weight, int inputs, int outputs, bool flipped, int threads = 1, Gemm.PackedB[]? into = null)
     {
         // channels of the transformed convolution
         int ci = flipped ? outputs : inputs, co = flipped ? inputs : outputs;
-
-        // taps[tap][i][o]: the kernel of the transformed convolution, a row of co values per input channel and tap
-        var taps = (float*)NativeMemory.AlignedAlloc((nuint)(9L * ci * co * sizeof(float)), 64);
-        var packed = new Gemm.PackedB[Values];
-        try
+        var packed = into is { Length: Values } && into[0].N == co && into[0].K == ci ? into : Fresh(co, ci);
+        var plane = (long)ci * co;
+        var work = 9 * plane * 8;
+        fixed (float* w = weight)
         {
-            fixed (float* w = weight)
+            var source = (nint)w;
+            var gathered = (float*)NativeMemory.AlignedAlloc((nuint)(9 * plane * sizeof(float)), 64);
+            var taps = (nint)gathered;
+            try
             {
-                for (var tap = 0; tap < 9; tap++)
+                // taps[tap][i][o]: the kernel of the transformed convolution, a row of co values per input channel and tap
+                Work.For(flipped ? ci : co, work, threads, (from, to) =>
                 {
-                    var target = taps + ((long)tap * ci * co);
-                    if (flipped)
+                    for (var j = from; j < to; j++)
                     {
-                        // W[out = i][2 − ky][2 − kx][in = o]: already a row over o
-                        for (var i = 0; i < ci; i++)
+                        for (var tap = 0; tap < 9; tap++)
                         {
-                            var source = w + ((long)((i * 9) + (8 - tap)) * inputs);
-                            System.Buffer.MemoryCopy(source, target + ((long)i * co), co * sizeof(float), co * sizeof(float));
-                        }
-                    }
-                    else
-                    {
-                        // W[o][ky][kx][i]: turned so that o runs along the row
-                        for (var o = 0; o < co; o++)
-                        {
-                            var source = w + ((long)((o * 9) + tap) * inputs);
-                            for (var i = 0; i < ci; i++)
+                            var target = (float*)taps + ((long)tap * plane);
+                            if (flipped)
                             {
-                                target[((long)i * co) + o] = source[i];
+                                // W[out = i][2 − ky][2 − kx][in = o]: already a row over o
+                                System.Buffer.MemoryCopy((float*)source + ((long)((j * 9) + (8 - tap)) * inputs), target + ((long)j * co), co * sizeof(float), co * sizeof(float));
+                            }
+                            else
+                            {
+                                // W[o][ky][kx][i]: turned so that o runs along the row
+                                var row = (float*)source + ((long)((j * 9) + tap) * inputs);
+                                for (var i = 0; i < ci; i++)
+                                {
+                                    target[((long)i * co) + j] = row[i];
+                                }
                             }
                         }
                     }
-                }
-            }
+                });
 
-            for (var xi = 0; xi < Values; xi++)
-            {
-                packed[xi] = Gemm.PackedB.Zeros(co, ci);
-            }
-
-            var gg = stackalloc Vector256<float>[3 * Piece];
-            var plane = (long)ci * co;
-            for (var i = 0; i < ci; i++)
-            {
-                for (var o = 0; o < co; o += 8)
+                Work.For(ci, work, threads, (from, to) =>
                 {
-                    var g = taps + ((long)i * co) + o;
-
-                    // G g (6 × 3), column by column
-                    for (var c = 0; c < 3; c++)
+                    var gg = stackalloc Vector256<float>[3 * Piece];
+                    for (var i = from; i < to; i++)
                     {
-                        KernelLine(Vector256.Load(g + (c * plane)), Vector256.Load(g + ((3 + c) * plane)), Vector256.Load(g + ((6 + c) * plane)),
-                            out gg[c], out gg[3 + c], out gg[6 + c], out gg[9 + c], out gg[12 + c], out gg[15 + c]);
-                    }
+                        for (var o = 0; o < co; o += 8)
+                        {
+                            var g = (float*)taps + ((long)i * co) + o;
 
-                    // (G g) Gᵀ (6 × 6), row by row, into the panels
-                    for (var r = 0; r < Piece; r++)
-                    {
-                        KernelLine(gg[r * 3], gg[(r * 3) + 1], gg[(r * 3) + 2], out var u0, out var u1, out var u2, out var u3, out var u4, out var u5);
-                        Vector256.Store(u0, packed[(r * Piece) + 0].At(i, o));
-                        Vector256.Store(u1, packed[(r * Piece) + 1].At(i, o));
-                        Vector256.Store(u2, packed[(r * Piece) + 2].At(i, o));
-                        Vector256.Store(u3, packed[(r * Piece) + 3].At(i, o));
-                        Vector256.Store(u4, packed[(r * Piece) + 4].At(i, o));
-                        Vector256.Store(u5, packed[(r * Piece) + 5].At(i, o));
+                            // G g (6 × 3), column by column
+                            for (var c = 0; c < 3; c++)
+                            {
+                                KernelLine(Vector256.Load(g + (c * plane)), Vector256.Load(g + ((3 + c) * plane)), Vector256.Load(g + ((6 + c) * plane)),
+                                    out gg[c], out gg[3 + c], out gg[6 + c], out gg[9 + c], out gg[12 + c], out gg[15 + c]);
+                            }
+
+                            // (G g) Gᵀ (6 × 6), row by row, into the panels
+                            for (var r = 0; r < Piece; r++)
+                            {
+                                KernelLine(gg[r * 3], gg[(r * 3) + 1], gg[(r * 3) + 2], out var u0, out var u1, out var u2, out var u3, out var u4, out var u5);
+                                Vector256.Store(u0, packed[(r * Piece) + 0].At(i, o));
+                                Vector256.Store(u1, packed[(r * Piece) + 1].At(i, o));
+                                Vector256.Store(u2, packed[(r * Piece) + 2].At(i, o));
+                                Vector256.Store(u3, packed[(r * Piece) + 3].At(i, o));
+                                Vector256.Store(u4, packed[(r * Piece) + 4].At(i, o));
+                                Vector256.Store(u5, packed[(r * Piece) + 5].At(i, o));
+                            }
+                        }
                     }
-                }
+                });
             }
-
-            return packed;
-        }
-        catch
-        {
-            foreach (var p in packed)
+            finally
             {
-                p?.Dispose();
+                NativeMemory.AlignedFree(gathered);
             }
+        }
 
-            throw;
-        }
-        finally
+        if (!ReferenceEquals(packed, into) && into is not null)
         {
-            NativeMemory.AlignedFree(taps);
+            Free(into);
         }
+
+        return packed;
+    }
+
+    /// <summary>Gives back the memory of transformed kernels.</summary>
+    public static void Free(Gemm.PackedB[]? kernels)
+    {
+        foreach (var k in kernels ?? [])
+        {
+            k?.Dispose();
+        }
+    }
+
+    // 36 packed matrices of zeros (their padding to whole panels stays zero; the rest is written by every transform)
+    private static Gemm.PackedB[] Fresh(int co, int ci)
+    {
+        var packed = new Gemm.PackedB[Values];
+        for (var xi = 0; xi < Values; xi++)
+        {
+            packed[xi] = Gemm.PackedB.Zeros(co, ci);
+        }
+
+        return packed;
     }
 
     // G · (a, b, c): the six values of a kernel line at the points 0, −1, 1, 1/2, −1/2 and ∞ (scaled)

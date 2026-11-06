@@ -311,19 +311,25 @@ internal static unsafe class Gemm
                 }
             });
 
-            for (var i = 0; i < m; i++)
+            // the parts added up in their order, the rows shared among the threads
+            var target = (nint)c;
+            var ranges = size * parts < ParallelWork ? 1 : Math.Min(m, threads * 4);
+            Parallel.For(0, ranges, new ParallelOptions { MaxDegreeOfParallelism = threads }, r =>
             {
-                var target = new Span<float>(c + (long)i * ldc, n);
-                if (!add)
+                for (var i = (int)((long)m * r / ranges); i < (int)((long)m * (r + 1) / ranges); i++)
                 {
-                    target.Clear();
-                }
+                    var row = new Span<float>((float*)target + (long)i * ldc, n);
+                    if (!add)
+                    {
+                        row.Clear();
+                    }
 
-                for (var part = 0; part < parts; part++)
-                {
-                    Kernels.AddScaled(target, new ReadOnlySpan<float>(buffers + size * part + (long)i * n, n), 1f);
+                    for (var part = 0; part < parts; part++)
+                    {
+                        Kernels.AddScaled(row, new ReadOnlySpan<float>((float*)bufferAddress + size * part + (long)i * n, n), 1f);
+                    }
                 }
-            }
+            });
         }
         finally
         {
