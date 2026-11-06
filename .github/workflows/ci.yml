@@ -418,7 +418,7 @@ jobs:
         run: |
           set -o pipefail
           dotnet src/Iris.Cli/bin/Release/net10.0/iris.dll check-ocr-training /tmp/ocr-reference --threads "$(nproc)" | tee /tmp/ocr-check.txt
-          echo "::notice title=OCR learning in C#::$(grep '^speed' /tmp/ocr-check.txt)"
+          echo "::notice title=OCR learning in C#::$(grep '^speed' /tmp/ocr-check.txt) | $(grep '^threads' /tmp/ocr-check.txt)"
       - name: Going on from the last model of "OCR learning" – 20 minutes in C#
         run: |
           run=$(gh run list --workflow ocr.yml --status success --limit 20 --json databaseId,headBranch \

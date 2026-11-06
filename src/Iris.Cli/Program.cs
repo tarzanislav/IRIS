@@ -730,8 +730,8 @@ static int CheckOcrTraining(string folder, Options options)
     {
         gradients.Clear();
         network.Learn(batch, gradients);
-        Iris.Vision.Training.AdamW.Clip(gradients, 5);
-        adam.Step(weights, gradients, 1e-4f);
+        Iris.Vision.Training.AdamW.Clip(gradients, 5, threads);
+        adam.Step(weights, gradients, 1e-4f, threads);
     }
 
     var seconds = watch.Elapsed.TotalSeconds / Steps;
@@ -742,6 +742,23 @@ static int CheckOcrTraining(string folder, Options options)
     foreach (var (part, time) in network.Timings.OrderByDescending(p => p.Value).Take(6))
     {
         Console.WriteLine($"    {part}: {time / (Steps + 1):F3} s");
+    }
+
+    // how the threads help: the same steps on one thread
+    if (threads > 1)
+    {
+        network.Threads = 1;
+        watch.Restart();
+        for (var s = 0; s < Steps; s++)
+        {
+            gradients.Clear();
+            network.Learn(batch, gradients);
+            Iris.Vision.Training.AdamW.Clip(gradients, 5);
+            adam.Step(weights, gradients, 1e-4f);
+        }
+
+        var one = watch.Elapsed.TotalSeconds / Steps;
+        Console.WriteLine($"threads: one thread {one:F2} s a step, {threads} threads {seconds:F2} s – {one / seconds:F2} × faster");
     }
 
     Console.WriteLine(failures == 0 ? "the C# learning matches PyTorch" : $"{failures} differences");
