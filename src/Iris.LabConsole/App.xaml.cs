@@ -315,6 +315,7 @@ public partial class App : Application
             ["rounds"] = rounds,
             ["tests"] = tests,
             ["minutes"] = 6600,
+            ["plan"] = new JsonObject { ["rounds"] = 600, ["done"] = 582, ["left"] = 18, ["rate"] = 1e-4, ["now"] = 2.9e-6, ["ended"] = false },
             ["hub_version"] = Iris.Lab.LabUpdates.Version,
             ["consoles"] = new JsonArray("notebook-skola", "notebook-praca"),
             ["update"] = new JsonObject { ["version"] = "0.4.1", ["auto"] = true, ["agent"] = true, ["console"] = true },

@@ -284,7 +284,9 @@ public sealed class LabAgent
                 if (_loadSettings.Moving && _state == "learning" && _sample is { } now)
                 {
                     var before = _control.Level;
-                    if (_control.Look(DateTime.UtcNow, _strain.Level, now.CpuOthers, now.Temperature, _hot, now.IdleSeconds))
+                    // the learning's own slowing down with more threads is no strain: the lines per second decide that
+                    var strained = _strain.Level >= 2 || (_strain.Level == 1 && _strain.Reasons.Any(r => r.Code is not ("slow" or "learning")));
+                    if (_control.Look(DateTime.UtcNow, strained ? _strain.Level : 0, now.CpuOthers, now.Temperature, _hot, now.IdleSeconds, _learner?.LinesTotal))
                     {
                         ApplyLoad();
                     }

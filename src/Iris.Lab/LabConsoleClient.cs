@@ -115,6 +115,10 @@ public sealed class LabConsoleClient : IDisposable
         return (answer.Data, answer.Header);
     }
 
+    /// <summary>A new plan of the learning rate from the present version: its highest rate and its rounds.</summary>
+    public Task<JsonObject> NewPlanAsync(double rate, int rounds, CancellationToken cancel) =>
+        Server("plan", new JsonObject { ["rate"] = rate, ["rounds"] = rounds }, cancel);
+
     /// <summary>Starts the hub again (a round that runs is lost); its service brings it back in about half a minute.</summary>
     public async Task<bool> RestartServerAsync(CancellationToken cancel) =>
         (await Server("restart", [], cancel))["ok"]?.GetValue<bool>() ?? false;

@@ -195,6 +195,12 @@ public static class LabTests
             Assert.True(server["model"]?["best"]?["version"]?.GetValue<int>() > 0, "the best model is kept");
             var (bestFile, about) = await console.BestModelAsync(default);
             Assert.True(bestFile.Length > 1000 && about["kind"] is not null, "the console can save the best model");
+            var plan = await console.NewPlanAsync(2e-4, 300, default);
+            Assert.True(plan["ok"] is not null, "the console starts a new plan of the learning");
+            var planNow = (await console.SnapshotAsync(default))["plan"]!;
+            Assert.True(planNow["rate"]!.GetValue<double>() == 2e-4 && planNow["rounds"]!.GetValue<double>() == 300 && planNow["done"]!.GetValue<double>() == 0
+                        && planNow["ended"]!.GetValue<bool>() == false, "from this version, with its rate and rounds");
+            Assert.True((await console.NewPlanAsync(0.5, 300, default))["error"] is not null, "a rate out of bounds is refused");
             var history = await console.HistoryAsync(DateTime.Now.AddMinutes(-5), DateTime.Now.AddMinutes(1), null, 1, default);
             Assert.True(history["series"]!.AsObject().Count == 2, "a history of both computers");
             Assert.Equal(1, await console.CommandAsync("PC-02", LabCommands.Shutdown, default), "the command went to one computer");
@@ -858,6 +864,29 @@ public static class LabTests
         {
             Directory.Delete(folder, true);
         }
+    }
+
+    [Test]
+    public static void TheMovingLoadFindsTheLoadThatLearnsMost()
+    {
+        // a small processor: more load learns more up to half the way, past it fewer lines (it slows down when hot)
+        static double LinesPerSecond(double level) => level <= 0.5 ? 50 + (60 * level) : 80 - (80 * (level - 0.5));
+        var control = new LoadControl();
+        var t = new DateTime(2026, 11, 12, 15, 0, 0, DateTimeKind.Utc);
+        double lines = 0;
+        var levels = new List<double>();
+        for (var s = 0; s < 3 * 3600; s += 10)
+        {
+            lines += 10 * LinesPerSecond(control.Level);
+            control.Look(t.AddSeconds(s), 0, 2, null, 90, null, (long)lines);
+            levels.Add(control.Level);
+        }
+
+        Assert.Equal(0.5, control.Level, "it stays where it learns most");
+        Assert.Equal(0.5, control.Top, "and does not go past it for a while");
+        Assert.Equal("slower", control.Holding, "because higher learns fewer lines");
+        Assert.True(levels.Max() <= 0.625, "it tried one step higher, no more");
+        Assert.True(control.Speed is > 75, $"it measures the lines per second ({control.Speed})");
     }
 
     [Test]

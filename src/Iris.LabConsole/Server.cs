@@ -39,6 +39,8 @@ public sealed class ServerPage : ConsolePage
     private ConsoleData? _last;
     private JsonObject? _state;
     private DateTimeOffset _stateAt;
+    private string _planRate = "0.0001";
+    private string _planRounds = "600";
     private string? _stateError;
     private bool _loading;
     private bool _logLoading;
@@ -221,7 +223,60 @@ public sealed class ServerPage : ConsolePage
         row.Children.Add(state);
         row.Children.Add(actions);
         _top.Children.Add(row);
+        if (data.Snapshot?["plan"] is JsonObject plan)
+        {
+            _top.Children.Add(Ui.Card(PlanCard(plan, data.Snapshot is not null && data.Error is null)));
+        }
+
         _top.Children.Add(Ui.Card(LastUpdate()));
+    }
+
+    // the plan of the learning rate: where it is, a warning when it is ending or has ended, and a new one
+    private StackPanel PlanCard(JsonObject plan, bool connected)
+    {
+        var panel = new StackPanel();
+        var ended = Ui.Bool(plan["ended"]) == true;
+        var left = Ui.Value(plan["left"]);
+        panel.Children.Add(Ui.Heading("Plán učenia", "rýchlosť učenia klesá po kosínuse od najvyššej po 2 % – potom sa model už takmer nemení"));
+        panel.Children.Add(Ui.Fact("plán", $"kolo {Ui.Number(plan["done"])} z {Ui.Number(plan["rounds"])} · najvyššia rýchlosť {Ui.Rate(plan["rate"])} · teraz {Ui.Rate(plan["now"])}"));
+        var state = ended ? "plán skončil – učebňa počíta, ale model sa už takmer neučí; začnite nový plán"
+            : left <= 36 ? $"plán končí o {left:0} kôl – pripravte nový"
+            : $"ostáva {left:0} kôl";
+        var note = Ui.Text(state, 13.5, bold: ended || left <= 36, brush: ended ? "Danger" : left <= 36 ? "Warn" : "Text");
+        note.Margin = new Thickness(0, 4, 0, 8);
+        panel.Children.Add(note);
+        panel.Children.Add(Ui.Caption("Nový plán od tejto verzie"));
+        var choices = new WrapPanel { Margin = new Thickness(0, 4, 0, 4) };
+        var rates = Ui.Segments("plan-rate", [("0.0001", "0,0001"), ("0.0002", "0,0002"), ("0.0003", "0,0003")], _planRate, key => _planRate = key);
+        rates.Margin = new Thickness(0, 0, 16, 6);
+        choices.Children.Add(rates);
+        var rounds = Ui.Segments("plan-rounds", [("300", "300 kôl"), ("600", "600"), ("900", "900"), ("1200", "1200")], _planRounds, key => _planRounds = key);
+        rounds.Margin = new Thickness(0, 0, 16, 6);
+        choices.Children.Add(rounds);
+        panel.Children.Add(choices);
+        var buttons = new WrapPanel();
+        var start = Ui.Button("Začať nový plán…", () => _ = NewPlan(), primary: ended);
+        start.IsEnabled = connected;
+        buttons.Children.Add(start);
+        panel.Children.Add(buttons);
+        panel.Children.Add(Ui.Text("Odporúčané: 0,0001 na 600 kôl (pri 10-minútových kolách asi 4 noci). Vyššia rýchlosť pohne modelom viac – najprv sa môže na pár kôl zhoršiť; najlepší model ostáva uložený.", 12, brush: "TextMuted"));
+        return panel;
+    }
+
+    private async Task NewPlan()
+    {
+        var rate = double.Parse(_planRate, CultureInfo.InvariantCulture);
+        var rounds = int.Parse(_planRounds, CultureInfo.InvariantCulture);
+        if (Actions is null || MessageBox.Show($"Nový plán učenia: od tejto verzie rýchlosť {rate.ToString("0.####", CultureInfo.GetCultureInfo("sk-SK"))} klesajúca počas {rounds} kôl.\n\nZačať?",
+                "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var answer = await Actions.NewPlan(rate, rounds);
+        var text = answer is null ? "Server nie je pripojený." : answer["error"] is { } e ? $"Server plán neprijal: {Ui.String(e)}" : "Nový plán beží – platí od nasledujúceho kola.";
+        MessageBox.Show(text, "IRIS – učebňa", MessageBoxButton.OK, answer?["ok"] is not null ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        _stateAt = DateTimeOffset.MinValue;
     }
 
     private StackPanel State()
@@ -241,7 +296,7 @@ public sealed class ServerPage : ConsolePage
         var model = s["model"];
         panel.Children.Add(Ui.Fact("model učebne", $"verzia {Ui.Number(model?["version"])} · {Ui.Number(model?["file_mb"], "0.0", " MB")}"));
         panel.Children.Add(Ui.Fact("odkiaľ", Source(Ui.String(model?["source"]))));
-        panel.Children.Add(Ui.Fact("plán učenia", $"kolo {Ui.Number(model?["plan_done"])} z {Ui.Number(model?["plan_rounds"])}, najvyššia rýchlosť {Ui.Number(model?["rate"], "0.#####")}"));
+        panel.Children.Add(Ui.Fact("plán učenia", $"kolo {Ui.Number(model?["plan_done"])} z {Ui.Number(model?["plan_rounds"])}, najvyššia rýchlosť {Ui.Rate(model?["rate"])}"));
         if (model?["best"] is JsonObject best)
         {
             var kind = Ui.String(best["kind"]) == "average" ? "priemer posledných verzií" : "model";

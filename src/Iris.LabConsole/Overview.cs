@@ -323,7 +323,7 @@ public sealed class OverviewPage : ConsolePage
     {
         var panel = new StackPanel();
         panel.Children.Add(Ui.Heading("Učenie", "chybovosť čítania (CER) podľa verzie modelu"));
-        var tests = data.Snapshot?["tests"]?.AsArray().OfType<JsonObject>().ToList() ?? [];
+        var tests = Ui.PresentRun(data.Snapshot?["tests"]?.AsArray());
         if (tests.Count >= 2)
         {
             panel.Children.Add(new Sparkline { Values = [.. tests.TakeLast(40).Select(t => Ui.Value(t["cer"]))], Height = 46, Margin = new Thickness(0, 0, 0, 8) });
@@ -340,6 +340,20 @@ public sealed class OverviewPage : ConsolePage
         var round = data.Snapshot?["rounds"]?.AsArray().OfType<JsonObject>().LastOrDefault();
         panel.Children.Add(Ui.Fact("posledné kolo", round is null ? null : $"{round["round"]}: {Ui.Number(round["computers"])} počítačov, loss {Ui.Number(round["loss"], "0.000")}"));
         panel.Children.Add(Ui.Fact("model", $"verzia {data.Snapshot?["version"] ?? 0}, {Ui.Number(data.Snapshot?["minutes"], "#,0")} min učenia"));
+        if (data.Snapshot?["plan"] is JsonObject plan)
+        {
+            var ended = Ui.Bool(plan["ended"]) == true;
+            var left = Ui.Value(plan["left"]);
+            var fact = Ui.Fact("plán učenia", ended ? "skončil – začnite nový (Server)" : $"ostáva {left:0} kôl z {Ui.Number(plan["rounds"])}, rýchlosť {Ui.Rate(plan["now"])}");
+            if ((ended || left <= 36) && fact.Children.Count > 1 && fact.Children[1] is TextBlock text)
+            {
+                text.Foreground = Ui.Brush(ended ? "Danger" : "Warn");
+                text.FontWeight = FontWeights.SemiBold;
+            }
+
+            panel.Children.Add(fact);
+        }
+
         return Ui.Card(panel);
     }
 }

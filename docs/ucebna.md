@@ -111,6 +111,13 @@ Server je slabší stroj, preto robí len ľahkú prácu, ktorá sa mu hodí:
 
 Model z vydania (nový začiatok učebne) priemer aj najlepší model zabudne – patria k predchádzajúcemu modelu.
 
+### Plán učenia (od 0.5.1)
+Rýchlosť učenia klesá počas plánu (napr. 600 kôl) po kosínuse od najvyššej po 2 %; potom sa model už takmer nemení.
+Na stránke **Server** je karta **Plán učenia**: koľko kôl ostáva, rýchlosť teraz a **Začať nový plán…** (najvyššia
+rýchlosť 0,0001 – 0,0003, 300 – 1200 kôl; odporúčané 0,0001 na 600 kôl). Keď plán končí (36 kôl a menej), konzola
+upozorní v Prehľade aj na stránke Server, keď skončil, ukáže to červenou. Graf CER ukazuje beh súčasného modelu
+(staršie testy pred výmenou modelu nie).
+
 ### Pohyblivá záťaž (od 0.5.0)
 Riadi sa **sama**: v **Nastaveniach** (pre všetky počítače, skupinu alebo jeden počítač) sa raz zapne prepínač
 **Pohyblivá záťaž** a nastavia hranice – **spodná** = Podiel času a Podiel jadier, **horná** = Najviac času a
@@ -121,7 +128,9 @@ a 100 % (a uloží). Počítač potom sám hľadá, koľko vládze:
 - pri **prvom znaku problému** (námaha, iné programy, človek pri počítači, teplo) **uberie polovicu** toho, čo pridal
   (najviac raz za pol minúty) a 5 minút nepridáva.
 
-Čas aj jadrá rastú spolu. Vlákien nad nastavenú záťaž nebude viac, ako má procesor fyzických jadier (dve vlákna
+Od 0.5.1 pohyblivá záťaž **hľadá záťaž, ktorá naučí najviac riadkov**: pred každým pridaním zmeria riadky za
+sekundu (3 minúty) a keď vyššia záťaž naučí menej (malý procesor sa pri plnej záťaži prehreje a spomalí), vráti sa a
+2 hodiny nad tú úroveň nejde. Pomalšie vlákno pri viacerých vláknach (dôvod „slow“) už nie je námaha. Čas aj jadrá rastú spolu. Vlákien nad nastavenú záťaž nebude viac, ako má procesor fyzických jadier (dve vlákna
 jedného jadra pridajú málo a viac ho zohrejú). V konzole na stránke počítača je vidno, kde pohyblivá záťaž práve
 je a prečo drží. Denník efektivity zapisuje skutočne použité vlákna a podiel času (priemer za kolo), úroveň
 pohyblivej záťaže, koľkokrát pridala a ubrala a prečo držala. Stránka **Efektivita** ju vyhodnotí oproti pevnej

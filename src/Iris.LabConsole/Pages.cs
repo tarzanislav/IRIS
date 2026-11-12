@@ -89,6 +89,9 @@ public interface IConsoleActions
     /// <summary>Starts the hub again; true when it took the request.</summary>
     Task<bool> RestartServer();
 
+    /// <summary>A new plan of the learning rate (hubs from 0.5.1): its highest rate and its rounds; null when the server is not connected.</summary>
+    Task<JsonObject?> NewPlan(double rate, int rounds);
+
     /// <summary>The classroom from the learning file of the newest signed release; true when the request was left.</summary>
     Task<bool> ModelFromRelease();
 
@@ -258,7 +261,7 @@ public sealed class RoundsPage : ConsolePage
     {
         _root.Children.Clear();
         var rounds = data.Snapshot?["rounds"]?.AsArray().OfType<JsonObject>().ToList() ?? [];
-        var tests = data.Snapshot?["tests"]?.AsArray().OfType<JsonObject>().ToList() ?? [];
+        var tests = Ui.PresentRun(data.Snapshot?["tests"]?.AsArray());
         var violet = (Color)ColorConverter.ConvertFromString("#7C6CF2");
         var pink = (Color)ColorConverter.ConvertFromString("#E86FA8");
         var green = (Color)ColorConverter.ConvertFromString("#2FA67A");
@@ -309,7 +312,7 @@ public sealed class RoundsPage : ConsolePage
             Place(table, Ui.Text(Ui.Number(r["computers"]), 13), row, 2);
             Place(table, Ui.Text(Ui.Number(r["lines"], "#,0"), 13), row, 3);
             Place(table, Ui.Text(Ui.Number(r["loss"], "0.000"), 13), row, 4);
-            Place(table, Ui.Text(Ui.Number(r["rate"], "0.00000"), 13), row, 5);
+            Place(table, Ui.Text(Ui.Rate(r["rate"]), 13), row, 5);
             Place(table, Ui.Text(Ui.Ago(r["closed"]), 13, brush: "TextMuted"), row, 6);
             row++;
         }

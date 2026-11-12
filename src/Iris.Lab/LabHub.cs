@@ -291,6 +291,7 @@ public sealed class LabHub
             {
                 ["version"] = _state.Step,
                 ["minutes"] = Math.Round(_state.Minutes),
+                ["plan"] = Plan(),
                 ["open"] = _options.Schedule.IsOpen(now),
                 ["auto_wake"] = _options.AutoWake,
                 ["schedule"] = _options.Schedule.ToJson(),
@@ -443,8 +444,7 @@ public sealed class LabHub
             if (_round is null && idle.Any(a => open || InTest(a, now)))
             {
                 var number = (_rounds.LastOrDefault()?["round"]?.GetValue<int>() ?? 0) + 1;
-                var phase = Math.Clamp((_state.Step - _state.PlanStart) / Math.Max(1, _state.PlanEnd - _state.PlanStart), 0, 1);
-                var rate = _state.PlanRate * (0.02 + 0.98 * 0.5 * (1 + Math.Cos(Math.PI * phase)));
+                var rate = RateNow();
                 _round = new Round(number, now.AddMinutes(_options.RoundMinutes), rate, TensorPack.Pack(_weights), new RoundAverage(_weights));
                 Note($"round {number} opened (model version {_state.Step}, rate {rate:0.###e0})");
             }
@@ -1201,6 +1201,23 @@ public sealed class LabHub
                     var summary = EfficiencyLog.Summary(lines, n => aliases.GetValueOrDefault(n));
                     summary["days"] = days;
                     return summary;
+                case "plan":
+                    // a new plan of the learning rate from this version on: its highest rate and its rounds
+                    var rate = header["rate"]?.GetValue<double>() ?? 1e-4;
+                    var rounds = header["rounds"]?.GetValue<int>() ?? 600;
+                    if (!(rate >= MinPlanRate && rate <= MaxPlanRate) || rounds is < 30 or > 3000)
+                    {
+                        return new JsonObject { ["error"] = $"a plan needs a rate of {MinPlanRate:0.#####}–{MaxPlanRate:0.####} and 30–3000 rounds" };
+                    }
+
+                    lock (_gate)
+                    {
+                        _state = _state with { PlanStart = _state.Step, PlanEnd = _state.Step + rounds, PlanRate = rate };
+                        Save();
+                    }
+
+                    Note($"console {console}: a new plan of the learning – rate {rate:0.#####} over {rounds} rounds from version {_state.Step}");
+                    return new JsonObject { ["ok"] = true, ["plan"] = Plan() };
                 case "restart":
                     RestartAsked = true;
                     Note($"console {console}: restart of the hub");
@@ -1224,6 +1241,35 @@ public sealed class LabHub
         {
             return new JsonObject { ["error"] = e.Message };
         }
+    }
+
+    /// <summary>The least and the most highest rate a plan of the learning may have.</summary>
+    public const double MinPlanRate = 1e-5;
+
+    public const double MaxPlanRate = 1e-3;
+
+    // the plan of the learning rate: rounds done of all, the highest rate, the rate now and whether it has ended
+    // (then the learning goes on at the lowest rate, 2 % – it hardly changes the model any more)
+    private JsonObject Plan()
+    {
+        var rounds = _state.PlanEnd - _state.PlanStart;
+        var done = _state.Step - _state.PlanStart;
+        return new JsonObject
+        {
+            ["rounds"] = Math.Round(rounds),
+            ["done"] = Math.Round(done),
+            ["left"] = Math.Max(0, Math.Round(rounds - done)),
+            ["rate"] = _state.PlanRate,
+            ["now"] = RateNow(),
+            ["ended"] = done >= rounds,
+        };
+    }
+
+    // the rate of the next round: down the cosine of the plan, never below 2 % of its highest
+    private double RateNow()
+    {
+        var phase = Math.Clamp((_state.Step - _state.PlanStart) / Math.Max(1, _state.PlanEnd - _state.PlanStart), 0, 1);
+        return _state.PlanRate * (0.02 + 0.98 * 0.5 * (1 + Math.Cos(Math.PI * phase)));
     }
 
     /// <summary>What the server is like now: program, time, model, disk, memory, fonts, the updater's last result.</summary>

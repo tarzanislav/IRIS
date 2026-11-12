@@ -563,6 +563,9 @@ public sealed class MainWindow : Window, IConsoleActions
 
     public async Task<IReadOnlyList<string>?> ServerLog(string name, int lines) => await AskServer<IReadOnlyList<string>>(c => cancel => c.ServerLogAsync(name, lines, cancel), 30);
 
+    public async Task<JsonObject?> NewPlan(double rate, int rounds) =>
+        await AskServer<JsonObject?>(c => async cancel => await c.NewPlanAsync(rate, rounds, cancel), 30);
+
     public async Task<bool> RestartServer()
     {
         var done = await AskServer<bool>(c => c.RestartServerAsync, 10);

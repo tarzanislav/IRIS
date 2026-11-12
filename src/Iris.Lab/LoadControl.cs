@@ -9,6 +9,10 @@ namespace Iris.Lab;
 /// gives back half of what it took (at most every half minute) and waits five minutes before it adds again. Adding
 /// slowly and giving back fast keeps it from swinging, and the set load is always the floor: the console's choice is
 /// what the computer does when it cannot do more.
+/// Given the lines it learns, it also looks for the load that learns most: it measures the lines per second at a
+/// level before it adds, and when the step up learns fewer (a small processor that slows down when it heats up at
+/// full load) it goes back and does not go past that level for two hours. A thread that learns a little slower
+/// because there are more of them is no trouble – only fewer lines in all are.
 /// </summary>
 public sealed class LoadControl
 {
@@ -33,22 +37,80 @@ public sealed class LoadControl
     /// <summary>Seconds since the last input under which someone is taken to be at the computer.</summary>
     public const double Present = 120;
 
+    /// <summary>How long it measures the lines per second at a level before it compares.</summary>
+    public static readonly TimeSpan Measure = TimeSpan.FromMinutes(3);
+
+    /// <summary>How long a level that learned fewer lines stays the top.</summary>
+    public static readonly TimeSpan Ceiling = TimeSpan.FromHours(2);
+
+    /// <summary>How much fewer lines a step up may learn before it is taken back (the measuring is not exact).</summary>
+    public const double Slower = 0.04;
+
+    // a look later than this after the one before (the learning paused between rounds): the measuring starts again
+    private static readonly TimeSpan Gap = TimeSpan.FromSeconds(45);
+
     private DateTime _changed = DateTime.MinValue;
+    private DateTime _lastLook = DateTime.MinValue;
+    private DateTime _measuredFrom = DateTime.MinValue;
+    private long _linesFrom;
+    private double? _below;           // lines per second at the level before the last step up
+    private double _belowLevel;
+    private double _top = 1;
+    private DateTime _topUntil = DateTime.MinValue;
     private DateTime _calmSince = DateTime.MinValue;
     private DateTime _waitUntil = DateTime.MinValue;
 
     /// <summary>Where it is: 0 = the set load, 1 = the most allowed.</summary>
     public double Level { get; private set; }
 
-    /// <summary>Why it does not add now (strain, others, user, warm), or null while it may.</summary>
+    /// <summary>Why it does not add now (strain, others, user, warm, slower – the step up learned fewer lines), or null while it may.</summary>
     public string? Holding { get; private set; }
+
+    /// <summary>Lines per second at the present level (the last measuring), or null while not measured.</summary>
+    public double? Speed { get; private set; }
+
+    /// <summary>The highest level it may go to now (lower for a while after a step up learned fewer lines).</summary>
+    public double Top => _top;
 
     /// <summary>
     /// One look at the computer while it learns (every few seconds); returns whether the level changed. strain is the
-    /// level of the strain judge (0 calm, 1 busy, 2 struggling), temperature and idle seconds null where unknown.
+    /// level of the strain judge (0 calm, 1 busy, 2 struggling) – without the learning's own slowing down, temperature
+    /// and idle seconds null where unknown, lines all lines learned so far (null: it does not look for the best load).
     /// </summary>
-    public bool Look(DateTime now, int strain, double cpuOthers, double? temperature, double hot, double? idleSeconds)
+    public bool Look(DateTime now, int strain, double cpuOthers, double? temperature, double hot, double? idleSeconds, long? lines = null)
     {
+        if (lines is { } count)
+        {
+            if (now - _lastLook > Gap || _measuredFrom == DateTime.MinValue)
+            {
+                (_measuredFrom, _linesFrom) = (now, count);
+            }
+
+            _lastLook = now;
+            Speed = now - _measuredFrom >= Measure ? (count - _linesFrom) / (now - _measuredFrom).TotalSeconds : null;
+            if (now >= _topUntil)
+            {
+                _top = 1;
+            }
+
+            // the step up learned fewer lines than the level below: back, and not past it for a while
+            if (_below is { } below && Speed is { } speed && Level > _belowLevel)
+            {
+                if (speed < below * (1 - Slower))
+                {
+                    _top = _belowLevel;
+                    _topUntil = now + Ceiling;
+                    Level = _belowLevel;
+                    Holding = "slower";
+                    Moved(now, count);
+                    _below = null;
+                    return true;
+                }
+
+                _below = null;
+            }
+        }
+
         Holding = strain >= 1 ? "strain"
             : cpuOthers >= Others ? "others"
             : idleSeconds is { } idle && idle < Present ? "user"
@@ -67,20 +129,41 @@ public sealed class LoadControl
                 Level = Level <= Up / 2 ? 0 : Level / 2;
                 _changed = now;
                 _waitUntil = now + Wait;
+                _below = null;
+                Moved(now, lines);
                 return true;
             }
 
             return false;
         }
 
-        if (Level < 1 && now - _calmSince >= Calm && now - _changed >= Calm && now >= _waitUntil)
+        var measured = lines is null || Speed is not null;
+        if (Level < _top && measured && now - _calmSince >= Calm && now - _changed >= Calm && now >= _waitUntil)
         {
-            Level = Math.Min(1, Level + Up);
+            (_below, _belowLevel) = (Speed, Level);
+            Level = Math.Min(_top, Level + Up);
             _changed = now;
+            Moved(now, lines);
             return true;
         }
 
+        if (Level >= _top && _top < 1)
+        {
+            Holding = "slower";
+        }
+
         return false;
+    }
+
+    // a new level: the measuring of its lines per second starts
+    private void Moved(DateTime now, long? lines)
+    {
+        _changed = now;
+        if (lines is { } count)
+        {
+            (_measuredFrom, _linesFrom) = (now, count);
+            Speed = null;
+        }
     }
 
     /// <summary>Back to the set load (the moving load switched off, or new settings).</summary>
@@ -88,7 +171,9 @@ public sealed class LoadControl
     {
         Level = 0;
         Holding = null;
-        _changed = _calmSince = _waitUntil = DateTime.MinValue;
+        Speed = _below = null;
+        _top = 1;
+        _changed = _calmSince = _waitUntil = _lastLook = _measuredFrom = _topUntil = DateTime.MinValue;
     }
 
     /// <summary>
@@ -115,7 +200,13 @@ public sealed class LoadControl
     /// <summary>The threads of a share of the logical processors (at least one).</summary>
     public static int Threads(double cores, int logical) => Math.Max(1, (int)Math.Floor(logical * cores));
 
-    public JsonObject ToJson() => new() { ["level"] = Math.Round(Level, 3), ["holding"] = Holding };
+    public JsonObject ToJson() => new()
+    {
+        ["level"] = Math.Round(Level, 3),
+        ["holding"] = Holding,
+        ["speed"] = Speed is { } s ? Math.Round(s, 1) : null,
+        ["top"] = Math.Round(_top, 3),
+    };
 }
 
 /// <summary>The load the console set for a computer: the share of time and of cores, and with the moving load the most of both.</summary>

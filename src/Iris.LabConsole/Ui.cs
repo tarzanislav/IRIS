@@ -231,6 +231,28 @@ internal static class Ui
     public static string Temperature(JsonObject agent) =>
         agent["status"]?["signals"]?["temperature_fixed"]?.GetValue<bool>() == true ? "teplota nedostupná" : Number(agent["status"]?["machine"]?["temperature"], "0", " °C");
 
+    /// <summary>A learning rate with as many places as it needs (the lowest rate of a plan is 0.000002, not 0.00000).</summary>
+    public static string Rate(JsonNode? node) => Number(node, "0.#######");
+
+    /// <summary>
+    /// The tests of the model's present run: a jump of more than a thousand versions (a model from a release, after one
+    /// learned from the beginning) starts a new run, and the chart would squeeze it into its right edge.
+    /// </summary>
+    public static List<JsonObject> PresentRun(JsonArray? tests)
+    {
+        var list = tests?.OfType<JsonObject>().ToList() ?? [];
+        var start = 0;
+        for (var i = 1; i < list.Count; i++)
+        {
+            if (Value(list[i]["version"]) - Value(list[i - 1]["version"]) > 1000)
+            {
+                start = i;
+            }
+        }
+
+        return list[start..];
+    }
+
     public static string Number(JsonNode? node, string format = "0", string unit = "") =>
         Value(node) is var d && double.IsFinite(d) ? d.ToString(format, CultureInfo.InvariantCulture) + unit : "–";
 

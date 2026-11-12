@@ -372,9 +372,11 @@ public sealed class ComputersPage : ConsolePage
                 "others" => "drží: pracujú iné programy",
                 "user" => "drží: niekto pri ňom pracuje",
                 "warm" => "drží: blíži sa hranica teploty",
+                "slower" => "drží: vyššia záťaž by naučila menej riadkov",
                 _ => "pridáva, kým je pokojný",
             };
-            var line = Ui.Text($"pohyblivá záťaž: {Ui.Percent(Ui.Value(moving["level"]))} cesty od nastavenej k najvyššej · teraz {Ui.Percent(Ui.Value(status["duty"]))} času na {Ui.Number(status["threads"])} vláknach · {holding}", 13, brush: "Text");
+            var speed = moving["speed"] is { } s ? $" · {Ui.Number(s, "0.0")} riadkov/s" : "";
+            var line = Ui.Text($"pohyblivá záťaž: {Ui.Percent(Ui.Value(moving["level"]))} cesty od nastavenej k najvyššej · teraz {Ui.Percent(Ui.Value(status["duty"]))} času na {Ui.Number(status["threads"])} vláknach{speed} · {holding}", 13, brush: "Text");
             line.Margin = new Thickness(0, 0, 0, 6);
             _live.Children.Add(line);
         }

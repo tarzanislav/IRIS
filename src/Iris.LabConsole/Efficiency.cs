@@ -117,7 +117,7 @@ public sealed class EfficiencyPage : ConsolePage
                                    $"riadky za sekundu kola {Ui.Number(all["per_second"], "0.0")} oproti {Ui.Number(all["per_second_fixed"], "0.0")}" +
                                    (gain is { } g ? $" ({g:+0;−0} %)" : "") + $" · priemerná úroveň {Ui.Percent(Ui.Value(all["level"]))} cesty k najvyššej", 13, bold: true));
         var note = Ui.Text("Riadky/s kola = čo sa za noc naučí (aj s oddychom). Na vlákno = rýchlosť jedného pracujúceho vlákna. Úroveň 0 % = nastavená záťaž, 100 % = najvyššia. " +
-                           "Uberania = koľkokrát za kolo záťaž ubrala; prečo držala = čo ju brzdilo (námaha, iné programy, človek, teplo).", 12, brush: "TextMuted");
+                           "Uberania = koľkokrát za kolo záťaž ubrala; prečo držala = čo ju brzdilo (námaha, iné programy, človek, teplo, alebo že vyššia záťaž naučí menej riadkov).", 12, brush: "TextMuted");
         note.Margin = new Thickness(0, 4, 0, 8);
         panel.Children.Add(note);
         string[] headers = ["Počítač", "Kolá", "Úroveň", "Vlákna · čas", "Riadky/s", "Pevná", "Zisk", "Na vlákno", "Učenie % CPU", "Trápil sa", "Uberania na kolo", "Prečo držala"];
@@ -186,6 +186,7 @@ public sealed class EfficiencyPage : ConsolePage
         "others" => "iné programy",
         "user" => "človek pri PC",
         "warm" => "teplo",
+        "slower" => "vyššie sa naučí menej",
         _ => code ?? "?",
     };
 
