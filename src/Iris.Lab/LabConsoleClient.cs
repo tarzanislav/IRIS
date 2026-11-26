@@ -119,6 +119,10 @@ public sealed class LabConsoleClient : IDisposable
     public Task<JsonObject> NewPlanAsync(double rate, int rounds, CancellationToken cancel) =>
         Server("plan", new JsonObject { ["rate"] = rate, ["rounds"] = rounds }, cancel);
 
+    /// <summary>The last diagnosis of every computer, or of one (hubs from 0.5.3): {"diagnoses": [{computer, received, report}, …]}.</summary>
+    public Task<JsonObject> DiagnosesAsync(string? computer, CancellationToken cancel) =>
+        Server("diagnoses", new JsonObject { ["computer"] = computer }, cancel);
+
     /// <summary>Starts the hub again (a round that runs is lost); its service brings it back in about half a minute.</summary>
     public async Task<bool> RestartServerAsync(CancellationToken cancel) =>
         (await Server("restart", [], cancel))["ok"]?.GetValue<bool>() ?? false;

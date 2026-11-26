@@ -112,12 +112,19 @@ public sealed class LabConfig
     }
 
     /// <summary>
-    /// A change from the console: {"alias": {computer, name}}, {"group": {computer, name}} (an empty name removes it)
-    /// or {"settings": {scope: all | group | computer, name, values}} (values replace that scope's settings; empty
-    /// values remove them). Returns false for anything else.
+    /// A change from the console: {"alias": {computer, name}}, {"group": {computer, name}} (an empty name removes it),
+    /// {"settings": {scope: all | group | computer, name, values}} (values replace that scope's settings; empty
+    /// values remove them), or {"merge": [{scope: group | computer, names: […], set: {…}, remove: […]}, …]} (only the
+    /// keys named change, in many groups or computers at once – hubs from 0.5.3; all of it or nothing). Returns false
+    /// for anything else.
     /// </summary>
     public bool Apply(JsonObject change)
     {
+        if (change["merge"] is JsonArray merge)
+        {
+            return Merge(merge);
+        }
+
         if (change["alias"] is JsonObject alias && alias["computer"]?.GetValue<string>() is { Length: > 0 } computer)
         {
             Set(Aliases, computer, alias["name"]?.GetValue<string>()?.Trim());
@@ -149,6 +156,60 @@ public sealed class LabConfig
         }
 
         return false;
+    }
+
+    // some keys of the settings of many groups or computers: set, or removed (then they come from above again)
+    private bool Merge(JsonArray operations)
+    {
+        var parsed = new List<(Dictionary<string, JsonObject> Map, List<string> Names, JsonObject Set, List<string> Remove)>();
+        foreach (var node in operations)
+        {
+            if (node is not JsonObject operation)
+            {
+                return false;
+            }
+
+            var map = (operation["scope"] as JsonValue)?.TryGetValue(out string? scope) == true
+                ? scope switch { "group" => GroupSettings, "computer" => ComputerSettings, _ => null }
+                : null;
+            var names = (operation["names"] as JsonArray)?.Select(n => (n as JsonValue)?.TryGetValue(out string? name) == true ? name?.Trim() : null).ToList();
+            if (map is null || names is null || names.Count == 0 || names.Any(n => string.IsNullOrEmpty(n)))
+            {
+                return false;
+            }
+
+            var remove = (operation["remove"] as JsonArray ?? [])
+                .Select(n => (n as JsonValue)?.TryGetValue(out string? key) == true ? key : null)
+                .Where(k => k is not null && (Numbers.ContainsKey(k) || Switches.Contains(k)))
+                .Select(k => k!).ToList();
+            parsed.Add((map, [.. names.Select(n => n!)], Clean(operation["set"] as JsonObject), remove));
+        }
+
+        if (parsed.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var (map, names, set, remove) in parsed)
+        {
+            foreach (var name in names)
+            {
+                var values = map.TryGetValue(name, out var now) ? (JsonObject)now.DeepClone() : [];
+                foreach (var key in remove)
+                {
+                    values.Remove(key);
+                }
+
+                foreach (var (key, value) in set)
+                {
+                    values[key] = value?.DeepClone();
+                }
+
+                Replace(map, name, values);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>A computer that left the classroom: its name in the console, its group and its own settings go.</summary>

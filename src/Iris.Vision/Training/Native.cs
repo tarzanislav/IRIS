@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Iris.Numerics;
 
 namespace Iris.Vision.Training;
 
@@ -28,6 +29,7 @@ internal sealed unsafe class Buffer<T> : IDisposable
             // a little more than asked, so a slightly wider batch does not allocate again
             var capacity = Math.Max(count, _capacity + _capacity / 4);
             _data = (T*)NativeMemory.AlignedAlloc((nuint)(capacity * sizeof(T)), 64);
+            NativeUse.Add((capacity - _capacity) * sizeof(T));
             _capacity = capacity;
         }
 
@@ -42,6 +44,7 @@ internal sealed unsafe class Buffer<T> : IDisposable
     public void Dispose()
     {
         NativeMemory.AlignedFree(_data);
+        NativeUse.Add(-_capacity * sizeof(T));
         _data = null;
         _capacity = 0;
     }

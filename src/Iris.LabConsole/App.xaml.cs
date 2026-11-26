@@ -87,6 +87,7 @@ public partial class App : Application
                     ["computer"] = i <= 18 ? $"PC-{i:00}" : null,
                 })]),
             };
+            window.Service.Fake([.. Enumerable.Range(1, 8).Select(FakeDiagnosis)]);
             window.Show();
             foreach (var page in window.PageNames.ToList())
             {
@@ -211,7 +212,19 @@ public partial class App : Application
                 ["group"] = model,
                 ["model"] = model,
                 ["version"] = i == 7 ? "0.3.9" : "0.4.0",
-                ["settings"] = new JsonObject { ["duty"] = 0.5, ["cores"] = i <= 12 ? 0.5 : 0.25, ["eco"] = true, ["hot"] = 90.0, ["learn"] = true, ["wake"] = true, ["update"] = true },
+                ["settings"] = new JsonObject
+                {
+                    ["duty"] = 0.5,
+                    ["cores"] = i <= 12 ? 0.5 : 0.25,
+                    ["eco"] = true,
+                    ["hot"] = 90.0,
+                    ["learn"] = true,
+                    ["wake"] = true,
+                    ["update"] = true,
+                    ["moving"] = i <= 6,
+                    ["duty_max"] = i <= 6 ? 0.75 : 1.0,
+                    ["cores_max"] = i <= 6 ? 0.7 : 1.0,
+                },
                 ["inventory"] = Inventory(i, model),
                 ["address"] = $"10.0.0.{100 + i}",
                 ["mac"] = $"00-11-22-33-44-{i:X2}",
@@ -228,7 +241,9 @@ public partial class App : Application
                 {
                     ["state"] = state,
                     ["eco"] = true,
-                    ["threads"] = i <= 12 ? 10 : 6,
+                    ["threads"] = i <= 6 ? 14 : i <= 12 ? 10 : 6,
+                    ["duty"] = i <= 6 ? 0.74 : 0.5,
+                    ["moving"] = i <= 6 ? new JsonObject { ["level"] = 0.95, ["holding"] = i == 2 ? "slower" : null, ["speed"] = 86.4 } : null,
                     ["too_hot"] = i == 16,
                     ["machine"] = new JsonObject { ["cpu"] = Math.Round(cpu), ["cpu_own"] = Math.Round(cpu - 4), ["memory"] = 41, ["temperature"] = i == 16 ? 91 : 46 + i % 7 * 3, ["cores"] = 20 },
                     ["last"] = new JsonObject { ["lines_per_second"] = Math.Round(11 + random.NextDouble() * 4, 1) },
@@ -326,14 +341,55 @@ public partial class App : Application
                 ["settings"] = new JsonObject
                 {
                     ["all"] = new JsonObject { ["duty"] = 0.5 },
-                    ["groups"] = new JsonObject { ["Example Desk 5000"] = new JsonObject { ["cores"] = 0.25 } },
-                    ["computers"] = new JsonObject { ["PC-03"] = new JsonObject { ["hot"] = 85.0 } },
+                    ["groups"] = new JsonObject
+                    {
+                        ["Example Desk 3000"] = new JsonObject { ["moving"] = true, ["duty_max"] = 0.75, ["cores_max"] = 0.7 },
+                        ["Example Desk 5000"] = new JsonObject { ["cores"] = 0.25 },
+                    },
+                    ["computers"] = new JsonObject
+                    {
+                        ["PC-03"] = new JsonObject { ["hot"] = 85.0 },
+                        ["PC-07"] = new JsonObject { ["moving"] = false },
+                    },
                 },
                 ["defaults"] = new JsonObject { ["duty"] = 0.5, ["cores"] = 0.5, ["eco"] = true, ["hot"] = 90.0, ["learn"] = true, ["wake"] = true, ["update"] = true },
             },
         };
         data.History = new JsonObject { ["series"] = series, ["bucket"] = 5 };
     }
+
+    // an invented diagnosis (the shape the agents send): the fourth one with an agent that grew, the sixth short of memory
+    private static JsonObject FakeDiagnosis(int i) => new()
+    {
+        ["computer"] = $"PC-{i:00}",
+        ["received"] = DateTime.Now.AddMinutes(-i).ToString("o", CultureInfo.InvariantCulture),
+        ["report"] = new JsonObject
+        {
+            ["version"] = Iris.Lab.LabUpdates.Version,
+            ["agent"] = new JsonObject
+            {
+                ["private_mb"] = i == 4 ? 7400 : 1150 + i * 20,
+                ["working_set_mb"] = i == 4 ? 6900 : 980 + i * 15,
+                ["peak_working_set_mb"] = 1400,
+                ["heap_mb"] = 240,
+                ["heap_committed_mb"] = 380,
+                ["native_mb"] = 610,
+                ["threads"] = 31,
+                ["pool_threads"] = 14,
+                ["handles"] = 612,
+                ["collections"] = new JsonArray(4100, 2200, 900),
+                ["up_hours"] = i == 4 ? 190 : 20 + i,
+            },
+            ["system"] = new JsonObject { ["total_mb"] = 16084, ["available_mb"] = i == 6 ? 900 : 9100, ["used_percent"] = i == 6 ? 94 : 43, ["committed_mb"] = 11800, ["commit_limit_mb"] = 18400 },
+            ["system_up_hours"] = 210,
+            ["programs"] = new JsonArray(
+                new JsonObject { ["name"] = "iris-agent", ["count"] = 1, ["private_mb"] = i == 4 ? 7400 : 1150, ["working_set_mb"] = 980 },
+                new JsonObject { ["name"] = "MsMpEng", ["count"] = 1, ["private_mb"] = 310, ["working_set_mb"] = 190 },
+                new JsonObject { ["name"] = "svchost", ["count"] = 74, ["private_mb"] = 640, ["working_set_mb"] = 820 }),
+            ["lines_total"] = 1_200_000 + i * 1000,
+            ["status"] = new JsonObject { ["state"] = "learning", ["threads"] = 14, ["duty"] = 0.74 },
+        },
+    };
 
     // what an invented computer is (the shape the agents send)
     private static JsonObject Inventory(int i, string model) => new()

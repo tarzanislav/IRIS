@@ -62,6 +62,12 @@ public enum MessageKind : byte
     /// the learning file of the newest signed release; hub → console: the answer (JSON). Hubs before 0.4.3 do not know it.
     /// </summary>
     Server = 14,
+
+    /// <summary>
+    /// Agent → hub: its diagnosis, asked for by the command "diagnose" (memory of the agent and of the computer, the
+    /// programs that hold most memory). Hubs and agents before 0.5.3 do not know it.
+    /// </summary>
+    Diagnosis = 15,
 }
 
 /// <summary>A message: its kind, a small JSON header and binary data (tensors), possibly empty.</summary>

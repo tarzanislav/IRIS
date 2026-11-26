@@ -22,6 +22,9 @@ public sealed class ComputersPage : ConsolePage
     private string? _detailFor;
     private string? _detailConfig;
     private ConsoleData? _last;
+    private readonly Dictionary<string, JsonObject> _diagnoses = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _diagnosesLoaded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UIElement> _memoryCharts = new(StringComparer.OrdinalIgnoreCase);
 
     public ComputersPage()
     {
@@ -297,7 +300,109 @@ public sealed class ComputersPage : ConsolePage
         settings.Children.Add(new SettingsEditor("computer", name, data.Own("computer", name), data.Inherited("computer", Ui.String(agent["group"])), Configure, narrow: true));
         panel.Children.Add(Ui.Card(settings));
 
+        panel.Children.Add(Ui.Card(Diagnosis(name, agent["connected"]?.GetValue<bool>() == true)));
         panel.Children.Add(Ui.Card(Hardware(agent)));
+        return panel;
+    }
+
+    // the diagnosis of this computer: asked for here, kept on the server; the memory of the agent over the last days
+    private StackPanel Diagnosis(string name, bool connected)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Heading("Diagnostika", "pamäť agenta a počítača, programy s najviac pamäťou – to, čo ukáže Správca úloh"));
+        var body = new StackPanel();
+        var chart = new ContentControl();
+        var note = Ui.Text("", 12.5, brush: "TextMuted");
+        note.Margin = new Thickness(0, 6, 0, 0);
+        void Fill()
+        {
+            body.Children.Clear();
+            if (_diagnoses.TryGetValue(name, out var entry))
+            {
+                body.Children.Add(DiagnosisView.Details(entry));
+            }
+            else
+            {
+                body.Children.Add(Ui.Text("Zatiaľ žiadna diagnostika – „Zistiť teraz“ sa opýta počítača (program od 0.5.3).", 13, brush: "TextMuted"));
+            }
+        }
+
+        Fill();
+        if (_memoryCharts.TryGetValue(name, out var shown))
+        {
+            chart.Content = shown;
+        }
+
+        if (Actions is { } actions && _diagnosesLoaded.Add(name))
+        {
+            // what the server keeps from before (also from another console)
+            async Task Kept()
+            {
+                var kept = DiagnosisView.Entries(await actions.Diagnoses(name)).FirstOrDefault();
+                if (kept is not null && !_diagnoses.ContainsKey(name))
+                {
+                    _diagnoses[name] = kept;
+                    Fill();
+                }
+            }
+
+            _ = Kept();
+        }
+
+        var buttons = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+        var ask = Ui.Small("Zistiť teraz", async () =>
+        {
+            if (Actions is null)
+            {
+                return;
+            }
+
+            note.Text = "Pýtam sa počítača…";
+            var (entries, silent) = await DiagnosisView.AskAsync(Actions, [name]);
+            if (entries.FirstOrDefault(e => string.Equals(Ui.String(e["computer"]), name, StringComparison.OrdinalIgnoreCase)) is { } entry)
+            {
+                _diagnoses[name] = entry;
+            }
+
+            note.Text = silent.Count > 0 ? "Počítač neodpovedal – má starší program (aktualizujte ho) alebo práve nie je pripojený." : "";
+            Fill();
+        }, primary: true);
+        if (!connected)
+        {
+            ask.IsEnabled = false;
+            ask.ToolTip = "Počítač nie je pripojený.";
+            ToolTipService.SetShowOnDisabled(ask, true);
+        }
+
+        buttons.Children.Add(ask);
+        buttons.Children.Add(Ui.Small("Pamäť za 7 dní", async () =>
+        {
+            if (Actions is null)
+            {
+                return;
+            }
+
+            note.Text = "Čítam históriu zo servera…";
+            var element = await DiagnosisView.MemoryOverDays(Actions, name, 7);
+            _memoryCharts[name] = element;
+            chart.Content = element;
+            note.Text = "";
+        }));
+        buttons.Children.Add(Ui.Small("Uložiť správu…", () =>
+        {
+            if (!_diagnoses.TryGetValue(name, out var entry) || _last is null)
+            {
+                note.Text = "Najprv „Zistiť teraz“.";
+                return;
+            }
+
+            var file = DiagnosisView.Save(DiagnosisView.Report([entry], _last), name);
+            note.Text = file is null ? "" : $"Uložené: {file}";
+        }));
+        panel.Children.Add(body);
+        panel.Children.Add(buttons);
+        panel.Children.Add(note);
+        panel.Children.Add(chart);
         return panel;
     }
 

@@ -8,8 +8,9 @@ namespace Iris.LabConsole;
 /// <summary>
 /// The service of the classroom: switch computers on (Wake-on-LAN by the hub) and off (or restart them) – one, the
 /// ones ticked (a whole group with one click), or all. Shutting down always asks first; Windows warns the user of
-/// the computer and waits a minute. And the removal: IRIS uninstalled from one computer, or a computer that left the
-/// classroom taken off the list.
+/// the computer and waits a minute. The moving load at a glance – where it is on, with which bounds, set where – and
+/// set for a whole group or the ticked computers. The diagnosis of one, the ticked or all computers. And the removal:
+/// IRIS uninstalled from one computer, or a computer that left the classroom taken off the list.
 /// </summary>
 public sealed class ServicePage : ConsolePage
 {
@@ -17,6 +18,16 @@ public sealed class ServicePage : ConsolePage
     private readonly Border _offHost = new();
     private readonly Border _onHost = new();
     private readonly Border _removeHost = new();
+    private readonly Border _movingHost = new();
+    private readonly Border _diagnosisHost = new();
+    private readonly HashSet<string> _movingPicked = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _diagnosisPicked = new(StringComparer.OrdinalIgnoreCase);
+    private double _movingDuty = 0.75;
+    private double _movingCores = 0.7;
+    private string _diagnosisMode = "all";
+    private List<JsonObject>? _diagnoses;
+    private string? _diagnosisNote;
+    private ConsoleData? _data;
     private string? _removeChoice;
     private bool _now;
     private bool _force;
@@ -30,8 +41,16 @@ public sealed class ServicePage : ConsolePage
 
     public override string Heading => "Servis";
 
+    /// <summary>Invented diagnoses for the self-test (pictures of the page).</summary>
+    public void Fake(List<JsonObject> diagnoses)
+    {
+        _diagnoses = diagnoses;
+        _diagnosisNote = $"Odpovedali všetky ({diagnoses.Count}).";
+    }
+
     public override void Show(ConsoleData data)
     {
+        _data = data;
         _root.Children.Clear();
         if (ErrorNote(data) is { } error)
         {
@@ -59,7 +78,17 @@ public sealed class ServicePage : ConsolePage
             _removeHost.Child = Ui.Card(Remove(data));
         }
 
-        foreach (var host in new[] { _offHost, _onHost, _removeHost })
+        if (_movingHost.Child is null || !(_movingHost.IsMouseOver || _movingHost.IsKeyboardFocusWithin))
+        {
+            _movingHost.Child = Ui.Card(Moving(data));
+        }
+
+        if (_diagnosisHost.Child is null || !(_diagnosisHost.IsMouseOver || _diagnosisHost.IsKeyboardFocusWithin))
+        {
+            _diagnosisHost.Child = Ui.Card(Diagnosis(data));
+        }
+
+        foreach (var host in new[] { _offHost, _onHost, _movingHost, _diagnosisHost, _removeHost })
         {
             if (host.Parent is Panel parent)
             {
@@ -183,6 +212,305 @@ public sealed class ServicePage : ConsolePage
         panel.Children.Add(buttons);
         panel.Children.Add(Ui.Text("Odstrániť zo zoznamu sa dá len nepripojený počítač (napr. ktorý z učebne odišiel). Pri preinštalovaní Windows ho neodstraňujte – s rovnakým názvom nadviaže na všetko.", 12.5, brush: "TextMuted"));
         return panel;
+    }
+
+    // the moving load of every computer: on or off, its bounds and where that is set; on or off for a whole group or
+    // for the ticked computers, with the upper bounds chosen here (the lower ones stay as they are)
+    private StackPanel Moving(ConsoleData data)
+    {
+        var agents = data.Agents.Where(a => Ui.String(a["state"]) != "uninstalled").ToList();
+        _movingPicked.RemoveWhere(n => !agents.Any(a => Same(a, n)));
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Heading("Pohyblivá záťaž", $"zapnutá na {agents.Count(MovingOn)} z {agents.Count} počítačov; zapnite ju celej skupine alebo vybraným počítačom"));
+        var bounds = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        bounds.Children.Add(Bound("Najviac času", _movingDuty, v => _movingDuty = v));
+        bounds.Children.Add(Bound("Najviac jadier", _movingCores, v => _movingCores = v));
+        panel.Children.Add(bounds);
+        double[] widths = [0.35, 2.0, 0.9, 2.2, 1.1, 2.3];
+        foreach (var (group, all) in data.Groups)
+        {
+            var members = all.Where(a => Ui.String(a["state"]) != "uninstalled").ToList();
+            if (members.Count == 0)
+            {
+                continue;
+            }
+
+            var names = members.Select(m => Ui.String(m["name"]) ?? "").ToList();
+            var head = new WrapPanel { Margin = new Thickness(0, 12, 0, 4) };
+            var title = Ui.Text($"{(group.Length == 0 ? "bez skupiny" : group)} · zapnutá na {members.Count(MovingOn)} z {members.Count}", 14, bold: true);
+            title.VerticalAlignment = VerticalAlignment.Center;
+            title.Margin = new Thickness(0, 0, 12, 0);
+            head.Children.Add(title);
+            var picked = names.All(_movingPicked.Contains);
+            head.Children.Add(Ui.Small(picked ? "− zrušiť výber" : "+ vybrať všetky", () =>
+            {
+                foreach (var name in names)
+                {
+                    if (picked)
+                    {
+                        _movingPicked.Remove(name);
+                    }
+                    else
+                    {
+                        _movingPicked.Add(name);
+                    }
+                }
+
+                Redraw(data, _movingHost);
+            }));
+            if (group.Length > 0)
+            {
+                head.Children.Add(Ui.Small($"Celej skupine zapnúť ({Ui.Percent(_movingDuty)} / {Ui.Percent(_movingCores)})", () => _ = MovingForGroup(data, group, members, on: true), primary: true));
+                head.Children.Add(Ui.Small("Celej skupine vypnúť", () => _ = MovingForGroup(data, group, members, on: false)));
+            }
+
+            panel.Children.Add(head);
+            panel.Children.Add(MovingRow(widths, [null, Ui.Caption("Počítač"), Ui.Caption("Zapnutá"), Ui.Caption("Hranice (čas · jadrá)"), Ui.Caption("Nastavená"), Ui.Caption("Teraz")]));
+            foreach (var agent in members)
+            {
+                var name = Ui.String(agent["name"]) ?? "?";
+                var settings = agent["settings"] as JsonObject;
+                var on = MovingOn(agent);
+                var box = new CheckBox { IsChecked = _movingPicked.Contains(name), VerticalAlignment = VerticalAlignment.Center };
+                box.Checked += (_, _) => _movingPicked.Add(name);
+                box.Unchecked += (_, _) => _movingPicked.Remove(name);
+                var limits = $"{Ui.Percent(Share(settings?["duty"], 0.5))}–{Ui.Percent(Share(settings?["duty_max"], 1))} · {Ui.Percent(Share(settings?["cores"], 0.5))}–{Ui.Percent(Share(settings?["cores_max"], 1))}";
+                var moving = agent["connected"]?.GetValue<bool>() == true ? agent["status"]?["moving"] as JsonObject : null;
+                var now = moving is null
+                    ? (agent["connected"]?.GetValue<bool>() == true ? (on ? "čaká na kolo" : "pevná záťaž") : "nepripojený")
+                    : $"{Ui.Number(agent["status"]?["threads"])} vl. · {Ui.Percent(Ui.Value(agent["status"]?["duty"]))} času · úroveň {Ui.Percent(Ui.Value(moving["level"]))}";
+                panel.Children.Add(MovingRow(widths, [
+                    box,
+                    Ui.Text(Ui.Name(agent), 13.5, bold: true),
+                    Ui.Badge(on ? "áno" : "nie", on ? "GoodSoft" : "SurfaceAlt", on ? "Good" : "TextMuted"),
+                    Ui.Text(on ? limits : "–", 13),
+                    Ui.Text(Source(data, agent, "moving"), 12.5, brush: "TextMuted"),
+                    Ui.Text(now, 12.5, brush: moving is null ? "TextMuted" : "Text"),
+                ]));
+            }
+        }
+
+        var count = _movingPicked.Count;
+        var buttons = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
+        buttons.Children.Add(Ui.Button($"Zapnúť vybraným ({count})", () => _ = MovingForPicked(data, "on"), primary: true));
+        buttons.Children.Add(Ui.Button($"Vypnúť vybraným ({count})", () => _ = MovingForPicked(data, "off")));
+        buttons.Children.Add(Ui.Button($"Podľa skupiny ({count})", () => _ = MovingForPicked(data, "group")));
+        panel.Children.Add(buttons);
+        panel.Children.Add(Ui.Text("„Nastavená“ hovorí, odkiaľ počítač nastavenie berie: vlastné (len on), skupina, všetky alebo predvolené. Vlastné vyhráva nad skupinou – "
+            + "„Celej skupine“ preto vlastné nastavenia pohyblivej záťaže jej počítačov zruší (najprv sa opýta), „Podľa skupiny“ ich zruší len vybraným. "
+            + "Spodnú hranicu (podiel času a jadier) to nemení; nastavíte ju v Nastaveniach.", 12, brush: "TextMuted"));
+        return panel;
+    }
+
+    private static bool MovingOn(JsonObject agent) => Ui.Bool(agent["settings"]?["moving"]) == true;
+
+    private static double Share(JsonNode? node, double otherwise) => Ui.Value(node) is var v && double.IsFinite(v) ? v : otherwise;
+
+    // where a computer's setting comes from: itself, its group, all, or the hub's defaults
+    private static string Source(ConsoleData data, JsonObject agent, string key) =>
+        data.Own("computer", Ui.String(agent["name"]) ?? "").ContainsKey(key) ? "vlastné"
+        : data.Own("group", Ui.String(agent["group"]) ?? "").ContainsKey(key) ? "skupina"
+        : data.Own("all", "").ContainsKey(key) ? "všetky"
+        : "predvolené";
+
+    private static readonly string[] MovingKeys = ["moving", "duty_max", "cores_max"];
+
+    private JsonObject MovingValues(bool on) => on
+        ? new JsonObject { ["moving"] = true, ["duty_max"] = Math.Round(_movingDuty, 2), ["cores_max"] = Math.Round(_movingCores, 2) }
+        : new JsonObject { ["moving"] = false };
+
+    private async Task MovingForGroup(ConsoleData data, string group, List<JsonObject> members, bool on)
+    {
+        if (Actions is null)
+        {
+            return;
+        }
+
+        // the computers of the group that set the moving load themselves would not follow the group
+        var own = members.Where(m => MovingKeys.Any(data.Own("computer", Ui.String(m["name"]) ?? "").ContainsKey)).ToList();
+        var what = on ? $"zapnúť (najviac {Ui.Percent(_movingDuty)} času a {Ui.Percent(_movingCores)} jadier)" : "vypnúť";
+        var question = $"Pohyblivú záťaž {what} celej skupine {group} ({Count(members.Count)})?"
+            + (own.Count > 0 ? $"\n\nVlastné nastavenie pohyblivej záťaže sa zruší, aby sa riadili skupinou: {string.Join(", ", own.Select(Ui.Name))}." : "");
+        if (MessageBox.Show(question, "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var operations = new JsonArray { new JsonObject { ["scope"] = "group", ["names"] = new JsonArray(group), ["set"] = MovingValues(on) } };
+        if (own.Count > 0)
+        {
+            operations.Add(new JsonObject
+            {
+                ["scope"] = "computer",
+                ["names"] = new JsonArray([.. own.Select(m => (JsonNode?)Ui.String(m["name"]))]),
+                ["remove"] = new JsonArray([.. MovingKeys.Select(k => (JsonNode?)k)]),
+            });
+        }
+
+        var done = await Actions.Configure(new JsonObject { ["merge"] = operations });
+        _note = done ? $"Skupina {group}: pohyblivá záťaž {(on ? "zapnutá" : "vypnutá")} – počítače dostali nové nastavenie." : "Nepodarilo sa uložiť (server nie je pripojený).";
+        Redraw(_data ?? data, _movingHost);
+    }
+
+    private async Task MovingForPicked(ConsoleData data, string how)
+    {
+        var names = _movingPicked.ToList();
+        if (names.Count == 0 || Actions is null)
+        {
+            _note = "Vyberte aspoň jeden počítač.";
+            Redraw(data, _movingHost);
+            return;
+        }
+
+        var what = how switch
+        {
+            "on" => $"zapnúť (najviac {Ui.Percent(_movingDuty)} času a {Ui.Percent(_movingCores)} jadier)",
+            "off" => "vypnúť",
+            _ => "nastaviť podľa skupiny (ich vlastné nastavenie sa zruší)",
+        };
+        if (MessageBox.Show($"Pohyblivú záťaž {what} – {Count(names.Count)}?\n\n{string.Join(", ", names.Select(n => Display(data, n)))}",
+                "IRIS – učebňa", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var operation = new JsonObject { ["scope"] = "computer", ["names"] = new JsonArray([.. names.Select(n => (JsonNode?)n)]) };
+        if (how == "group")
+        {
+            operation["remove"] = new JsonArray([.. MovingKeys.Select(k => (JsonNode?)k)]);
+        }
+        else
+        {
+            operation["set"] = MovingValues(how == "on");
+        }
+
+        var done = await Actions.Configure(new JsonObject { ["merge"] = new JsonArray(operation) });
+        _note = done ? $"Pohyblivá záťaž: {what} – {Count(names.Count)}." : "Nepodarilo sa uložiť (server nie je pripojený).";
+        Redraw(_data ?? data, _movingHost);
+    }
+
+    private static StackPanel Bound(string text, double value, Action<double> set)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 28, 0) };
+        var label = Ui.Text(text, 13.5, bold: true);
+        label.VerticalAlignment = VerticalAlignment.Center;
+        label.Margin = new Thickness(0, 0, 10, 0);
+        var shown = Ui.Text(Ui.Percent(value), 13.5, bold: true);
+        shown.VerticalAlignment = VerticalAlignment.Center;
+        shown.Width = 48;
+        var slider = new Slider { Minimum = 0.05, Maximum = 1, SmallChange = 0.05, LargeChange = 0.1, TickFrequency = 0.05, IsSnapToTickEnabled = true, Value = value, Width = 180, VerticalAlignment = VerticalAlignment.Center };
+        slider.ValueChanged += (_, e) =>
+        {
+            set(e.NewValue);
+            shown.Text = Ui.Percent(e.NewValue);
+        };
+        panel.Children.Add(label);
+        panel.Children.Add(slider);
+        panel.Children.Add(shown);
+        return panel;
+    }
+
+    private static Grid MovingRow(double[] widths, FrameworkElement?[] cells)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
+        foreach (var width in widths)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width, GridUnitType.Star) });
+        }
+
+        for (var c = 0; c < cells.Length; c++)
+        {
+            if (cells[c] is not { } cell)
+            {
+                continue;
+            }
+
+            cell.Margin = new Thickness(0, 0, 10, 0);
+            cell.VerticalAlignment = VerticalAlignment.Center;
+            if (cell is Border)
+            {
+                cell.HorizontalAlignment = HorizontalAlignment.Left;
+            }
+
+            Grid.SetColumn(cell, c);
+            grid.Children.Add(cell);
+        }
+
+        return grid;
+    }
+
+    // the diagnosis of one, the ticked or all connected computers: asked for, waited for, shown as a table and saved
+    private StackPanel Diagnosis(ConsoleData data)
+    {
+        var connected = data.Agents.Where(a => a["connected"]?.GetValue<bool>() == true).ToList();
+        _diagnosisPicked.RemoveWhere(n => !connected.Any(a => Same(a, n)));
+        var panel = new StackPanel();
+        panel.Children.Add(Ui.Heading("Diagnostika", "pamäť agenta a počítača a programy s najviac pamäťou – zo všetkých počítačov naraz, bez Správcu úloh"));
+        panel.Children.Add(Mode("service-diagnosis", _diagnosisMode, mode => { _diagnosisMode = mode; Redraw(data, _diagnosisHost); }));
+        var chosen = Choose(data, connected, _diagnosisMode, _diagnosisPicked, () => Redraw(data, _diagnosisHost));
+        panel.Children.Add(chosen.Panel);
+        var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        buttons.Children.Add(Ui.Button($"Zistiť ({chosen.Names().Count})", () => _ = Diagnose(data, chosen.Names()), primary: true));
+        buttons.Children.Add(Ui.Button("Ukázať uložené na serveri", () => _ = Kept(data)));
+        if (_diagnoses is { Count: > 0 } shown)
+        {
+            buttons.Children.Add(Ui.Button("Uložiť správu…", () =>
+            {
+                var file = DiagnosisView.Save(DiagnosisView.Report(shown, _data ?? data), shown.Count == 1 ? Ui.String(shown[0]["computer"]) ?? "pc" : "ucebna");
+                _diagnosisNote = file is null ? _diagnosisNote : $"Uložené: {file}";
+                Redraw(_data ?? data, _diagnosisHost);
+            }));
+        }
+
+        panel.Children.Add(buttons);
+        if (_diagnosisNote is not null)
+        {
+            var note = Ui.Text(_diagnosisNote, 12.5, brush: "TextMuted");
+            note.Margin = new Thickness(0, 8, 0, 0);
+            panel.Children.Add(note);
+        }
+
+        if (_diagnoses is { Count: > 0 } entries)
+        {
+            var table = DiagnosisView.Table(entries, data, name => Actions?.Open(name));
+            ((FrameworkElement)table).Margin = new Thickness(0, 12, 0, 0);
+            panel.Children.Add(table);
+        }
+
+        panel.Children.Add(Ui.Text("Počítač pošle len čísla o pamäti a názvy programov s ich veľkosťou – nič z toho, čo programy robia alebo ukazujú. Posledná diagnostika každého počítača ostáva na serveri.", 12, brush: "TextMuted"));
+        return panel;
+    }
+
+    private async Task Diagnose(ConsoleData data, List<string> names)
+    {
+        if (names.Count == 0 || Actions is null)
+        {
+            _diagnosisNote = "Vyberte aspoň jeden počítač.";
+            Redraw(data, _diagnosisHost);
+            return;
+        }
+
+        _diagnosisNote = $"Pýtam sa {Count(names.Count)}…";
+        Redraw(data, _diagnosisHost);
+        var (entries, silent) = await DiagnosisView.AskAsync(Actions, names);
+        var asked = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        _diagnoses = [.. entries.Where(e => asked.Contains(Ui.String(e["computer"]) ?? ""))];
+        _diagnosisNote = silent.Count == 0
+            ? $"Odpovedali všetky ({names.Count})."
+            : $"Neodpovedali ({silent.Count}): {string.Join(", ", silent.Select(n => Display(_data ?? data, n)))} – majú starší program (aktualizujte ich) alebo sa práve odpojili.";
+        Redraw(_data ?? data, _diagnosisHost);
+    }
+
+    private async Task Kept(ConsoleData data)
+    {
+        if (Actions is null)
+        {
+            return;
+        }
+
+        _diagnoses = DiagnosisView.Entries(await Actions.Diagnoses(null));
+        _diagnosisNote = _diagnoses.Count == 0 ? "Na serveri zatiaľ nie je žiadna diagnostika." : $"Uložené na serveri: {_diagnoses.Count}.";
+        Redraw(_data ?? data, _diagnosisHost);
     }
 
     private static Border Mode(string group, string mode, Action<string> choose)

@@ -203,6 +203,24 @@ public static class LabTests
             Assert.True((await console.NewPlanAsync(0.5, 300, default))["error"] is not null, "a rate out of bounds is refused");
             var history = await console.HistoryAsync(DateTime.Now.AddMinutes(-5), DateTime.Now.AddMinutes(1), null, 1, default);
             Assert.True(history["series"]!.AsObject().Count == 2, "a history of both computers");
+            Assert.True(history["series"]!["PC-01"]!.AsArray().Any(r => r!["agent_mb"]?.GetValue<double>() > 0), "with the memory of the agent");
+
+            // the diagnosis: asked for by the console, answered by the computer, kept by the server
+            Assert.Equal(0, (await console.DiagnosesAsync(null, default))["diagnoses"]!.AsArray().Count, "no diagnosis before");
+            Assert.Equal(2, await console.CommandAsync("*", LabCommands.Diagnose, default), "asked of both computers");
+            JsonArray diagnoses = [];
+            for (var i = 0; i < 50 && diagnoses.Count < 2; i++)
+            {
+                await Task.Delay(100);
+                diagnoses = (await console.DiagnosesAsync(null, default))["diagnoses"]!.AsArray();
+            }
+
+            Assert.Equal(2, diagnoses.Count, "both answered");
+            var pc02 = (await console.DiagnosesAsync("PC-02", default))["diagnoses"]!.AsArray().Single()!;
+            Assert.True(pc02["computer"]!.GetValue<string>() == "PC-02" && pc02["received"] is not null, "one computer's, with the time it came");
+            Assert.True(pc02["report"]!["agent"]!["private_mb"]!.GetValue<double>() > 0 && pc02["report"]!["status"]!["moving"] is not null, "its memory and what it does");
+            Assert.True(File.Exists(Path.Combine(folder, "diagnoses", "PC-02.json")), "kept on the server");
+            Assert.Equal(0, (await console.DiagnosesAsync("../lab-config", default))["diagnoses"]!.AsArray().Count, "a name never reaches other files");
             Assert.Equal(1, await console.CommandAsync("PC-02", LabCommands.Shutdown, default), "the command went to one computer");
             Assert.Equal(0, await console.CommandAsync("*", "format c:", default), "anything else is not a command");
             for (var i = 0; i < 50 && powered.Count == 0; i++)
@@ -1222,6 +1240,54 @@ public static class LabTests
         {
             File.Delete(path);
         }
+    }
+
+    [Test]
+    public static void TheMovingLoadIsSetForAGroupOrManyComputersAtOnce()
+    {
+        var config = new LabConfig();
+        var defaults = new JsonObject { ["duty"] = 0.5, ["cores"] = 0.5, ["moving"] = false, ["duty_max"] = 1.0, ["cores_max"] = 1.0 };
+        Assert.True(config.Apply(JsonNode.Parse("""{"settings":{"scope":"computer","name":"PC-03","values":{"moving":false,"hot":80}}}""")!.AsObject()), "an own setting before");
+
+        // the whole group on with 75/70; the computer that set the moving load itself follows the group again
+        Assert.True(config.Apply(JsonNode.Parse("""
+            {"merge":[{"scope":"group","names":["Desk 3000"],"set":{"moving":true,"duty_max":0.75,"cores_max":0.7}},
+                      {"scope":"computer","names":["PC-03"],"remove":["moving","duty_max","cores_max"]}]}
+            """)!.AsObject()), "a group and its computers in one change");
+        foreach (var pc in new[] { "PC-01", "PC-02", "PC-03" })
+        {
+            var effective = config.Effective(defaults, pc, "Desk 3000");
+            Assert.True(effective["moving"]!.GetValue<bool>() && effective["duty_max"]!.GetValue<double>() == 0.75 && effective["cores_max"]!.GetValue<double>() == 0.7, $"{pc}: on with 75/70");
+        }
+
+        Assert.True(config.ComputerSettings["PC-03"]["hot"]!.GetValue<double>() == 80, "its other own settings stay");
+
+        // two computers off, one back to the group
+        Assert.True(config.Apply(JsonNode.Parse("""{"merge":[{"scope":"computer","names":["PC-01","PC-02"],"set":{"moving":false}}]}""")!.AsObject()), "the ticked ones off");
+        Assert.True(!config.Effective(defaults, "PC-01", "Desk 3000")["moving"]!.GetValue<bool>() && config.Effective(defaults, "PC-02", "Desk 3000")["duty_max"]!.GetValue<double>() == 0.75, "off, the bounds of the group kept");
+        Assert.True(config.Apply(JsonNode.Parse("""{"merge":[{"scope":"computer","names":["PC-02"],"remove":["moving"]}]}""")!.AsObject()), "back to the group");
+        Assert.True(config.Effective(defaults, "PC-02", "Desk 3000")["moving"]!.GetValue<bool>() && !config.ComputerSettings.ContainsKey("PC-02"), "follows the group, nothing of its own left");
+
+        // all or nothing: a wrong part refuses the whole change
+        Assert.True(!config.Apply(JsonNode.Parse("""{"merge":[{"scope":"group","names":["Desk 3000"],"set":{"moving":false}},{"scope":"all","names":["x"]}]}""")!.AsObject()), "an unknown scope");
+        Assert.True(!config.Apply(JsonNode.Parse("""{"merge":[{"scope":"computer","names":[""],"set":{"moving":false}}]}""")!.AsObject()), "an empty name");
+        Assert.True(config.Effective(defaults, "PC-03", "Desk 3000")["moving"]!.GetValue<bool>(), "nothing of a refused change applied");
+        Assert.True(config.Apply(JsonNode.Parse("""{"merge":[{"scope":"group","names":["Desk 3000"],"set":{"duty_max":7,"evil":1},"remove":["format"]}]}""")!.AsObject()), "values cleaned");
+        Assert.True(config.GroupSettings["Desk 3000"]["duty_max"]!.GetValue<double>() == 1 && config.GroupSettings["Desk 3000"]["evil"] is null, "held in range, unknown dropped");
+    }
+
+    [Test]
+    public static void ADiagnosisTellsTheMemoryOfTheAgentAndTheComputer()
+    {
+        var report = Diagnosis.Take(DateTime.Now);
+        var agent = report["agent"]!;
+        Assert.True(agent["private_mb"]!.GetValue<double>() > 0 && agent["working_set_mb"]!.GetValue<double>() > 0, "what the system counts for the agent");
+        Assert.True(agent["heap_mb"]!.GetValue<double>() >= 0 && agent["native_mb"]!.GetValue<double>() >= 0 && agent["threads"]!.GetValue<int>() > 0, "its heap, native memory and threads");
+        Assert.True(report["system"]?["total_mb"]?.GetValue<double>() > 0, "the memory of the computer");
+        var programs = report["programs"]!.AsArray();
+        Assert.True(programs.Count is > 0 and <= Diagnosis.Programs, "the programs with most memory");
+        Assert.True(programs.Select(p => p!["private_mb"]!.GetValue<double>()).SequenceEqual(programs.Select(p => p!["private_mb"]!.GetValue<double>()).OrderDescending()), "the biggest first");
+        Assert.True(programs.All(p => p!.AsObject().Select(k => k.Key).Order().SequenceEqual(["count", "name", "private_mb", "working_set_mb"])), "of a program only its name and sizes");
     }
 
     [Test]

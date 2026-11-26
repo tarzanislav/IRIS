@@ -110,6 +110,12 @@ public interface IConsoleActions
     /// <summary>Ends the test mode; true when the hub took it.</summary>
     Task<bool> StopTest();
 
+    /// <summary>The last diagnosis of every computer or of one (hubs from 0.5.3); null when it cannot be asked.</summary>
+    Task<JsonObject?> Diagnoses(string? computer);
+
+    /// <summary>The history of one computer over the last hours in buckets of minutes; null when it cannot be asked.</summary>
+    Task<JsonObject?> History(string computer, double hours, int bucketMinutes);
+
     /// <summary>Opens a computer on the page of computers.</summary>
     void Open(string computer);
 }

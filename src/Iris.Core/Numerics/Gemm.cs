@@ -965,13 +965,16 @@ internal static unsafe class Gemm
     /// </summary>
     public sealed class PackedB : IDisposable
     {
+        private readonly long _bytes;
         private float* _data;
 
         private PackedB(int n, int k)
         {
             (N, K) = (n, k);
             Panels = (n + NR - 1) / NR;
-            _data = (float*)NativeMemory.AlignedAlloc((nuint)((long)Panels * NR * Math.Max(1, k) * sizeof(float)), 64);
+            _bytes = (long)Panels * NR * Math.Max(1, k) * sizeof(float);
+            _data = (float*)NativeMemory.AlignedAlloc((nuint)_bytes, 64);
+            NativeUse.Add(_bytes);
         }
 
         public int N { get; }
@@ -1021,8 +1024,12 @@ internal static unsafe class Gemm
 
         public void Dispose()
         {
-            NativeMemory.AlignedFree(_data);
-            _data = null;
+            if (_data is not null)
+            {
+                NativeMemory.AlignedFree(_data);
+                _data = null;
+                NativeUse.Add(-_bytes);
+            }
         }
 
         private void PackPanel<TB>(TB b, int block, int j)

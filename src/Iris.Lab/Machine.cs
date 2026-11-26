@@ -7,7 +7,7 @@ namespace Iris.Lab;
 
 /// <summary>One look at a computer: how busy it is (all of it, and the learning alone), memory, temperature, idleness.</summary>
 public sealed record MachineSample(
-    double CpuTotal, double CpuOwn, double MemoryUsed, double MemoryTotalGb, double? Temperature, double? IdleSeconds, int Cores)
+    double CpuTotal, double CpuOwn, double MemoryUsed, double MemoryTotalGb, double? Temperature, double? IdleSeconds, int Cores, double? AgentMb = null)
 {
     /// <summary>What the rest of the computer uses (someone working, an update, an antivirus scan).</summary>
     public double CpuOthers => Math.Max(0, CpuTotal - CpuOwn);
@@ -21,6 +21,20 @@ public sealed record MachineSample(
         ["temperature"] = Temperature is { } t ? Math.Round(t, 1) : null,
         ["idle"] = IdleSeconds is { } i ? Math.Round(i) : null,
         ["cores"] = Cores,
+        ["agent_mb"] = AgentMb is { } mb ? Math.Round(mb) : null,
+    };
+}
+
+/// <summary>The memory of the whole computer (MB): installed, free, and what programs have committed against its limit.</summary>
+public sealed record MemoryPicture(double TotalMb, double AvailableMb, double CommittedMb, double CommitLimitMb)
+{
+    public JsonObject ToJson() => new()
+    {
+        ["total_mb"] = Math.Round(TotalMb),
+        ["available_mb"] = Math.Round(AvailableMb),
+        ["used_percent"] = TotalMb > 0 ? Math.Round(100 * (1 - AvailableMb / TotalMb), 1) : null,
+        ["committed_mb"] = Math.Round(CommittedMb),
+        ["commit_limit_mb"] = Math.Round(CommitLimitMb),
     };
 }
 
@@ -59,7 +73,8 @@ public sealed partial class Machine
 
         _lastOwn = (cpu, now);
         var (used, totalGb) = Memory();
-        return new MachineSample(total, Math.Min(own, total > 0 ? total : own), used, totalGb, Checked(Temperature(), total), IdleSeconds(), cores);
+        return new MachineSample(total, Math.Min(own, total > 0 ? total : own), used, totalGb, Checked(Temperature(), total), IdleSeconds(), cores,
+            _self.PrivateMemorySize64 / (1024.0 * 1024));
     }
 
     // a temperature that stays exactly the same over many samples while the load goes up and down is not measured
@@ -116,6 +131,29 @@ public sealed partial class Machine
 
         _lastSystem = current;
         return Math.Clamp(result, 0, 100);
+    }
+
+    /// <summary>The memory of the whole computer now (null where the system does not say).</summary>
+    public static MemoryPicture? MemoryNow()
+    {
+        const double Mb = 1024.0 * 1024;
+        if (OperatingSystem.IsWindows())
+        {
+            var status = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
+            return GlobalMemoryStatusEx(ref status)
+                ? new MemoryPicture(status.Total / Mb, status.Available / Mb, (status.TotalPage - status.AvailablePage) / Mb, status.TotalPage / Mb)
+                : null;
+        }
+
+        if (File.Exists("/proc/meminfo"))
+        {
+            var values = File.ReadLines("/proc/meminfo").Select(l => l.Split(':')).Where(p => p.Length == 2)
+                .ToDictionary(p => p[0], p => double.Parse(p[1].Trim().Split(' ')[0], CultureInfo.InvariantCulture) / 1024);
+            return new MemoryPicture(values.GetValueOrDefault("MemTotal"), values.GetValueOrDefault("MemAvailable"),
+                values.GetValueOrDefault("Committed_AS"), values.GetValueOrDefault("CommitLimit"));
+        }
+
+        return null;
     }
 
     private static (double Used, double TotalGb) Memory()

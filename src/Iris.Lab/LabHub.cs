@@ -766,6 +766,9 @@ public sealed class LabHub
                         case MessageKind.Delta:
                             Receive(agent, message);
                             break;
+                        case MessageKind.Diagnosis:
+                            KeepDiagnosis(agent.Name, message.Header);
+                            break;
                         case MessageKind.Inventory:
                             lock (_gate)
                             {
@@ -1218,6 +1221,9 @@ public sealed class LabHub
 
                     Note($"console {console}: a new plan of the learning – rate {rate:0.#####} over {rounds} rounds from version {_state.Step}");
                     return new JsonObject { ["ok"] = true, ["plan"] = Plan() };
+                case "diagnoses":
+                    // the last diagnosis of every computer (or of one), as they came
+                    return Diagnoses(header["computer"]?.GetValue<string>());
                 case "restart":
                     RestartAsked = true;
                     Note($"console {console}: restart of the hub");
@@ -1241,6 +1247,59 @@ public sealed class LabHub
         {
             return new JsonObject { ["error"] = e.Message };
         }
+    }
+
+    private string DiagnosesFolder => Path.Combine(_options.Folder, "diagnoses");
+
+    // the file of a computer's last diagnosis: its name only of safe characters (a name comes from the computer)
+    private string DiagnosisPath(string computer) =>
+        Path.Combine(DiagnosesFolder, new string([.. computer.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_')]) + ".json");
+
+    // the last diagnosis of a computer, kept on the server (also across its restarts) until the next one replaces it
+    private void KeepDiagnosis(string computer, JsonObject report)
+    {
+        try
+        {
+            Directory.CreateDirectory(DiagnosesFolder);
+            var entry = new JsonObject
+            {
+                ["computer"] = computer,
+                ["received"] = _options.Now().ToString("o", CultureInfo.InvariantCulture),
+                ["report"] = report.DeepClone(),
+            };
+            var path = DiagnosisPath(computer);
+            File.WriteAllText(path + ".new", entry.ToJsonString());
+            File.Move(path + ".new", path, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Note($"diagnosis of {computer} not kept: {e.Message}");
+        }
+    }
+
+    private JsonObject Diagnoses(string? computer)
+    {
+        var list = new JsonArray();
+        if (Directory.Exists(DiagnosesFolder))
+        {
+            var files = computer is { Length: > 0 } ? [DiagnosisPath(computer)] : Directory.GetFiles(DiagnosesFolder, "*.json");
+            foreach (var file in files.Where(File.Exists))
+            {
+                try
+                {
+                    if (JsonNode.Parse(File.ReadAllText(file)) is JsonObject entry)
+                    {
+                        list.Add((JsonNode)entry);
+                    }
+                }
+                catch (JsonException)
+                {
+                    // a damaged file: the next diagnosis writes it again
+                }
+            }
+        }
+
+        return new JsonObject { ["diagnoses"] = list };
     }
 
     /// <summary>The least and the most highest rate a plan of the learning may have.</summary>
@@ -1770,5 +1829,8 @@ public static class LabCommands
     /// <summary>An uninstall asked for is called off (while the agent is still finishing its round).</summary>
     public const string Stay = "stay";
 
-    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Pause, Resume, Shutdown, Restart, Uninstall, Stay };
+    /// <summary>The agent sends its diagnosis (agents from 0.5.3; older ones let it pass).</summary>
+    public const string Diagnose = "diagnose";
+
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Pause, Resume, Shutdown, Restart, Uninstall, Stay, Diagnose };
 }

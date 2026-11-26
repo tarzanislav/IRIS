@@ -169,6 +169,8 @@ public sealed class MainWindow : Window, IConsoleActions
     /// <summary>The page of efficiency (the self-test gives it an invented summary).</summary>
     public EfficiencyPage Efficiency => (EfficiencyPage)_pages["efficiency"];
 
+    public ServicePage Service => (ServicePage)_pages["service"];
+
     public void Navigate(string name)
     {
         _current = name;
@@ -596,6 +598,11 @@ public sealed class MainWindow : Window, IConsoleActions
         await AskServer<(byte[] File, JsonObject About)?>(c => async cancel => await c.BestModelAsync(cancel), 120);
 
     public async Task<bool> ModelFromRelease() => await AskServer<bool>(c => c.ServerModelFromReleaseAsync, 10);
+
+    public async Task<JsonObject?> Diagnoses(string? computer) => await AskServer<JsonObject>(c => cancel => c.DiagnosesAsync(computer, cancel), 30);
+
+    public async Task<JsonObject?> History(string computer, double hours, int bucketMinutes) =>
+        await AskServer<JsonObject>(c => cancel => c.HistoryAsync(DateTime.Now.AddHours(-hours), DateTime.Now, computer, bucketMinutes, cancel), 60);
 
     // one question to the server itself; on a broken connection the console connects again with the next refresh
     private async Task<T?> AskServer<T>(Func<LabConsoleClient, Func<CancellationToken, Task<T>>> ask, int seconds)

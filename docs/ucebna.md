@@ -138,6 +138,27 @@ záťaži tých istých počítačov: riadky za sekundu kola (čo sa za noc nau�
 učenia na procesore, námaha, uberania na kolo a čo ju brzdilo. Testovací režim pohyblivú záťaž vypína – meria pri
 pevnej záťaži.
 
+Od 0.5.3 je na stránke **Servis** karta **Pohyblivá záťaž**: pre každú skupinu tabuľka počítačov – zapnutá áno/nie,
+hranice (čas · jadrá od spodnej po hornú), **odkiaľ** nastavenie berie (vlastné, skupina, všetky, predvolené) a čo
+práve robí (vlákna, čas, úroveň). Nad tabuľkou sa zvolí **Najviac času** a **Najviac jadier** (predvolene 75 % a 70 %,
+čo v učebni naučilo najviac). **Celej skupine zapnúť / vypnúť** nastaví skupinu a vlastné nastavenia pohyblivej záťaže
+jej počítačov zruší (najprv ukáže, ktoré), aby sa všetky riadili skupinou. Pre zaškrtnuté počítače: **Zapnúť
+vybraným**, **Vypnúť vybraným** (napr. pomalší kus v skupine) a **Podľa skupiny** (zruší ich vlastné). Spodnú hranicu
+to nemení.
+
+### Diagnostika (od 0.5.3)
+Namiesto Správcu úloh na každom počítači: na stránke **Servis** karta **Diagnostika** (jeden, zaškrtnuté alebo všetky
+pripojené počítače) a na stránke počítača karta **Diagnostika** s tlačidlom **Zistiť teraz**. Počítač pošle cez
+server:
+- pamäť **agenta** – súkromnú a pracovnú množinu (aj najvyššiu), haldu .NET, pamäť učenia, vlákna, popisovače a ako
+  dlho beží;
+- pamäť **počítača** – celú, voľnú, potvrdenú (s limitom pamäte a stránkovacieho súboru) a ako dlho beží Windows;
+- **programy s najviac pamäťou** – len názvy a veľkosti (nič z toho, čo programy robia alebo ukazujú).
+
+Konzola k tomu povie hodnotenie (v poriadku / počítaču dochádza pamäť a kto ju drží / agent drží veľa pamäte).
+Posledná diagnostika každého počítača ostáva na serveri (`diagnoses/`), **Uložiť správu…** ju uloží ako text na
+poslanie. Agent posiela pamäť aj s každým hlásením, takže **Pamäť za 7 dní** na stránke počítača ukáže, či rastie.
+
 ### Testovací režim (od 0.4.4)
 Stránka **Testovací režim** v konzole: zvolené počítače (všetky pripojené, skupina, alebo vybrané) sa **začnú učiť
 hneď**, aj mimo času učenia, so záťažou zvolenou v konzole – predvoľby Jemne 25 %, Bežne 50 %, Naplno 100 %, alebo

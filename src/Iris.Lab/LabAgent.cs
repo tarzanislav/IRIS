@@ -598,6 +598,14 @@ public sealed class LabAgent
                 StopLearning();
                 _options.Power(new PowerRequest(command, now, force));
                 break;
+            case LabCommands.Diagnose:
+                // what the Task Manager would show, and what the agent itself does now
+                var diagnosis = Diagnosis.Take(DateTime.Now);
+                diagnosis["version"] = LabUpdates.Version;
+                diagnosis["lines_total"] = _learner?.LinesTotal;
+                diagnosis["status"] = Status();
+                await channel.SendAsync(new LabMessage(MessageKind.Diagnosis, diagnosis), cancel);
+                break;
             default:
                 break; // anything else is not a command of IRIS
         }
