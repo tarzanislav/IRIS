@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The wall of the vault: nothing private may leave in a release or be committed. Fails when a file is a vault (it
-# starts with IRISVLT1) or a model file says it was learned from private data ("private":"private:…" in its header).
+# starts with IRISVLT1) or a model file says in its header that it was learned from private data (the mark below).
 # Usage: tools/ci/no-private.sh <folder or file>…  (no argument: the files of the repository)
 set -euo pipefail
 if [ "$#" -eq 0 ]; then
