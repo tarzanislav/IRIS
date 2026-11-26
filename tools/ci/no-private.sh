@@ -9,13 +9,15 @@ else
   mapfile -t files < <(find "$@" -type f)
 fi
 
+# the mark, written so that this script does not carry it itself
+mark='"private":"priv''ate:'
 bad=0
 for file in "${files[@]}"; do
   [ -f "$file" ] || continue
   if [ "$(head -c 8 "$file" 2>/dev/null | tr -d '\000')" = "IRISVLT1" ]; then
     echo "::error title=private data::$file is a vault (private data) – it must never be published or committed"
     bad=1
-  elif head -c 1048576 "$file" 2>/dev/null | grep -aq '"private":"private:'; then
+  elif head -c 1048576 "$file" 2>/dev/null | grep -aqF "$mark"; then
     echo "::error title=private data::$file was learned from private data – it must never be published or committed"
     bad=1
   fi
