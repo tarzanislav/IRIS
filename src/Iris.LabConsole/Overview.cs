@@ -344,8 +344,10 @@ public sealed class OverviewPage : ConsolePage
         {
             var ended = Ui.Bool(plan["ended"]) == true;
             var left = Ui.Value(plan["left"]);
-            var fact = Ui.Fact("plán učenia", ended ? "skončil – začnite nový (Server)" : $"ostáva {left:0} kôl z {Ui.Number(plan["rounds"])}, rýchlosť {Ui.Rate(plan["now"])}");
-            if ((ended || left <= 36) && fact.Children.Count > 1 && fact.Children[1] is TextBlock text)
+            var auto = Ui.Bool(plan["auto"]) == true;
+            var fact = Ui.Fact("plán učenia", ended ? (auto ? "skončil – ďalší začne sám" : "skončil – začnite nový (Server)")
+                : $"ostáva {left:0} kôl z {Ui.Number(plan["rounds"])}, rýchlosť {Ui.Rate(plan["now"])}{(auto ? " · automaticky" : "")}");
+            if (!auto && (ended || left <= 36) && fact.Children.Count > 1 && fact.Children[1] is TextBlock text)
             {
                 text.Foreground = Ui.Brush(ended ? "Danger" : "Warn");
                 text.FontWeight = FontWeights.SemiBold;

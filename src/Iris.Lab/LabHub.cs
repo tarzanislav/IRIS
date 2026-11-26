@@ -127,6 +127,7 @@ public sealed class LabHub
     private TestRun? _test;
     private readonly EfficiencyLog _efficiency;
     private readonly LabModels _models;
+    private readonly StewardState _steward;
     private bool _wakeReported = true;
 
     public LabHub(LabHubOptions options, OcrWeights weights, OcrLearningState state)
@@ -141,6 +142,7 @@ public sealed class LabHub
         _history = new LabHistory(Path.Combine(options.Folder, "history"));
         _efficiency = new EfficiencyLog(options.Folder, options.Now);
         _models = new LabModels(options.Folder, weights);
+        _steward = StewardState.Load(StewardPath);
         _config = LabConfig.Load(ConfigPath);
         _tester = new(MakeTester);
         _started = options.Now();
@@ -163,6 +165,8 @@ public sealed class LabHub
     public static string ModelPath(string folder) => Path.Combine(folder, "lab-model.iris");
 
     private string ConfigPath => Path.Combine(_options.Folder, "lab-config.json");
+
+    private string StewardPath => Path.Combine(_options.Folder, "plan-auto.json");
 
     /// <summary>The port it listens on (useful when 0 was asked for).</summary>
     public int Port => (_listener?.LocalEndpoint as IPEndPoint)?.Port ?? _options.Port;
@@ -594,6 +598,11 @@ public sealed class LabHub
             ["applied"] = applied,
         };
         _rounds.Add(entry);
+        if (applied)
+        {
+            Steer(now);
+        }
+
         Note($"round {round.Number} closed: {round.Average.Parts} computers, {round.Average.Lines} lines" +
              (round.Losses.Count > 0 ? $", loss {round.Losses.Average():0.####}" : "") + (applied ? $", model version {_state.Step}" : ", nothing learned"));
         File.AppendAllText(Path.Combine(_options.Folder, "rounds.jsonl"), entry.ToJsonString() + "\n");
@@ -1221,6 +1230,16 @@ public sealed class LabHub
 
                     Note($"console {console}: a new plan of the learning – rate {rate:0.#####} over {rounds} rounds from version {_state.Step}");
                     return new JsonObject { ["ok"] = true, ["plan"] = Plan() };
+                case "plan-auto":
+                    // the steward on or off (on: every plan that ends is judged and the next one starts by itself)
+                    lock (_gate)
+                    {
+                        _steward.On = header["on"]?.GetValue<bool>() ?? _steward.On;
+                        _steward.Save(StewardPath);
+                    }
+
+                    Note($"console {console}: the automatic plan of the learning {(_steward.On ? "on" : "off")}");
+                    return new JsonObject { ["ok"] = true, ["plan"] = Plan() };
                 case "diagnoses":
                     // the last diagnosis of every computer (or of one), as they came
                     return Diagnoses(header["computer"]?.GetValue<string>());
@@ -1302,6 +1321,44 @@ public sealed class LabHub
         return new JsonObject { ["diagnoses"] = list };
     }
 
+    // the end of a plan: the steward judges it by the tests and starts the next one (when it is on)
+    private void Steer(DateTime now)
+    {
+        if (!_steward.On || _state.Step < _state.PlanEnd)
+        {
+            return;
+        }
+
+        var tests = _tests.Select(PlanTest.From).OfType<PlanTest>().ToList();
+        var decision = LearningSteward.Next(_state.PlanRate, (int)Math.Round(_state.PlanEnd - _state.PlanStart), (int)Math.Round(_state.PlanStart), _state.Step, tests, _steward.Plateaus);
+        if (decision.FromAverage)
+        {
+            // the average of the model read better: the next plan starts from it
+            var average = _models.Average();
+            foreach (var (target, source) in TensorPack.Tensors(_weights).Zip(TensorPack.Tensors(average)))
+            {
+                source.Values.CopyTo(target.Values, 0);
+            }
+        }
+
+        _state = _state with { PlanStart = _state.Step, PlanEnd = _state.Step + decision.Rounds, PlanRate = decision.Rate };
+        _steward.Plateaus = decision.Plateaus;
+        _steward.Last = decision.ToJson(now, _state.Step);
+        try
+        {
+            Save();
+            _steward.Save(StewardPath);
+            File.AppendAllText(Path.Combine(_options.Folder, "plans.jsonl"), _steward.Last.ToJsonString() + "\n");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Note($"the steward's plan was not saved: {e.Message}");
+        }
+
+        Note($"the steward: {decision.Kind} – {decision.Reason}; a new plan of rate {decision.Rate:0.#######} over {decision.Rounds} rounds from version {_state.Step}"
+             + (decision.FromAverage ? ", from the average of the model" : ""));
+    }
+
     /// <summary>The least and the most highest rate a plan of the learning may have.</summary>
     public const double MinPlanRate = 1e-5;
 
@@ -1321,6 +1378,8 @@ public sealed class LabHub
             ["rate"] = _state.PlanRate,
             ["now"] = RateNow(),
             ["ended"] = done >= rounds,
+            ["auto"] = _steward.On,
+            ["last_decision"] = _steward.Last?.DeepClone(),
         };
     }
 

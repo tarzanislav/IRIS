@@ -568,6 +568,9 @@ public sealed class MainWindow : Window, IConsoleActions
     public async Task<JsonObject?> NewPlan(double rate, int rounds) =>
         await AskServer<JsonObject?>(c => async cancel => await c.NewPlanAsync(rate, rounds, cancel), 30);
 
+    public async Task<JsonObject?> PlanAuto(bool on) =>
+        await AskServer<JsonObject?>(c => async cancel => await c.PlanAutoAsync(on, cancel), 30);
+
     public async Task<bool> RestartServer()
     {
         var done = await AskServer<bool>(c => c.RestartServerAsync, 10);

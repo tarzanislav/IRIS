@@ -129,7 +129,7 @@ public static class LabTests
             // the second computer with the moving load (set as the console saves it)
             Directory.CreateDirectory(folder);
             File.WriteAllText(Path.Combine(folder, "lab-config.json"), """{ "settings": { "computers": { "PC-02": { "moving": true, "duty_max": 1.0, "cores_max": 0.75, "unknown": 1 } } } }""");
-            var hub = new LabHub(options, weights, new OcrLearningState { PlanStart = 0, PlanEnd = 50, PlanRate = 1e-3 });
+            var hub = new LabHub(options, weights, new OcrLearningState { PlanStart = 0, PlanEnd = 2, PlanRate = 1e-3 });
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var hubTask = hub.RunAsync(stop.Token);
             while (hub.Port == 0)
@@ -195,6 +195,13 @@ public static class LabTests
             Assert.True(server["model"]?["best"]?["version"]?.GetValue<int>() > 0, "the best model is kept");
             var (bestFile, about) = await console.BestModelAsync(default);
             Assert.True(bestFile.Length > 1000 && about["kind"] is not null, "the console can save the best model");
+            var steered = (await console.SnapshotAsync(default))["plan"]!;
+            Assert.True(steered["auto"]!.GetValue<bool>() && steered["last_decision"]?["kind"]?.GetValue<string>() == "repeat"
+                        && steered["rounds"]!.GetValue<double>() == LearningSteward.MinRounds && steered["ended"]!.GetValue<bool>() == false,
+                "the plan ended and the steward started the next one by itself");
+            Assert.True(File.ReadAllLines(Path.Combine(folder, "plans.jsonl")).Length >= 1, "and wrote down why");
+            Assert.True(!(await console.PlanAutoAsync(false, default))["plan"]!["auto"]!.GetValue<bool>(), "the console switches it off");
+            Assert.True((await console.PlanAutoAsync(true, default))["plan"]!["auto"]!.GetValue<bool>(), "and on");
             var plan = await console.NewPlanAsync(2e-4, 300, default);
             Assert.True(plan["ok"] is not null, "the console starts a new plan of the learning");
             var planNow = (await console.SnapshotAsync(default))["plan"]!;
@@ -1274,6 +1281,48 @@ public static class LabTests
         Assert.True(config.Effective(defaults, "PC-03", "Desk 3000")["moving"]!.GetValue<bool>(), "nothing of a refused change applied");
         Assert.True(config.Apply(JsonNode.Parse("""{"merge":[{"scope":"group","names":["Desk 3000"],"set":{"duty_max":7,"evil":1},"remove":["format"]}]}""")!.AsObject()), "values cleaned");
         Assert.True(config.GroupSettings["Desk 3000"]["duty_max"]!.GetValue<double>() == 1 && config.GroupSettings["Desk 3000"]["evil"] is null, "held in range, unknown dropped");
+    }
+
+    [Test]
+    public static void TheStewardStartsTheNextPlanByWhatTheLastOneBrought()
+    {
+        // tests every 6 versions; the plan ran from version 600 to 1200; the best before it read 1.00 % (mean)
+        static List<PlanTest> Tests(double during, double? average = null) =>
+        [
+            new(594, 1.2, 0.8, 1.25, 0.85),
+            .. Enumerable.Range(1, 10).Select(i => new PlanTest(600 + (i * 60), during + 0.2, during - 0.2, average is { } a ? a + 0.2 : null, average is { } b ? b - 0.2 : null)),
+        ];
+
+        var good = LearningSteward.Next(1e-4, 600, 600, 1200, Tests(0.95), plateaus: 2);
+        Assert.True(good.Kind == "keep" && good.Rate == 1e-4 && good.Rounds == 600 && good.Plateaus == 0, $"5 % better: the same again ({good.Kind})");
+        var some = LearningSteward.Next(1e-4, 600, 600, 1200, Tests(0.99), plateaus: 0);
+        Assert.True(some.Kind == "lower" && Math.Abs(some.Rate - 6e-5) < 1e-12, $"1 % better: a lower rate ({some.Kind} {some.Rate})");
+        var flat = LearningSteward.Next(1e-4, 600, 600, 1200, Tests(1.0), plateaus: 0);
+        Assert.True(flat.Kind == "plateau" && flat.Rate == 5e-5 && flat.Rounds == 900 && flat.Plateaus == 1, $"no progress: half the rate on a longer plan ({flat.Kind})");
+        var third = LearningSteward.Next(5e-5, 900, 600, 1500, Tests(1.0), plateaus: 2);
+        Assert.True(third.Kind == "explore" && third.Rate == 1e-4 && third.Plateaus == 3, $"the third plateau explores at twice the rate ({third.Kind})");
+        var floor = LearningSteward.Next(LearningSteward.MinRate, 900, 600, 1500, Tests(1.0), plateaus: 0);
+        Assert.True(floor.Kind == "saturated" && floor.Rate == LearningSteward.MinRate && floor.Rounds == LearningSteward.MaxRounds, $"at the lowest rate it is saturated ({floor.Kind})");
+        var worse = LearningSteward.Next(2e-4, 600, 600, 1200, Tests(1.2, average: 1.1), plateaus: 1);
+        Assert.True(worse.Kind == "repair" && worse.Rate == 1e-4 && worse.FromAverage && worse.Plateaus == 1, $"worse: half the rate, from the average that reads better ({worse.Kind})");
+        var few = LearningSteward.Next(1e-4, 600, 600, 1200, [new(594, 1.2, 0.8, null, null), new(700, 1.0, 0.6, null, null)], plateaus: 0);
+        Assert.True(few.Kind == "repeat" && few.Rate == 1e-4 && few.Rounds == 600, "too few tests: the plan again");
+        var high = LearningSteward.Next(1e-3, 50, 600, 650, Tests(0.9), plateaus: 0);
+        Assert.True(high.Rate == LearningSteward.MaxRate && high.Rounds == LearningSteward.MinRounds, "held in its bounds");
+        Assert.True(!LearningSteward.Next(1e-4, 600, 600, 1200, Tests(0.95, average: 0.949), 0).FromAverage, "the average only when clearly better");
+
+        var path = Path.Combine(Path.GetTempPath(), $"iris-steward-{Environment.ProcessId}.json");
+        try
+        {
+            new StewardState { On = false, Plateaus = 2, Last = good.ToJson(DateTime.Now, 1200) }.Save(path);
+            var again = StewardState.Load(path);
+            Assert.True(!again.On && again.Plateaus == 2 && again.Last?["kind"]?.GetValue<string>() == "keep", "kept across restarts");
+            Assert.True(StewardState.Load(path + ".none").On, "on unless switched off");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Test]

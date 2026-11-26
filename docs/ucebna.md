@@ -118,6 +118,18 @@ rýchlosť 0,0001 – 0,0003, 300 – 1200 kôl; odporúčané 0,0001 na 600 kô
 upozorní v Prehľade aj na stránke Server, keď skončil, ukáže to červenou. Graf CER ukazuje beh súčasného modelu
 (staršie testy pred výmenou modelu nie).
 
+Od 0.5.3 **automatický plán** (predvolene zapnutý, prepínač na karte Plán učenia): keď plán skončí, server ho sám
+vyhodnotí podľa svojich testov CER (priemer známych písiem a neznámeho písma, lepší z modelu a jeho priemeru) oproti
+najlepšiemu výsledku pred plánom a začne ďalší – kosínusové cykly s teplým reštartom:
+- zlepšenie aspoň o 3 % → rovnaká rýchlosť; aspoň o 0,5 % → rýchlosť × 0,6;
+- bez zlepšenia (plató) → polovičná rýchlosť na 1,5× dlhší plán; každé tretie plató jeden **skúšobný plán s dvojnásobnou
+  rýchlosťou**; pri najnižšej rýchlosti (0,00002) hlási **nasýtené** – ďalší skok prinesú nové dáta alebo väčší model;
+- zhoršenie o viac ako 3 % → polovičná rýchlosť;
+- ďalší plán začne **z priemeru modelu**, ak ho posledný test prečítal aspoň o 1 % lepšie.
+
+Rýchlosť 0,00002 – 0,0003, plán 300 – 1500 kôl. Rozhodnutie a dôvod ukáže konzola, server ho zapíše do denníka a do
+`plans.jsonl`. Ručný „Začať nový plán…“ funguje ďalej, server potom pokračuje sám.
+
 ### Pohyblivá záťaž (od 0.5.0)
 Riadi sa **sama**: v **Nastaveniach** (pre všetky počítače, skupinu alebo jeden počítač) sa raz zapne prepínač
 **Pohyblivá záťaž** a nastavia hranice – **spodná** = Podiel času a Podiel jadier, **horná** = Najviac času a

@@ -330,7 +330,26 @@ public partial class App : Application
             ["rounds"] = rounds,
             ["tests"] = tests,
             ["minutes"] = 6600,
-            ["plan"] = new JsonObject { ["rounds"] = 600, ["done"] = 582, ["left"] = 18, ["rate"] = 1e-4, ["now"] = 2.9e-6, ["ended"] = false },
+            ["plan"] = new JsonObject
+            {
+                ["rounds"] = 600,
+                ["done"] = 582,
+                ["left"] = 18,
+                ["rate"] = 1e-4,
+                ["now"] = 2.9e-6,
+                ["ended"] = false,
+                ["auto"] = true,
+                ["last_decision"] = new JsonObject
+                {
+                    ["time"] = now.AddDays(-4).ToString("o", CultureInfo.InvariantCulture),
+                    ["version"] = 82560,
+                    ["rate"] = 1e-4,
+                    ["rounds"] = 600,
+                    ["from_average"] = true,
+                    ["kind"] = "lower",
+                    ["reason"] = "zlepšenie 1,8 % – jemnejšie kroky",
+                },
+            },
             ["hub_version"] = Iris.Lab.LabUpdates.Version,
             ["consoles"] = new JsonArray("notebook-skola", "notebook-praca"),
             ["update"] = new JsonObject { ["version"] = "0.4.1", ["auto"] = true, ["agent"] = true, ["console"] = true },

@@ -237,15 +237,57 @@ public sealed class ServerPage : ConsolePage
         var panel = new StackPanel();
         var ended = Ui.Bool(plan["ended"]) == true;
         var left = Ui.Value(plan["left"]);
+        var auto = Ui.Bool(plan["auto"]) == true;
         panel.Children.Add(Ui.Heading("Plán učenia", "rýchlosť učenia klesá po kosínuse od najvyššej po 2 % – potom sa model už takmer nemení"));
         panel.Children.Add(Ui.Fact("plán", $"kolo {Ui.Number(plan["done"])} z {Ui.Number(plan["rounds"])} · najvyššia rýchlosť {Ui.Rate(plan["rate"])} · teraz {Ui.Rate(plan["now"])}"));
-        var state = ended ? "plán skončil – učebňa počíta, ale model sa už takmer neučí; začnite nový plán"
+        var state = auto
+            ? (ended ? "plán skončil – ďalší začne server sám po najbližšom kole" : $"ostáva {left:0} kôl – potom server plán vyhodnotí a ďalší začne sám")
+            : ended ? "plán skončil – učebňa počíta, ale model sa už takmer neučí; začnite nový plán"
             : left <= 36 ? $"plán končí o {left:0} kôl – pripravte nový"
             : $"ostáva {left:0} kôl";
-        var note = Ui.Text(state, 13.5, bold: ended || left <= 36, brush: ended ? "Danger" : left <= 36 ? "Warn" : "Text");
+        var warn = !auto && (ended || left <= 36);
+        var note = Ui.Text(state, 13.5, bold: warn, brush: !auto && ended ? "Danger" : warn ? "Warn" : "Text");
         note.Margin = new Thickness(0, 4, 0, 8);
         panel.Children.Add(note);
-        panel.Children.Add(Ui.Caption("Nový plán od tejto verzie"));
+
+        // the steward: on or off, and what it decided last
+        var steward = new Border { CornerRadius = new CornerRadius(10), Padding = new Thickness(12, 8, 12, 8), Margin = new Thickness(0, 0, 0, 10) };
+        steward.SetResourceReference(Border.BackgroundProperty, "SurfaceAlt");
+        var stewardPanel = new StackPanel();
+        steward.Child = stewardPanel;
+        var line = new DockPanel();
+        var toggle = Ui.Switch(auto ? "zapnutý" : "vypnutý", auto);
+        toggle.IsEnabled = connected && plan["auto"] is not null;
+        toggle.Checked += (_, _) =>
+        {
+            toggle.Content = "zapnutý";
+            _ = PlanAuto(true);
+        };
+        toggle.Unchecked += (_, _) =>
+        {
+            toggle.Content = "vypnutý";
+            _ = PlanAuto(false);
+        };
+        DockPanel.SetDock(toggle, Dock.Right);
+        line.Children.Add(toggle);
+        line.Children.Add(Ui.Text("Automatický plán", 14, bold: true));
+        stewardPanel.Children.Add(line);
+        stewardPanel.Children.Add(Ui.Text(plan["auto"] is null
+            ? "Server túto možnosť ešte nepozná (od verzie 0.5.3)."
+            : "Keď plán skončí, server porovná CER pred plánom a počas neho: pri zlepšení ponechá rýchlosť, pri malom ju zníži, "
+              + "pri žiadnom dá polovičnú na dlhší plán a každý tretí raz skúsi vyššiu; keď model zhorší, vráti sa k polovičnej "
+              + "a začne z priemeru modelu, ak číta lepšie. Na nikoho sa nečaká.", 12, brush: "TextMuted"));
+        if (plan["last_decision"] is JsonObject last)
+        {
+            var from = Ui.Bool(last["from_average"]) == true ? " · začal z priemeru modelu" : "";
+            var decided = Ui.Text($"Naposledy {Ui.Ago(last["time"])} (verzia {Ui.Number(last["version"])}): {Ui.String(last["reason"])} → rýchlosť {Ui.Rate(last["rate"])} na {Ui.Number(last["rounds"])} kôl{from}", 12.5,
+                bold: Ui.String(last["kind"]) == "saturated", brush: Ui.String(last["kind"]) == "saturated" ? "Warn" : "Text");
+            decided.Margin = new Thickness(0, 6, 0, 0);
+            stewardPanel.Children.Add(decided);
+        }
+
+        panel.Children.Add(steward);
+        panel.Children.Add(Ui.Caption(auto ? "Nový plán ručne (server potom pokračuje sám)" : "Nový plán od tejto verzie"));
         var choices = new WrapPanel { Margin = new Thickness(0, 4, 0, 4) };
         var rates = Ui.Segments("plan-rate", [("0.0001", "0,0001"), ("0.0002", "0,0002"), ("0.0003", "0,0003")], _planRate, key => _planRate = key);
         rates.Margin = new Thickness(0, 0, 16, 6);
@@ -255,12 +297,28 @@ public sealed class ServerPage : ConsolePage
         choices.Children.Add(rounds);
         panel.Children.Add(choices);
         var buttons = new WrapPanel();
-        var start = Ui.Button("Začať nový plán…", () => _ = NewPlan(), primary: ended);
+        var start = Ui.Button("Začať nový plán…", () => _ = NewPlan(), primary: ended && !auto);
         start.IsEnabled = connected;
         buttons.Children.Add(start);
         panel.Children.Add(buttons);
         panel.Children.Add(Ui.Text("Odporúčané: 0,0001 na 600 kôl (pri 10-minútových kolách asi 4 noci). Vyššia rýchlosť pohne modelom viac – najprv sa môže na pár kôl zhoršiť; najlepší model ostáva uložený.", 12, brush: "TextMuted"));
         return panel;
+    }
+
+    private async Task PlanAuto(bool on)
+    {
+        if (Actions is null)
+        {
+            return;
+        }
+
+        var answer = await Actions.PlanAuto(on);
+        if (answer?["ok"] is null)
+        {
+            MessageBox.Show(answer is null ? "Server nie je pripojený." : "Server zmenu neprijal.", "IRIS – učebňa", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        _stateAt = DateTimeOffset.MinValue;
     }
 
     private async Task NewPlan()

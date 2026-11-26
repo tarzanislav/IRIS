@@ -92,6 +92,9 @@ public interface IConsoleActions
     /// <summary>A new plan of the learning rate (hubs from 0.5.1): its highest rate and its rounds; null when the server is not connected.</summary>
     Task<JsonObject?> NewPlan(double rate, int rounds);
 
+    /// <summary>The automatic plan of the learning on or off (hubs from 0.5.3); null when the server is not connected.</summary>
+    Task<JsonObject?> PlanAuto(bool on);
+
     /// <summary>The classroom from the learning file of the newest signed release; true when the request was left.</summary>
     Task<bool> ModelFromRelease();
 

@@ -119,6 +119,9 @@ public sealed class LabConsoleClient : IDisposable
     public Task<JsonObject> NewPlanAsync(double rate, int rounds, CancellationToken cancel) =>
         Server("plan", new JsonObject { ["rate"] = rate, ["rounds"] = rounds }, cancel);
 
+    /// <summary>The automatic plan of the learning on or off (hubs from 0.5.3); the answer has the plan as it is now.</summary>
+    public Task<JsonObject> PlanAutoAsync(bool on, CancellationToken cancel) => Server("plan-auto", new JsonObject { ["on"] = on }, cancel);
+
     /// <summary>The last diagnosis of every computer, or of one (hubs from 0.5.3): {"diagnoses": [{computer, received, report}, …]}.</summary>
     public Task<JsonObject> DiagnosesAsync(string? computer, CancellationToken cancel) =>
         Server("diagnoses", new JsonObject { ["computer"] = computer }, cancel);
