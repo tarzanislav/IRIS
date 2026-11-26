@@ -44,6 +44,14 @@ static async Task<int> Run(LabArguments a)
 
     var model = LabHub.ModelPath(folder);
     LabHub.TakeStartModel(folder, Say);
+    foreach (var path in new[] { model, a.Value("--start") }.OfType<string>().Where(File.Exists))
+    {
+        if (Iris.Privacy.Vault.HoldsPrivate(path))
+        {
+            // the wall of the vault: the classroom never learns from anything private
+            throw new FormatException($"{Path.GetFileName(path)} holds private data – the classroom never learns from it");
+        }
+    }
     OcrWeights weights;
     OcrLearningState state;
     string source;

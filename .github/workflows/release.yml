@@ -190,6 +190,8 @@ jobs:
             fi
           } > out/assets/NOTICE.txt
           (cd out/assets && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - name: The wall of the vault – nothing private in the release
+        run: tools/ci/no-private.sh out/assets
       - name: Publish the release
         run: |
           gh release create "v$VERSION" out/assets/* --target "$GITHUB_SHA" --title "IRIS $VERSION" --notes-file "docs/releases/v$VERSION.md"

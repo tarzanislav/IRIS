@@ -36,6 +36,8 @@ jobs:
         run: bash tools/ci/dotnet.sh build Iris.slnx -c Release
       - name: Code format (.editorconfig)
         run: bash tools/ci/dotnet.sh format Iris.slnx --verify-no-changes
+      - name: The wall of the vault – nothing private committed
+        run: bash tools/ci/no-private.sh
       - name: Tests
         run: dotnet run --project tests/Iris.Tests -c Release --no-build
       # the same tests on the paths of older processors: AVX without AVX2 and FMA (Sandy and Ivy Bridge), 128-bit

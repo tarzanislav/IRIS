@@ -113,6 +113,32 @@ public sealed class Adapter
     /// <summary>Writes the adapter to a file (kind "iris-adapter").</summary>
     public void Save(string path)
     {
+        var temporary = path + ".part";
+        using (var file = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20))
+        {
+            Write(file);
+        }
+
+        File.Move(temporary, path, overwrite: true);
+    }
+
+    /// <summary>The adapter as the bytes of its file (to be sealed in a vault when it was learned from private data).</summary>
+    public byte[] ToBytes()
+    {
+        using var memory = new MemoryStream();
+        Write(memory);
+        return memory.ToArray();
+    }
+
+    /// <summary>Reads an adapter from the bytes of its file.</summary>
+    public static Adapter Parse(byte[] bytes)
+    {
+        using var file = ModelFile.Parse(bytes);
+        return From(file);
+    }
+
+    private void Write(Stream stream)
+    {
         var config = new JsonObject
         {
             ["rank"] = Rank,
@@ -127,15 +153,23 @@ public sealed class Adapter
             tensors.Add(TensorData.F32(name + ".lora_b", [layer.Outputs, layer.Rank], layer.B));
         }
 
-        var temporary = path + ".part";
-        ModelFile.Write(temporary, Kind, config, Provenance, tensors, []);
-        File.Move(temporary, path, overwrite: true);
+        ModelFile.Write(stream, Kind, config, Provenance, tensors, []);
     }
 
-    /// <summary>Reads an adapter file.</summary>
+    /// <summary>Reads an adapter file (never a sealed one: that opens only with the password of its vault).</summary>
     public static Adapter Load(string path)
     {
+        if (Privacy.Vault.IsVault(path))
+        {
+            throw new FormatException("the adapter is sealed in a vault (learned from private data) – it opens only with the vault's password");
+        }
+
         using var file = ModelFile.Load(path);
+        return From(file);
+    }
+
+    private static Adapter From(ModelFile file)
+    {
         if (file.Kind != Kind)
         {
             throw new FormatException($"not an IRIS adapter (kind \"{file.Kind}\")");

@@ -181,6 +181,14 @@ public sealed class ModelFile : IDisposable
     public static void Write(string path, string kind, JsonObject config, JsonObject provenance,
         IEnumerable<TensorData> tensors, IEnumerable<(string Name, byte[] Bytes)> blobs)
     {
+        using var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
+        Write(file, kind, config, provenance, tensors, blobs);
+    }
+
+    /// <summary>Writes a model file into a stream (e.g. into memory, to be sealed in a vault – never through a plain file).</summary>
+    public static void Write(Stream file, string kind, JsonObject config, JsonObject provenance,
+        IEnumerable<TensorData> tensors, IEnumerable<(string Name, byte[] Bytes)> blobs)
+    {
         var items = tensors.ToList();
         var blobItems = blobs.Select(b => new TensorData(b.Name, "u8", [b.Bytes.Length], b.Bytes)).ToList();
         long position = 0;
@@ -207,7 +215,6 @@ public sealed class ModelFile : IDisposable
             ["blobs"] = Place(blobItems),
         };
         var headerBytes = Encoding.UTF8.GetBytes(header.ToJsonString());
-        using var file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
         Span<byte> start = stackalloc byte[16];
         Magic.CopyTo(start);
         BinaryPrimitives.WriteInt64LittleEndian(start[8..], headerBytes.Length);
@@ -326,7 +333,7 @@ public sealed class ModelFile : IDisposable
         }
     }
 
-    private static void Pad(FileStream file, long position)
+    private static void Pad(Stream file, long position)
     {
         Span<byte> zeros = stackalloc byte[Alignment];
         while (file.Position < position)

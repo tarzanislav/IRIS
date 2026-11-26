@@ -197,6 +197,14 @@ public sealed class LabHub
             return;
         }
 
+        if (Iris.Privacy.Vault.HoldsPrivate(pending))
+        {
+            // the wall of the vault: the classroom never learns from anything private
+            File.Move(pending, Path.ChangeExtension(pending, ".bad.iris"), overwrite: true);
+            say("the start model holds private data – the classroom never learns from it; the model stays");
+            return;
+        }
+
         try
         {
             OcrFiles.LoadTraining(pending);

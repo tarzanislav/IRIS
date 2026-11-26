@@ -36,6 +36,11 @@ try
         ["score", var model, var source, var references, .. var rest] => Score(model, source, references,
             Options.Parse(rest, ["--greedy", "--int8"], ["--beams", "--limit", "--out", "--adapter"])),
         ["chrf", var hypotheses, var references] => ChrfOfFiles(hypotheses, references),
+        ["vault", "create", var pairs, var vault, .. var rest] => VaultCommands.Create(pairs, vault, Options.Parse(rest, [], ["--tag"])),
+        ["vault", "info", var vault] => VaultCommands.Info(vault),
+        ["vault", "check", var vault] => VaultCommands.Check(vault),
+        ["score-vault", var model, var vault, .. var rest] => ScoreVault(model, vault,
+            Options.Parse(rest, ["--greedy", "--int8"], ["--beams", "--limit", "--adapter"])),
         ["remember", var memoryPath, var source, var target] => Remember(memoryPath, source, target),
         _ => Usage(),
     };
@@ -77,9 +82,10 @@ static Translator Load(string modelPath, bool int8, TextWriter log, string? adap
     var learned = "";
     if (adapterPath is not null)
     {
-        var adapter = Adapter.Load(adapterPath);
+        // a sealed adapter (learned from a vault) opens only with its password
+        var (adapter, tag) = Iris.Privacy.Vault.IsVault(adapterPath) ? VaultCommands.OpenAdapter(adapterPath) : (Adapter.Load(adapterPath), "");
         translator = translator.WithAdapter(adapter, ModelFile.Sha256(modelPath));
-        learned = $", adapter of {adapter.Parameters:N0} learned values";
+        learned = $", adapter of {adapter.Parameters:N0} learned values" + (tag.Length > 0 ? $" ({tag} – translations only for you, never to learn a public model from)" : "");
     }
 
     log.WriteLine($"model loaded in {watch.Elapsed.TotalSeconds:0.00} s{(translator.Model.IsInt8 ? " (int8)" : "")}{learned}; " +
@@ -96,10 +102,21 @@ static int Learn(string modelPath, string pairsPath, string adapterPath, Options
         throw new UsageException("the adapter must be another file than the model");
     }
 
-    var lines = File.ReadAllLines(pairsPath).Where(l => l.Trim().Length > 0).Take(options.Int("--limit", 1) ?? int.MaxValue).ToList();
-    var texts = lines.Select((line, i) => line.Split('\t') is [var source, var target] && source.Trim().Length > 0 && target.Trim().Length > 0
-        ? (Source: source.Trim(), Target: target.Trim())
-        : throw new UsageException($"line {i + 1} of the pairs is not 'sentence TAB translation'")).ToList();
+    // private pairs come from a vault: what is learned from them is sealed with its tag and key, never a plain file
+    var isPrivate = Iris.Privacy.Vault.IsVault(pairsPath);
+    using var key = isPrivate ? VaultCommands.OpenKey(pairsPath) : null;
+    var tag = isPrivate ? Iris.Privacy.Vault.Info(pairsPath).Tag : "";
+    if (isPrivate && Iris.Privacy.Vault.IsVault(adapterPath) is false && File.Exists(adapterPath))
+    {
+        throw new UsageException("a private adapter goes into a new file or replaces a sealed one, never a plain adapter");
+    }
+
+    var limit = options.Int("--limit", 1) ?? int.MaxValue;
+    var texts = isPrivate
+        ? [.. Iris.Privacy.Vault.ReadPairs(pairsPath, key!, Iris.Privacy.VaultSection.Learn).Take(limit)]
+        : File.ReadAllLines(pairsPath).Where(l => l.Trim().Length > 0).Take(limit).Select((line, i) => line.Split('\t') is [var source, var target] && source.Trim().Length > 0 && target.Trim().Length > 0
+            ? (Source: source.Trim(), Target: target.Trim())
+            : throw new UsageException($"line {i + 1} of the pairs is not 'sentence TAB translation'")).ToList();
     var translator = Load(modelPath, options.Has("--int8"), Console.Out);
     var pairs = texts.Select(t => new TrainingPair(translator.Tokenizer.Encode(t.Source), translator.Tokenizer.EncodeTarget(t.Target))).ToList();
     var layers = options.Value("--layers")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -135,6 +152,7 @@ static int Learn(string modelPath, string pairsPath, string adapterPath, Options
     adapter.With(new System.Text.Json.Nodes.JsonObject
     {
         // what was learned is described by counts and checksums only – never by the texts or names of files
+        ["private"] = isPrivate ? tag : null,
         ["learned"] = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         ["pairs"] = usable.Count,
         ["pairs_sha256"] = ModelFile.Sha256(pairsPath),
@@ -145,7 +163,17 @@ static int Learn(string modelPath, string pairsPath, string adapterPath, Options
         ["loss_before"] = Math.Round(start, 4),
         ["loss_after"] = Math.Round(after, 4),
         ["int8"] = translator.Model.IsInt8,
-    }).Save(adapterPath);
+    });
+    if (isPrivate)
+    {
+        var bytes = adapter.ToBytes();
+        Iris.Privacy.Vault.Seal(adapterPath, tag, bytes, key!, new System.Text.Json.Nodes.JsonObject { ["what"] = "adapter", ["base_sha256"] = adapter.BaseSha256 });
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+    }
+    else
+    {
+        adapter.Save(adapterPath);
+    }
     Console.WriteLine($"loss per token {start:0.000} → {after:0.000} (smoothing 0; last epoch with smoothing {end:0.000}); " +
                       $"{seconds:0} s, {perPair:0.00} s per pair and epoch; adapter written ({new FileInfo(adapterPath).Length / 1e6:0.0} MB)");
     return 0;
@@ -237,6 +265,11 @@ static int Translate(string modelPath, Options options)
     int? beams = options.Has("--greedy") ? 1 : options.Int("--beams", 1);
     var memory = options.Value("--memory") is { } memoryPath ? TranslationMemory.Open(memoryPath) : null;
     var glossary = options.Value("--glossary") is { } glossaryPath ? Glossary.Load(glossaryPath) : null;
+    if (memory is not null && options.Value("--adapter") is { } sealedAdapter && Iris.Privacy.Vault.IsVault(sealedAdapter))
+    {
+        throw new UsageException("a private adapter does not write into a translation memory (what it translates must not reach public learning)");
+    }
+
     var showIds = options.Has("--ids");
     if (showIds && (memory is not null || glossary is not null))
     {
@@ -400,6 +433,25 @@ static int ChrfOfFiles(string hypothesesPath, string referencesPath)
 }
 
 // translates a test set line by line (each line as one sentence) and measures chrF against the references
+// the measure of a private adapter: the pairs of the vault kept only for measuring, chrF printed, no translation written
+static int ScoreVault(string modelPath, string vaultPath, Options options)
+{
+    options.NoWords();
+    int? beams = options.Has("--greedy") ? 1 : options.Int("--beams", 1);
+    List<(string Source, string Target)> pairs;
+    using (var key = VaultCommands.OpenKey(vaultPath))
+    {
+        pairs = [.. Iris.Privacy.Vault.ReadPairs(vaultPath, key, Iris.Privacy.VaultSection.Measure).Take(options.Int("--limit", 1) ?? int.MaxValue)];
+    }
+
+    var translator = Load(modelPath, options.Has("--int8"), Console.Out, options.Value("--adapter"));
+    var translations = pairs.Select(p => translator.TranslateSentence(p.Source, beams).Target).ToList();
+    var used = beams ?? translator.Settings.NumBeams;
+    Console.WriteLine($"chrF2 {Chrf.Corpus(translations.Zip(pairs.Select(p => p.Target))).ToString("0.00", CultureInfo.InvariantCulture)} " +
+                      $"({pairs.Count} pairs kept for measuring, {(used == 1 ? "greedy" : $"beam {used}")}{(translator.Model.IsInt8 ? ", int8" : "")})");
+    return 0;
+}
+
 static int Score(string modelPath, string sourcePath, string referencesPath, Options options)
 {
     options.NoWords();
@@ -788,6 +840,15 @@ static int Usage()
         iris score <model.iris> <source.txt> <references.txt> [--beams N | --greedy] [--int8] [--limit N] [--out file] [--adapter file]
                                                        translates a test set line by line, chrF against the references
         iris chrf <translations.txt> <references.txt>  chrF (character 6-grams, β = 2, as sacreBLEU)
+        iris vault create <pairs.tsv> <out.irisvault> --tag <name>
+                                                       private licensed pairs into a vault (AES-256-GCM, password; 2 % kept
+                                                       only for measuring); the original file is not changed
+        iris vault info <vault>                        its kind and tag, without the password
+        iris vault check <vault>                       opens all of it with the password and counts the pairs
+        iris learn <model.iris> <data.irisvault> <adapter.sealed> [options]
+                                                       learns from the vault; the adapter is sealed with its tag and key
+        iris score-vault <model.iris> <data.irisvault> [--adapter file] [--beams N | --greedy] [--int8] [--limit N]
+                                                       chrF on the pairs kept for measuring (no translation is written)
         iris quantize <model.iris> <model-int8.iris>   an int8 copy of a model file (about a quarter of the size)
         iris verify <model.iris> <reference.json> [options]
                                                        compares the core with reference data (tools/reference)
