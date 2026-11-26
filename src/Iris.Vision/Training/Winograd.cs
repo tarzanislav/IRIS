@@ -34,16 +34,10 @@ internal static unsafe class Winograd
     private const int Piece = 6;
 
     [ThreadStatic]
-    private static float* t_v;
+    private static float[]? t_v;
 
     [ThreadStatic]
-    private static long t_vSize;
-
-    [ThreadStatic]
-    private static float* t_m;
-
-    [ThreadStatic]
-    private static long t_mSize;
+    private static float[]? t_m;
 
     /// <summary>Whether a layer can use it: a 3 × 3 kernel, padding 1, channels in whole vectors, vector hardware.</summary>
     public static bool Fits(ConvParameters p, int pad) =>
@@ -189,8 +183,8 @@ internal static unsafe class Winograd
         var ys = (nint)y;
         Work.For(chunks, (long)tiles.Count * Values * inputs * outputs, threads, (from, to) =>
         {
-            var v = Scratch(ref t_v, ref t_vSize, (long)Values * chunk * inputs);
-            var m = Scratch(ref t_m, ref t_mSize, (long)Values * chunk * outputs);
+            var v = ThreadScratch.Get(ref t_v, (long)Values * chunk * inputs);
+            var m = ThreadScratch.Get(ref t_m, (long)Values * chunk * outputs);
             for (var part = from; part < to; part++)
             {
                 var first = part * chunk;
@@ -249,8 +243,8 @@ internal static unsafe class Winograd
                 {
                     var du = (float*)all + (part * size);
                     new Span<float>(du, (int)size).Clear();
-                    var v = Scratch(ref t_v, ref t_vSize, (long)Values * chunk * inputs);
-                    var m = Scratch(ref t_m, ref t_mSize, (long)Values * chunk * outputs);
+                    var v = ThreadScratch.Get(ref t_v, (long)Values * chunk * inputs);
+                    var m = ThreadScratch.Get(ref t_m, (long)Values * chunk * outputs);
                     var from = (int)((long)chunks * part / parts);
                     var to = (int)((long)chunks * (part + 1) / parts);
                     for (var c = from; c < to; c++)
@@ -579,17 +573,6 @@ internal static unsafe class Winograd
         }
     }
 
-    private static float* Scratch(ref float* buffer, ref long size, long needed)
-    {
-        if (size < needed)
-        {
-            NativeMemory.AlignedFree(buffer);
-            buffer = (float*)NativeMemory.AlignedAlloc((nuint)(needed * sizeof(float)), 64);
-            size = needed;
-        }
-
-        return buffer;
-    }
 
     /// <summary>The 4 × 4 tiles of the outputs of every line, numbered line after line, row after row.</summary>
     private readonly struct Tiles

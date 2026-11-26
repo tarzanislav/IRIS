@@ -72,6 +72,52 @@ public static unsafe class OcrTrainingTests
     }
 
     [Test]
+    public static void ThreadsThatEndLeaveNoScratchMemoryBehind()
+    {
+        // the thread pool lets idle threads go and the learning rests every day: the packed panels each thread kept
+        // must go with it (native memory behind a thread-static pointer stayed – about a megabyte per ended thread)
+        const int m = 200, n = 1024, k = 512;
+        var a = new float[m * k];
+        var b = new float[k * n];
+        var c = new float[m * n];
+        void Products()
+        {
+            fixed (float* pa = a, pb = b, pc = c)
+            {
+                Gemm.Multiply(new RowsA(pa, k), new ColumnsB(pb, k), m, n, k, pc, n, add: false, threads: 1);
+                Gemm.MultiplyLong(new ColumnsA(pa, m), new RowsB(pc, n), k, n, m, pb, n, add: false, threads: 1);
+            }
+        }
+
+        long Private()
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            using var self = System.Diagnostics.Process.GetCurrentProcess();
+            return self.PrivateMemorySize64;
+        }
+
+        for (var i = 0; i < 5; i++)
+        {
+            var warm = new Thread(Products);
+            warm.Start();
+            warm.Join();
+        }
+
+        var before = Private();
+        for (var i = 0; i < 80; i++)
+        {
+            var thread = new Thread(Products);
+            thread.Start();
+            thread.Join();
+        }
+
+        var grown = (Private() - before) / 1048576.0;
+        Assert.True(grown < 30, $"80 ended threads left {grown:F0} MB behind");
+    }
+
+    [Test]
     public static void FewRowsGiveTheSameBitsAsAFullBlock()
     {
         // one to three rows go through the narrow kernels, six through the full one: the same sums in the same order

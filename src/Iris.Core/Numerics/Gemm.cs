@@ -197,16 +197,10 @@ internal static unsafe class Gemm
     private static readonly float* ZeroPanel = AllocateZeros(KC * NR);
 
     [ThreadStatic]
-    private static float* t_a;
+    private static float[]? t_a;
 
     [ThreadStatic]
-    private static long t_aSize;
-
-    [ThreadStatic]
-    private static float* t_b;
-
-    [ThreadStatic]
-    private static long t_bSize;
+    private static float[]? t_b;
 
     public static bool Fast => Avx2.IsSupported && Fma.IsSupported;
 
@@ -481,7 +475,7 @@ internal static unsafe class Gemm
         where TA : struct, IMatrixA
     {
         var panels = (mc + MR - 1) / MR;
-        var buffer = Scratch(ref t_a, ref t_aSize, (long)panels * MR * KC);
+        var buffer = ThreadScratch.Get(ref t_a, (long)panels * MR * KC);
         var lastRows = mc - (panels - 1) * MR;
         var full = Narrow && lastRows <= 3 ? panels - 1 : panels;
         for (var k0 = 0; k0 < b.K; k0 += KC)
@@ -688,8 +682,8 @@ internal static unsafe class Gemm
         where TB : struct, IMatrixB
     {
         var bPanels = (n + NR - 1) / NR;
-        var bBuffer = Scratch(ref t_b, ref t_bSize, (long)bPanels * NR * KC);
-        var aBuffer = Scratch(ref t_a, ref t_aSize, (long)MC * KC);
+        var bBuffer = ThreadScratch.Get(ref t_b, (long)bPanels * NR * KC);
+        var aBuffer = ThreadScratch.Get(ref t_a, (long)MC * KC);
         for (var k0 = from; k0 < to; k0 += KC)
         {
             var kc = Math.Min(KC, to - k0);
@@ -720,17 +714,6 @@ internal static unsafe class Gemm
         }
     }
 
-    private static float* Scratch(ref float* buffer, ref long size, long needed)
-    {
-        if (size < needed)
-        {
-            NativeMemory.AlignedFree(buffer);
-            buffer = (float*)NativeMemory.AlignedAlloc((nuint)(needed * sizeof(float)), 64);
-            size = needed;
-        }
-
-        return buffer;
-    }
 
     /// <summary>A block of up to MR × NR values of C from a panel of A and one of B, both of the given depth.</summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]

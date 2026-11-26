@@ -182,6 +182,7 @@ public sealed class LabAgent
     private Dictionary<string, string[]> _sentences = [];
     private LabLearner? _learner;
     private CancellationTokenSource? _learning;
+    private CancellationTokenSource? _ended;                 // the source of the last round, disposed before the next one
     private Task _learningTask = Task.CompletedTask;
     private LoadSettings _loadSettings = new(0.5, 0.5);
     private readonly LoadControl _control = new();
@@ -249,6 +250,7 @@ public sealed class LabAgent
         }
 
         await StopLearningAsync();
+        _ended?.Dispose();
         _learner?.Dispose();
     }
 
@@ -433,6 +435,8 @@ public sealed class LabAgent
 
         // the learning of an earlier round ends first (its step finishes): one network never learns twice at once
         await StopLearningAsync();
+        _ended?.Dispose(); // its round is over: the link to the agent's token goes with it
+        _ended = null;
         var shape = OcrShape.FromJson(message.Header["shape"]!.AsObject());
         lock (_gate)
         {
@@ -463,6 +467,7 @@ public sealed class LabAgent
         var seconds = message.Header["seconds"]!.GetValue<double>();
         var learning = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         _learning = learning;
+        _ended = learning;
         _round = round;
         _load = new RoundLoad();
         _state = "learning";
@@ -518,7 +523,15 @@ public sealed class LabAgent
 
     private void StopLearning()
     {
-        _learning?.Cancel();
+        try
+        {
+            _learning?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // a round that is already over
+        }
+
         _learning = null;
     }
 
